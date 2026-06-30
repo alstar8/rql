@@ -7,7 +7,7 @@ import random
 import time
 import copy
 
-import glob, tqdm, wandb, os, json, random, time, jax
+import glob, tqdm, os, json, random, time, jax
 import numpy as np
 from absl import app, flags
 from ml_collections import config_flags
@@ -20,7 +20,7 @@ from envs.ogbench_utils import make_ogbench_env_and_datasets
 from utils.datasets import Dataset, ReplayBuffer
 from utils.evaluation import evaluate, flatten
 from utils.flax_utils import restore_agent, save_agent
-from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, get_wandb_video, setup_wandb
+from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, prepare_eval_video, setup_experiment_logging
 
 FLAGS = flags.FLAGS
 
@@ -28,6 +28,11 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 flags.DEFINE_string('env_name', '', 'Environment (dataset) name.')
 flags.DEFINE_string('ogbench_dataset_dir', None, 'Dataset path.')
+flags.DEFINE_string(
+    'ogbench_data_dir',
+    None,
+    'Local OGBench dataset cache directory. Uses existing .npz files and skips download.',
+)
 flags.DEFINE_integer('dataset_replace_interval', 1000, 'Dataset replace interval, used for large datasets because of memory constraints')
 flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
 flags.DEFINE_integer('offline_steps', 1000000, 'Number of offline steps.')
@@ -49,10 +54,15 @@ config_flags.DEFINE_config_file('agent', 'agents/rql.py', lock_config=False)
 def main(_):
     # Set up logger.
     exp_name = get_exp_name(FLAGS.seed)
-    setup_wandb(project='rql', group=FLAGS.run_group, name=exp_name)
-    
-    FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
-    os.makedirs(FLAGS.save_dir, exist_ok=True)
+    tb_logger, exp_dir = setup_experiment_logging(
+        FLAGS.save_dir,
+        project='rql',
+        run_group=FLAGS.run_group,
+        exp_name=exp_name,
+        hparams=get_flag_dict(),
+    )
+    FLAGS.save_dir = exp_dir
+    print(f'TensorBoard logs: {os.path.join(FLAGS.save_dir, "tensorboard")}')
     flag_dict = get_flag_dict()
     with open(os.path.join(FLAGS.save_dir, 'flags.json'), 'w') as f:
         json.dump(flag_dict, f)
@@ -70,9 +80,19 @@ def main(_):
             dataset_path=dataset_paths[dataset_idx],
             compact_dataset=False,
         )
-        env, eval_env, _, _ = make_env_and_datasets(FLAGS.env_name, frame_stack=FLAGS.frame_stack, agent_config=config)
+        env, eval_env, _, _ = make_env_and_datasets(
+            FLAGS.env_name,
+            frame_stack=FLAGS.frame_stack,
+            agent_config=config,
+            dataset_dir=FLAGS.ogbench_data_dir,
+        )
     else:
-        env, eval_env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=FLAGS.frame_stack, agent_config=config)
+        env, eval_env, train_dataset, val_dataset = make_env_and_datasets(
+            FLAGS.env_name,
+            frame_stack=FLAGS.frame_stack,
+            agent_config=config,
+            dataset_dir=FLAGS.ogbench_data_dir,
+        )
 
     def process_train_dataset(ds):
         ds = Dataset.create(**ds)
@@ -200,7 +220,7 @@ def main(_):
             train_metrics['time/epoch_time'] = (time.time() - last_time) / FLAGS.log_interval
             train_metrics['time/total_time'] = time.time() - first_time
             last_time = time.time()
-            wandb.log(train_metrics, step=i)
+            tb_logger.log(train_metrics, step=i)
             train_logger.log(train_metrics, step=i)
 
         # Evaluate agent.
@@ -223,10 +243,10 @@ def main(_):
                 print(k, v)
 
             if FLAGS.video_episodes > 0:
-                video = get_wandb_video(renders=renders)
-                eval_metrics['video'] = video
+                video = prepare_eval_video(renders=renders)
+                tb_logger.log_video('evaluation/video', video, step=i)
 
-            wandb.log(eval_metrics, step=i)
+            tb_logger.log(eval_metrics, step=i)
             eval_logger.log(eval_metrics, step=i)
 
         # Save agent.
@@ -235,6 +255,7 @@ def main(_):
 
     train_logger.close()
     eval_logger.close()
+    tb_logger.close()
 
 if __name__ == '__main__':
     app.run(main)

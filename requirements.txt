@@ -5,4 +5,4 @@ distrax >= 0.1.5
 ml_collections
 matplotlib
 moviepy
-wandb
+tensorboardX

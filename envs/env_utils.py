@@ -1,4 +1,5 @@
 import collections
+import os
 import re
 import time
 
@@ -114,11 +115,17 @@ def make_env_and_datasets(
     action_clip_eps=1e-5,
     dataset_path=None,
     agent_config=None,
+    dataset_dir=None,
 ):
     if 'singletask' in env_name:
         # OGBench.
-        env, train_dataset, val_dataset = ogbench.make_env_and_datasets(env_name)
-        eval_env = ogbench.make_env_and_datasets(env_name, env_only=True)
+        if dataset_dir is None:
+            dataset_dir = os.environ.get('OGBENCH_DATA_DIR')
+        ogbench_kwargs = {}
+        if dataset_dir is not None:
+            ogbench_kwargs['dataset_dir'] = dataset_dir
+        env, train_dataset, val_dataset = ogbench.make_env_and_datasets(env_name, **ogbench_kwargs)
+        eval_env = ogbench.make_env_and_datasets(env_name, env_only=True, **ogbench_kwargs)
         env = EpisodeMonitor(env, filter_regexes=['.*privileged.*', '.*proprio.*'])
         eval_env = EpisodeMonitor(eval_env, filter_regexes=['.*privileged.*', '.*proprio.*'])
         if dataset_path is not None:
