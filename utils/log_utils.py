@@ -1,12 +1,19 @@
 import os
-import tempfile
 from datetime import datetime
 
 import absl.flags as flags
 import ml_collections
 import numpy as np
-import wandb
 from PIL import Image, ImageEnhance
+from tensorboardX import SummaryWriter
+
+
+def _is_scalar(value):
+    if isinstance(value, (bool, np.bool_)):
+        return False
+    if hasattr(value, "ndim") and getattr(value, "ndim", None) == 0:
+        return True
+    return isinstance(value, (int, float, np.integer, np.floating))
 
 
 class CsvLogger:
@@ -16,25 +23,55 @@ class CsvLogger:
         self.path = path
         self.header = None
         self.file = None
-        self.disallowed_types = (wandb.Image, wandb.Video, wandb.Histogram)
 
     def log(self, row, step):
         row['step'] = step
         if self.file is None:
             self.file = open(self.path, 'w')
             if self.header is None:
-                self.header = [k for k, v in row.items() if not isinstance(v, self.disallowed_types)]
+                self.header = [k for k, v in row.items() if _is_scalar(v)]
                 self.file.write(','.join(self.header) + '\n')
-            filtered_row = {k: v for k, v in row.items() if not isinstance(v, self.disallowed_types)}
+            filtered_row = {k: v for k, v in row.items() if _is_scalar(v)}
             self.file.write(','.join([str(filtered_row.get(k, '')) for k in self.header]) + '\n')
         else:
-            filtered_row = {k: v for k, v in row.items() if not isinstance(v, self.disallowed_types)}
+            filtered_row = {k: v for k, v in row.items() if _is_scalar(v)}
             self.file.write(','.join([str(filtered_row.get(k, '')) for k in self.header]) + '\n')
         self.file.flush()
 
     def close(self):
         if self.file is not None:
             self.file.close()
+
+
+class TensorboardLogger:
+    """Local TensorBoard logger."""
+
+    def __init__(self, log_dir, hparams=None):
+        os.makedirs(log_dir, exist_ok=True)
+        self.log_dir = log_dir
+        self.writer = SummaryWriter(log_dir=log_dir)
+        if hparams is not None:
+            scalar_hparams = {
+                k: v for k, v in hparams.items() if _is_scalar(v) and v is not None
+            }
+            if scalar_hparams:
+                self.writer.add_hparams(scalar_hparams, {k: 0.0 for k in scalar_hparams})
+
+    def log(self, metrics, step):
+        for key, value in metrics.items():
+            if _is_scalar(value):
+                self.writer.add_scalar(key, float(value), step)
+            elif isinstance(value, np.ndarray) and value.ndim == 4:
+                self.log_video(key, value, step)
+
+    def log_video(self, tag, video, step, fps=15):
+        """Log a video array with shape (T, C, H, W)."""
+        if video.ndim != 4:
+            raise ValueError(f'Expected video shape (T, C, H, W), got {video.shape}')
+        self.writer.add_video(tag, video[np.newaxis, ...], step, fps=fps)
+
+    def close(self):
+        self.writer.close()
 
 
 def get_exp_name(seed):
@@ -59,36 +96,13 @@ def get_flag_dict():
     return flag_dict
 
 
-def setup_wandb(
-    entity=None,
-    project='project',
-    group=None,
-    name=None,
-    mode='online',
-):
-    """Set up Weights & Biases for logging."""
-    wandb_output_dir = tempfile.mkdtemp()
-    tags = [group] if group is not None else None
-
-    init_kwargs = dict(
-        config=get_flag_dict(),
-        project=project,
-        entity=entity,
-        tags=tags,
-        group=group,
-        dir=wandb_output_dir,
-        name=name,
-        settings=wandb.Settings(
-            start_method='thread',
-            _disable_stats=False,
-        ),
-        mode=mode,
-        save_code=True,
-    )
-
-    run = wandb.init(**init_kwargs)
-
-    return run
+def setup_experiment_logging(save_dir, project, run_group, exp_name, hparams=None):
+    """Create experiment directory and local TensorBoard logger."""
+    exp_dir = os.path.join(save_dir, project, run_group, exp_name)
+    tb_dir = os.path.join(exp_dir, 'tensorboard')
+    os.makedirs(exp_dir, exist_ok=True)
+    logger = TensorboardLogger(tb_dir, hparams=hparams)
+    return logger, exp_dir
 
 
 def reshape_video(v, n_cols=None):
@@ -99,7 +113,6 @@ def reshape_video(v, n_cols=None):
     _, t, h, w, c = v.shape
 
     if n_cols is None:
-        # Set n_cols to the square root of the number of videos.
         n_cols = np.ceil(np.sqrt(v.shape[0])).astype(int)
     if v.shape[0] % n_cols != 0:
         len_addition = n_cols - v.shape[0] % n_cols
@@ -113,21 +126,12 @@ def reshape_video(v, n_cols=None):
     return v
 
 
-def get_wandb_video(renders=None, n_cols=None, fps=15):
-    """Return a Weights & Biases video.
-
-    It takes a list of videos and reshapes them into a single video with the specified number of columns.
-
-    Args:
-        renders: List of videos. Each video should be a numpy array of shape (t, h, w, c).
-        n_cols: Number of columns for the reshaped video. If None, it is set to the square root of the number of videos.
-    """
-    # Pad videos to the same length.
+def prepare_eval_video(renders=None, n_cols=None):
+    """Prepare evaluation renders as a TensorBoard video array (T, C, H, W)."""
     max_length = max([len(render) for render in renders])
     for i, render in enumerate(renders):
         assert render.dtype == np.uint8
 
-        # Decrease brightness of the padded frames.
         final_frame = render[-1]
         final_image = Image.fromarray(final_frame)
         enhancer = ImageEnhance.Brightness(final_image)
@@ -136,11 +140,7 @@ def get_wandb_video(renders=None, n_cols=None, fps=15):
 
         pad = np.repeat(final_frame[np.newaxis, ...], max_length - len(render), axis=0)
         renders[i] = np.concatenate([render, pad], axis=0)
-
-        # Add borders.
         renders[i] = np.pad(renders[i], ((0, 0), (1, 1), (1, 1), (0, 0)), mode='constant', constant_values=0)
-    renders = np.array(renders)  # (n, t, h, w, c)
+    renders = np.array(renders)
 
-    renders = reshape_video(renders, n_cols)  # (t, c, nr * h, nc * w)
-
-    return wandb.Video(renders, fps=fps, format='mp4')
+    return reshape_video(renders, n_cols)

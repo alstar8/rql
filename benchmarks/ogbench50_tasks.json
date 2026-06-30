@@ -1,0 +1,154 @@
+{
+  "description": "50 OGBench singletask tasks from RQL paper Table 3 / Li & Levine (2024). Each domain has 5 task goals (task1..task5).",
+  "eval_protocol": {
+    "offline_steps": 1000000,
+    "eval_interval": 100000,
+    "eval_episodes": 50,
+    "report_steps": [800000, 900000, 1000000],
+    "seeds_default": 4
+  },
+  "domains": [
+    {
+      "id": "scene",
+      "dataset_type": "play",
+      "dataset_name": "scene-play-v0",
+      "sparse": true,
+      "hyperparams": {
+        "alpha": 3.0,
+        "expectile": 0.7,
+        "ensemble_ct": 10,
+        "rho": 0.5,
+        "h": 5,
+        "discount": 0.99
+      }
+    },
+    {
+      "id": "puzzle-3x3",
+      "dataset_type": "play",
+      "dataset_name": "puzzle-3x3-play-v0",
+      "sparse": true,
+      "hyperparams": {
+        "alpha": 1.0,
+        "expectile": 0.7,
+        "ensemble_ct": 10,
+        "rho": 0.5,
+        "h": 5,
+        "discount": 0.99
+      }
+    },
+    {
+      "id": "puzzle-4x4",
+      "dataset_type": "play",
+      "dataset_name": "puzzle-4x4-play-v0",
+      "sparse": true,
+      "dataset_100m_dir_env": "OGBENCH_PUZZLE_4X4_100M_DIR",
+      "hyperparams": {
+        "alpha": 1.0,
+        "expectile": 0.9,
+        "ensemble_ct": 10,
+        "rho": 0.5,
+        "h": 5,
+        "discount": 0.99
+      }
+    },
+    {
+      "id": "cube-double",
+      "dataset_type": "play",
+      "dataset_name": "cube-double-play-v0",
+      "sparse": false,
+      "hyperparams": {
+        "alpha": 10.0,
+        "expectile": 0.9,
+        "ensemble_ct": 10,
+        "rho": 0.5,
+        "h": 5,
+        "discount": 0.99
+      }
+    },
+    {
+      "id": "cube-triple",
+      "dataset_type": "play",
+      "dataset_name": "cube-triple-play-v0",
+      "sparse": false,
+      "hyperparams": {
+        "alpha": 1.0,
+        "expectile": 0.9,
+        "ensemble_ct": 10,
+        "rho": 0.5,
+        "h": 5,
+        "discount": 0.99
+      }
+    },
+    {
+      "id": "cube-quadruple",
+      "dataset_type": "play",
+      "dataset_name": "cube-quadruple-play-v0",
+      "sparse": false,
+      "dataset_100m_dir_env": "OGBENCH_CUBE_QUADRUPLE_100M_DIR",
+      "hyperparams": {
+        "alpha": 1.0,
+        "expectile": 0.7,
+        "ensemble_ct": 10,
+        "rho": 0.5,
+        "h": 5,
+        "discount": 0.99
+      }
+    },
+    {
+      "id": "antmaze-large",
+      "dataset_type": "navigate",
+      "dataset_name": "antmaze-large-navigate-v0",
+      "sparse": false,
+      "hyperparams": {
+        "alpha": 0.1,
+        "expectile": 0.5,
+        "ensemble_ct": 10,
+        "rho": 0.5,
+        "h": 1,
+        "discount": 0.99
+      }
+    },
+    {
+      "id": "antmaze-giant",
+      "dataset_type": "navigate",
+      "dataset_name": "antmaze-giant-navigate-v0",
+      "sparse": false,
+      "hyperparams": {
+        "alpha": 0.1,
+        "expectile": 0.5,
+        "ensemble_ct": 10,
+        "rho": 0.5,
+        "h": 1,
+        "discount": 0.995
+      }
+    },
+    {
+      "id": "humanoidmaze-medium",
+      "dataset_type": "navigate",
+      "dataset_name": "humanoidmaze-medium-navigate-v0",
+      "sparse": false,
+      "hyperparams": {
+        "alpha": 0.3,
+        "expectile": 0.5,
+        "ensemble_ct": 10,
+        "rho": 0.0,
+        "h": 1,
+        "discount": 0.995
+      }
+    },
+    {
+      "id": "humanoidmaze-large",
+      "dataset_type": "navigate",
+      "dataset_name": "humanoidmaze-large-navigate-v0",
+      "sparse": false,
+      "hyperparams": {
+        "alpha": 0.3,
+        "expectile": 0.5,
+        "ensemble_ct": 10,
+        "rho": 0.0,
+        "h": 1,
+        "discount": 0.995
+      }
+    }
+  ]
+}
