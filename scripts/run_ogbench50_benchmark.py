@@ -43,6 +43,10 @@ def run_job(
     log_dir: Path,
     offline_steps: int,
     batch_size: int,
+    agent: str,
+    method: str,
+    guidance_coef: float | None,
+    distill_coef: float | None,
 ) -> tuple[str, int, str]:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_id
@@ -53,6 +57,10 @@ def run_job(
         ogbench_data_dir=ogbench_data_dir,
         offline_steps=offline_steps,
         batch_size=batch_size,
+        agent=agent,
+        method=method,
+        guidance_coef=guidance_coef,
+        distill_coef=distill_coef,
     )
     log_path = log_dir / f"{task.log_stem}_seed{seed}_gpu{gpu_id}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,11 +81,14 @@ def pending_jobs(
     seeds: list[int],
     save_dir: str,
     skip_complete: bool,
+    method: str,
 ) -> list[tuple[OGBench50Task, int]]:
     jobs: list[tuple[OGBench50Task, int]] = []
     for task in tasks:
         for seed in seeds:
-            if skip_complete and is_run_complete(exp_root_for_task(save_dir, task), seed):
+            if skip_complete and is_run_complete(
+                exp_root_for_task(save_dir, task, method=method), seed
+            ):
                 continue
             jobs.append((task, seed))
     return jobs
@@ -92,6 +103,10 @@ def gpu_worker(
     log_dir: Path,
     offline_steps: int,
     batch_size: int,
+    agent: str,
+    method: str,
+    guidance_coef: float | None,
+    distill_coef: float | None,
     failed: list[str],
     lock: threading.Lock,
 ) -> None:
@@ -113,6 +128,10 @@ def gpu_worker(
             log_dir,
             offline_steps,
             batch_size,
+            agent,
+            method,
+            guidance_coef,
+            distill_coef,
         )
         status = "OK" if code == 0 else f"FAIL({code})"
         print(f"[{status}] {job_id} gpu={gpu_id} log={log_path}")
@@ -141,6 +160,14 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--python", default="")
     parser.add_argument("--log-dir", default=str(RQL_DIR / "exp" / "ogbench50_logs"))
+    parser.add_argument("--agent", default="agents/rql.py")
+    parser.add_argument(
+        "--method",
+        default="baseline",
+        help="Run-group prefix tag (baseline -> ogbench50-<task>, dflrql6 -> ogbench50-dflrql6-<task>).",
+    )
+    parser.add_argument("--guidance-coef", type=float, default=None)
+    parser.add_argument("--distill-coef", type=float, default=None)
     args = parser.parse_args()
 
     if not args.ogbench_data_dir:
@@ -162,8 +189,11 @@ def main() -> None:
     if args.tasks:
         tasks = [t for t in tasks if t.task_id in args.tasks]
 
-    jobs = pending_jobs(tasks, args.seeds, args.save_dir, args.skip_complete)
-    print(f"Pending jobs: {len(jobs)} (tasks={len(tasks)}, seeds={args.seeds}, gpus={gpu_ids})")
+    jobs = pending_jobs(tasks, args.seeds, args.save_dir, args.skip_complete, args.method)
+    print(
+        f"Pending jobs: {len(jobs)} (tasks={len(tasks)}, seeds={args.seeds}, "
+        f"gpus={gpu_ids}, agent={args.agent}, method={args.method})"
+    )
 
     if args.dry_run:
         for task, seed in jobs[:20]:
@@ -196,6 +226,10 @@ def main() -> None:
                 log_dir,
                 args.offline_steps,
                 args.batch_size,
+                args.agent,
+                args.method,
+                args.guidance_coef,
+                args.distill_coef,
                 failed,
                 lock,
             ),

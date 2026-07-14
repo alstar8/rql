@@ -1,5 +1,5 @@
 {
-  "description": "Reference mean success (%) on OGBench 50-task aggregate from RQL paper Table 1 / Figure 5. Used for overlay plots only; not re-run in this repo.",
+  "description": "Reference mean success (%) on OGBench 50-task aggregate from RQL paper Table 1 / Figure 5 (RQL \u224856). Used for overlay plots only; not re-run in this repo.",
   "source": "https://arxiv.org/abs/2606.17551",
   "methods": {
     "ReBRAC": 40,
@@ -20,18 +20,58 @@
     "QAM-E": 45,
     "BDPO": 28,
     "TFQL": 8,
-    "RQL": 38
+    "RQL": 56
   },
   "domain_agg_percent": {
-    "scene": {"RQL": 65, "TFQL": 50, "FQL": 78},
-    "puzzle-3x3": {"RQL": 79, "TFQL": 0, "FQL": 70},
-    "puzzle-4x4": {"RQL": 0, "TFQL": 15, "FQL": 5},
-    "cube-double": {"RQL": 9, "TFQL": 0, "FQL": 9},
-    "cube-triple": {"RQL": 1, "TFQL": 0, "FQL": 3},
-    "cube-quadruple": {"RQL": 1, "TFQL": 0, "FQL": 2},
-    "antmaze-large": {"RQL": 94, "TFQL": 2, "FQL": 76},
-    "antmaze-giant": {"RQL": 57, "TFQL": 0, "FQL": 0},
-    "humanoidmaze-medium": {"RQL": 69, "TFQL": 39, "FQL": 68},
-    "humanoidmaze-large": {"RQL": 17, "TFQL": 0, "FQL": 9}
+    "scene": {
+      "RQL": 65,
+      "TFQL": 50,
+      "FQL": 78
+    },
+    "puzzle-3x3": {
+      "RQL": 79,
+      "TFQL": 0,
+      "FQL": 70
+    },
+    "puzzle-4x4": {
+      "RQL": 0,
+      "TFQL": 15,
+      "FQL": 5
+    },
+    "cube-double": {
+      "RQL": 9,
+      "TFQL": 0,
+      "FQL": 9
+    },
+    "cube-triple": {
+      "RQL": 1,
+      "TFQL": 0,
+      "FQL": 3
+    },
+    "cube-quadruple": {
+      "RQL": 1,
+      "TFQL": 0,
+      "FQL": 2
+    },
+    "antmaze-large": {
+      "RQL": 94,
+      "TFQL": 2,
+      "FQL": 76
+    },
+    "antmaze-giant": {
+      "RQL": 57,
+      "TFQL": 0,
+      "FQL": 0
+    },
+    "humanoidmaze-medium": {
+      "RQL": 69,
+      "TFQL": 39,
+      "FQL": 68
+    },
+    "humanoidmaze-large": {
+      "RQL": 17,
+      "TFQL": 0,
+      "FQL": 9
+    }
   }
 }

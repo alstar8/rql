@@ -369,6 +369,42 @@ from the target-critic ensemble consensus vector
 integrations. Two dimensionless hyperparameters (`guidance_coef=0.5`,
 `distill_coef=1.0`); no schedules; transfers across environments unchanged.
 
+## v7: DFL-RQL7 (`agents/dflrql7.py`) — soft consensus + batch-relative uncertainty
+
+**First attempt failed** (archived under
+`exp/rql/_archive/humanoidmaze-large-dflrql7_broken_*`): finished-seed mean
+~0.70 vs v6 0.82; aggregate with incomplete seeds looked ~0.50. Root causes
+from TensorBoard:
+
+1. `advantage_gate ≈ 0.50` for the whole run (`adv_delta_q ~ 1e-3` while
+   `|Q|` is O(100)), so `sigmoid(β ΔQ)` permanently halved guidance —
+   recreating v2's mid-training drag.
+2. Absolute `std(Q)/|mean Q|` uncertainty gate stayed ≈0.997 (never fired
+   on discounted maze returns).
+3. Unguided reversal + `consensus_tau=0.1` weakened late guidance
+   (`w_norm@1M ≈ 0.39` vs v6 `≈ 0.65`).
+
+**Fixed v7** keeps only the transferable pieces that do not fight v6:
+
+1. **Soft-consensus distillation** with small `consensus_tau=0.01`
+   (near unit direction; `||W||` still learns agreement via the ensemble
+   average of soft units).
+2. **Batch-relative uncertainty gate**
+   `clip(1 - κ (std(Q)/mean_batch(std(Q)) - 1), 0, 1)` with `κ=0.5` —
+   attenuates only relatively uncertain batch elements; scale-free across
+   reward magnitudes.
+3. **Guided reversal restored** (same dynamics as inference / `q_pe`).
+4. **Advantage sigmoid removed.**
+
+Kept from v6: `guidance_coef=0.5`, `distill_coef=1.0`, schedule-free.
+
+### v7 experiment (humanoidmaze-large, 1M)
+
+- Same protocol as v1–v5: 1M steps, batch 256, seeds 0..7, tuned hparams.
+- Launcher: `cloud_job/run_train_rql_dfl7.sh` (tmux session `dflrql7`),
+  run group `humanoidmaze-large-dflrql7`.
+- Plot: `scripts/plot_dflrql_vs_baseline.py` → `my_exps/dflrql_vs_baseline.png`.
+
 ## v6 on the full 50-task OGBench suite (paper protocol)
 
 - All 10 environments from `hyperparameters.sh` x 5 singletask variants
@@ -381,3 +417,106 @@ integrations. Two dimensionless hyperparameters (`guidance_coef=0.5`,
   play-v0 datasets are used — flagged for interpretation of those 10 tasks.
 - Launcher: `cloud_job/run_train_rql_dfl6_ogbench50.sh`
   (tmux session `dflrql6_50`), run groups `ogbench50-dflrql6/<env>`.
+
+## v8: DFL-RQL8 (`agents/dflrql8.py`) — scale-free consensus and behavior-conflict projection
+
+The completed v7 50-task run improves the aggregate over both baseline and
+v6, but its gains and regressions split by domain.  V7 is strongest on
+puzzle-4x4 and cube-quadruple, while its value-uncertainty gate weakens the
+guidance that made v6 strong on navigation.  The gate averages roughly 0.87
+and requires a full target-critic ensemble forward at every flow integration
+step, so it behaves more like a costly global attenuation than a selective
+trust signal.
+
+V8 keeps the transferable v6 consensus core and makes two task-independent
+changes.
+
+1. **Scale-invariant soft consensus.**  For the sampled ensemble-member
+   gradient `g_k`, the target is
+
+       g_k / (||g_k|| + c * mean_batch(||g_k||)),
+
+   with dimensionless `c=0.1`.  Typical gradients remain near unit norm,
+   locally flat gradients vanish, and uniform reward/Q rescaling leaves the
+   target unchanged.  This preserves v7's useful stationarity behavior
+   without its absolute `consensus_tau`.
+2. **Behavior-conflict projection.**  If `u` is the distilled consensus and
+   `v` is the behavior-flow velocity at the same point, apply
+
+       u_safe = u - min(<u, v/||v||>, 0) * v/||v||.
+
+   This is the minimum-L2 projection onto the half-space that does not oppose
+   the learned behavior flow.  It removes only the conflicting component;
+   aligned and orthogonal critic-improvement components retain their full
+   strength.  Unlike a sigmoid or positive-cosine gate, it does not
+   permanently halve generic guidance.
+
+The resulting dynamics are used consistently in reversal, `q_pe`, and
+sampling:
+
+    dx/df = v_theta + guidance_coef * f * u_safe.
+
+V8 removes v7's `consensus_tau`, `uncertainty_coef`, and repeated critic
+forwards during integration.  It logs `q_grad_scale`,
+`consensus_target_norm`, `behavior_alignment_cos`,
+`behavior_conflict_fraction`, `guidance_retained`, and `safe_w_norm`.
+
+Experiment order:
+
+1. `cloud_job/run_train_rql_dfl8.sh`: humanoidmaze-large, 2M steps, seeds
+   0–7; refresh `my_exps/dflrql_vs_baseline.png`.
+2. `cloud_job/run_train_rql_dfl8_ogbench50.sh`: all 50 tasks, 2M steps,
+   seeds 0,1,2; write `my_exps/ogbench50_v8_vs_baseline_common_max.png` and
+   extend the all-method 50-task plots.
+3. `cloud_job/run_train_rql_dfl8_pipeline.sh` enforces this sequence and only
+   starts phase 2 after all phase-1 paper checkpoints exist.
+
+## v8 results (paper @ 2M, seeds 0–2)
+
+- Aggregate: baseline **0.520**, v6 **0.572**, v7 **0.581**, v8 **0.590**
+  (Δv8−base **+0.070**); common_max Δ ≈ **+0.078**, seed std ≈ **±0.014**.
+- Wins 29 / lose 6 / tie 15 vs baseline.  Worst regressions:
+  `antmaze-giant-task2`, `puzzle-4x4-task5/3`, `humanoidmaze-large-task3/4`.
+- Vs v7: loses on some puzzle/HL/cube-quad tasks; wins on others
+  (puzzle-4x4-task4/2, antmaze-large-task2, scene-task2).
+- Diagnostics: soft floor `c=0.1` under-drives `w_norm` (~0.50–0.58 vs v6
+  ~0.60–0.69); hard conflict kill barely changes magnitude
+  (`guidance_retained`~0.98–0.99) but blocks mature critics from overriding BC.
+
+## v9: DFL-RQL9 (`agents/dflrql9.py`) — trust-weighted conflict + near-hard consensus
+
+V9 inherits v8's scale-free soft consensus and behavior-aware dynamics, with
+three task-agnostic fixes (no env schedules, no privileged eval signals, no
+task-specific hyperparameters):
+
+1. **Near-hard relative floor** `consensus_floor=0.01`.  Locally flat
+   gradients still vanish; typical-batch targets stay near unit norm, so
+   `||W||` recovers the v6 agreement signal without an absolute tau.
+2. **Trust-weighted conflict projection.**  With `u = Proj_{||.||<=1}(W)`,
+   `trust = ||u||`, and unit behavior velocity `v̂`,
+
+       kill = (1 - trust^p) * min(<u, v̂>, 0)
+       u_conf = u - kill * v̂
+
+   Immature critics remain BC-safe as in v8; fully agreed ensembles may
+   override BC as in v6.  Default `conflict_power=2`.
+3. **Light residual damping** when BC and consensus already agree:
+
+       damp = 1 - ρ * max(cos(u, v), 0) * trust
+       u_safe = damp * Proj(u_conf)
+
+   with `residual_coef=0.25`, so aligned directions are not double-pushed.
+
+Shared RQL hyperparameters stay identical to the baseline comparison.
+Logs add `conflict_kill_frac`, `residual_damp`, and `trust` on top of the
+v8 diagnostic suite.
+
+Experiment order:
+
+1. `cloud_job/run_train_rql_dfl9.sh`: humanoidmaze-large, 2M steps, seeds
+   0–7; refresh `my_exps/dflrql_vs_baseline.png`.
+2. `cloud_job/run_train_rql_dfl9_ogbench50.sh`: all 50 tasks, 2M steps,
+   seeds 0,1,2; write `my_exps/ogbench50_v9_vs_baseline_common_max.png` and
+   extend the all-method 50-task plots.
+3. `cloud_job/run_train_rql_dfl9_pipeline.sh` enforces this sequence and only
+   starts phase 2 after all phase-1 paper checkpoints exist.
