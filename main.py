@@ -48,6 +48,21 @@ flags.DEFINE_bool('sparse', False, "make the task sparse reward")
 flags.DEFINE_float('p_aug', None, 'Probability of applying image augmentation.')
 flags.DEFINE_integer('frame_stack', None, 'Number of frames to stack.')
 flags.DEFINE_integer('utd', 1, 'UTD.')
+# Optional resume: restore weights/opt/RNG after create(), then continue the
+# training loop from agent.network.step (TrainState starts at 1 and increments
+# once per update, so after a save at loop i the stored step is i+1 and the
+# next iteration is i+1). Does not restore dataset shuffle / CSV / TB state;
+# a new exp dir is still created. Default None = fresh run.
+flags.DEFINE_string(
+    'restore_path',
+    None,
+    'Checkpoint directory (with --restore_epoch) or path to params_*.pkl.',
+)
+flags.DEFINE_integer(
+    'restore_epoch',
+    None,
+    'Checkpoint step when --restore_path is a directory. Ignored for .pkl files.',
+)
 
 config_flags.DEFINE_config_file('agent', 'agents/rql.py', lock_config=False)
 
@@ -134,7 +149,16 @@ def main(_):
         ex_batch['actions'],
         config,
     )
-    
+
+    # Optional resume: load pytree state (params, opt_state, network.step, rng).
+    # Loop continues from agent.network.step so checkpointed steps are not redone.
+    if FLAGS.restore_path:
+        agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
+        print(
+            f'Resume: restored step counter network.step={int(agent.network.step)} '
+            f'(next train iteration will start at this index)'
+        )
+
     print("replay buffer size:", replay_buffer.size)
 
     # Train agent.
@@ -149,7 +173,18 @@ def main(_):
 
     eps_dataset, eps = defaultdict(list), []
 
-    for i in tqdm.tqdm(range(1, FLAGS.offline_steps + FLAGS.online_steps + 1), smoothing=0.1, dynamic_ncols=True):
+    # Fresh create() → step=1; after save at loop i → step=i+1. Start there.
+    start_step = int(agent.network.step)
+    total_steps = FLAGS.offline_steps + FLAGS.online_steps
+    if start_step > total_steps:
+        raise ValueError(
+            f'Restored network.step={start_step} exceeds '
+            f'offline_steps+online_steps={total_steps}; nothing to train.'
+        )
+
+    for i in tqdm.tqdm(
+        range(start_step, total_steps + 1), smoothing=0.1, dynamic_ncols=True
+    ):
         if i <= FLAGS.offline_steps:
             if FLAGS.ogbench_dataset_dir is not None and FLAGS.dataset_replace_interval != 0 and i % FLAGS.dataset_replace_interval == 0:
                 dataset_idx = (dataset_idx + 1) % len(dataset_paths)
@@ -249,8 +284,10 @@ def main(_):
             tb_logger.log(eval_metrics, step=i)
             eval_logger.log(eval_metrics, step=i)
 
-        # Save agent.
-        if i % FLAGS.save_interval == FLAGS.save_interval - 1 and i > FLAGS.offline_steps:
+        # Save agent (offline and online). Also save the final step once.
+        if FLAGS.save_interval > 0 and (
+            i % FLAGS.save_interval == 0 or i == total_steps
+        ):
             save_agent(agent, FLAGS.save_dir, i)
 
     train_logger.close()

@@ -178,25 +178,39 @@ def save_agent(agent, save_dir, epoch):
     print(f'Saved to {save_path}')
     # print(agent.network.opt_state[0][1]['modules_critic']['value_net']['Dense_0']['kernel'])
 
-def restore_agent(agent, restore_path, restore_epoch):
-    """Restore the agent from a file.
+def restore_agent(agent, restore_path, restore_epoch=None):
+    """Restore the agent from a checkpoint file.
 
     Args:
-        agent: Agent.
-        restore_path: Path to the directory containing the saved agent.
-        restore_epoch: Epoch number.
+        agent: Agent (template from ``create()``; non-pytree fields kept).
+        restore_path: Directory (glob ok) containing ``params_*.pkl``, or a
+            path/glob to a ``params_{epoch}.pkl`` file itself.
+        restore_epoch: Step/epoch number. Required when ``restore_path`` is a
+            directory; ignored when ``restore_path`` points at a ``.pkl`` file.
+
+    Returns:
+        Agent with pytree state loaded from the checkpoint.
     """
     candidates = glob.glob(restore_path)
-
     assert len(candidates) == 1, f'Found {len(candidates)} candidates: {candidates}'
+    candidate = candidates[0]
 
-    restore_path = os.path.join(candidates[0], f'params_{restore_epoch}.pkl')
+    if candidate.endswith('.pkl') or (
+        os.path.isfile(candidate) and candidate.endswith('.pkl')
+    ):
+        restore_file = candidate
+    else:
+        if restore_epoch is None:
+            raise ValueError(
+                'restore_epoch is required when restore_path is a directory; '
+                'got restore_path=%r' % (restore_path,)
+            )
+        restore_file = os.path.join(candidate, f'params_{restore_epoch}.pkl')
 
-    with open(restore_path, 'rb') as f:
+    with open(restore_file, 'rb') as f:
         load_dict = pickle.load(f)
 
     agent = flax.serialization.from_state_dict(agent, load_dict['agent'])
 
-    print(f'Restored from {restore_path}')
-    # print(agent.network.opt_state[0][1]['modules_critic']['value_net']['Dense_0']['kernel'])
+    print(f'Restored from {restore_file}')
     return agent

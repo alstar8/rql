@@ -1,3 +1,5 @@
+from agents.consensus_discrete_flow import ConsensusDiscreteFlowAgent
+from agents.consensus_latent_flow import ConsensusLatentFlowAgent
 from agents.dflrql import DFLRQLAgent
 from agents.dflrql2 import DFLRQL2Agent
 from agents.dflrql3 import DFLRQL3Agent
@@ -20,4 +22,6 @@ agents = dict(
     dflrql7=DFLRQL7Agent,
     dflrql8=DFLRQL8Agent,
     dflrql9=DFLRQL9Agent,
+    consensus_discrete_flow=ConsensusDiscreteFlowAgent,
+    consensus_latent_flow=ConsensusLatentFlowAgent,
 )

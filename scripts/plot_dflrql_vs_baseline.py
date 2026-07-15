@@ -13,6 +13,10 @@ V8 is read directly from humanoidmaze-large-dflrql8-2m and is never
 extrapolated beyond the last available evaluation for each seed.
 
 V9 is read directly from humanoidmaze-large-dflrql9-2m.
+
+Default SERIES: baseline + v9 + ConsensusLatentFlow v4 + CDF v3 smokes
+(historical categorical CDF kept distinguishable from continuous CLF).
+Override CLF run group with --clf-run-group (launcher passes RQL_RUN_GROUP).
 """
 
 from __future__ import annotations
@@ -25,8 +29,31 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-# (label, run_group, color, linestyle)
-SERIES = [
+DEFAULT_CLF_RUN_GROUP = "humanoidmaze-large-clf-v4-2m"
+CLF_V4_COLOR = "#C2185B"
+
+# (label, run_group, color, linestyle) — CLF group filled in at runtime.
+_SERIES_HEAD = [
+    ("RQL baseline", "humanoidmaze-large-rql-tuned-2m", "#4C72B0", "-"),
+    ("DFL-RQL v9", "humanoidmaze-large-dflrql9-2m", "#0F766E", "-"),
+]
+_SERIES_CDF_TAIL = [
+    (
+        "CDF v3 guided",
+        "humanoidmaze-large-cdf-v3-guided-smoke300k",
+        "#D55E00",
+        "-",
+    ),
+    (
+        "CDF v3 unguided",
+        "humanoidmaze-large-cdf-v3-unguided-smoke300k",
+        "#E69F00",
+        "--",
+    ),
+]
+
+# Full historical series (use --all-methods); CLF inserted before CDF tail.
+_SERIES_ALL_HEAD = [
     ("RQL baseline", "humanoidmaze-large-rql-tuned-2m", "#4C72B0", "-"),
     ("RQL baseline (1M)", "humanoidmaze-large-rql-tuned", "#4C72B0", ":"),
     ("DFL-RQL v1", "humanoidmaze-large-dflrql", "#55A868", "-"),
@@ -38,7 +65,15 @@ SERIES = [
     ("DFL-RQL v7", "__v7__", "#E24A33", "-"),
     ("DFL-RQL v8", "humanoidmaze-large-dflrql8-2m", "#7C3AED", "-"),
     ("DFL-RQL v9", "humanoidmaze-large-dflrql9-2m", "#0F766E", "-"),
+    ("ConsensusDiscreteFlow v2", "humanoidmaze-large-cdf-2m-v2", "#999999", ":"),
 ]
+
+
+def build_series(clf_run_group: str, all_methods: bool) -> list[tuple[str, str, str, str]]:
+    clf = ("CLF v4", clf_run_group, CLF_V4_COLOR, "-")
+    if all_methods:
+        return [*_SERIES_ALL_HEAD, clf, *_SERIES_CDF_TAIL]
+    return [*_SERIES_HEAD, clf, *_SERIES_CDF_TAIL]
 
 V7_1M_GROUP = "humanoidmaze-large-dflrql7"
 V7_2M_GROUP = "humanoidmaze-large-dflrql7-2m"
@@ -190,12 +225,27 @@ def main() -> None:
         default=Path(__file__).resolve().parents[1] / "my_exps" / "dflrql_vs_baseline.png",
     )
     parser.add_argument("--max-step", type=int, default=2_000_000)
+    parser.add_argument(
+        "--clf-run-group",
+        type=str,
+        default=DEFAULT_CLF_RUN_GROUP,
+        help=(
+            "Run group for ConsensusLatentFlow v4 "
+            f"(default: {DEFAULT_CLF_RUN_GROUP})."
+        ),
+    )
+    parser.add_argument(
+        "--all-methods",
+        action="store_true",
+        help="Plot the full historical method suite instead of baseline/v9/CLF/CDF.",
+    )
     args = parser.parse_args()
 
+    series = build_series(args.clf_run_group, args.all_methods)
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5), constrained_layout=True)
     plotted = 0
     has_2m_baseline = bool(load_group(args.save_dir, "humanoidmaze-large-rql-tuned-2m"))
-    for label, run_group, color, ls in SERIES:
+    for label, run_group, color, ls in series:
         if label == "RQL baseline (1M)" and has_2m_baseline:
             continue
         if label == "RQL baseline" and not has_2m_baseline:
