@@ -78,6 +78,16 @@ class DFLRQL8Agent(DFLRQL6Agent):
         safe_w, _ = self._behavior_safe_direction(w, behavior_velocity)
         return self.config["guidance_coef"] * times * safe_w
 
+    def _actor_q_action(self, flat_action):
+        """Hook for the actor q_pe one-step lookahead action only.
+
+        Default is identity. Subclasses (e.g. QuantizedDFLRQL9) may project
+        this flat action before it is scored by ``value``. Critic reversal,
+        BC, distillation, guidance, and behavior-action paths must not call
+        this hook.
+        """
+        return flat_action
+
     @jax.jit
     def total_loss(self, batch, grad_params, rng=None):
         rng = rng if rng is not None else self.rng
@@ -193,16 +203,16 @@ class DFLRQL8Agent(DFLRQL6Agent):
                 behavior_velocity,
             )
         )
+        lookahead_action = x_t + guided_velocity * jnp.minimum(
+            1 / self.config["flow_steps"],
+            1 - t,
+        )
+        lookahead_action = self._actor_q_action(lookahead_action)
         q_pe = self.network.select("value")(
             jnp.concatenate(
                 [
                     batch["observations"][0],
-                    x_t
-                    + guided_velocity
-                    * jnp.minimum(
-                        1 / self.config["flow_steps"],
-                        1 - t,
-                    ),
+                    lookahead_action,
                     jnp.clip(
                         t + 1 / self.config["flow_steps"],
                         max=1,

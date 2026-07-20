@@ -1,0 +1,57 @@
+{
+  "protocol": "exact final checkpoint at report_step; seeds 0,1,2; mean over seeds then tasks",
+  "at_1m": {
+    "baseline": {
+      "grand_mean": 0.5532,
+      "n_tasks": 50,
+      "incomplete": []
+    },
+    "v6": {
+      "grand_mean": 0.5992000000000001,
+      "n_tasks": 50,
+      "incomplete": []
+    },
+    "v7": {
+      "grand_mean": 0.5717333333333333,
+      "n_tasks": 50,
+      "incomplete": []
+    },
+    "v8": {
+      "grand_mean": 0.5668,
+      "n_tasks": 50,
+      "incomplete": []
+    },
+    "v9": {
+      "grand_mean": 0.5773333333333334,
+      "n_tasks": 50,
+      "incomplete": []
+    }
+  },
+  "at_2m": {
+    "baseline": {
+      "grand_mean": 0.5386666666666666,
+      "n_tasks": 50,
+      "incomplete": []
+    },
+    "v6": {
+      "grand_mean": 0.586,
+      "n_tasks": 50,
+      "incomplete": []
+    },
+    "v7": {
+      "grand_mean": 0.5768,
+      "n_tasks": 50,
+      "incomplete": []
+    },
+    "v8": {
+      "grand_mean": 0.5833333333333333,
+      "n_tasks": 50,
+      "incomplete": []
+    },
+    "v9": {
+      "grand_mean": 0.5937333333333332,
+      "n_tasks": 50,
+      "incomplete": []
+    }
+  }
+}

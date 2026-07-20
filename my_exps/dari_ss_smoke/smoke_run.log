@@ -1,0 +1,173 @@
+GPU visible: [CudaDevice(id=0)]
+env=humanoidmaze-large-navigate-singletask-v0 ckpt=exp/rql/humanoidmaze-large-dari-v6-awr5-smoke300k/sd000_20260715_213015/params_200000.pkl batch=64 updates=800
+SS soft-ramp=400 coef_max=0.5 p=[0.1,0.35]
+create(): network.step=1
+Restored from exp/rql/humanoidmaze-large-dari-v6-awr5-smoke300k/sd000_20260715_213015/params_200000.pkl
+restore: network.step=200001 param_tree_shape_match=True
+soft re-entry: ss_start=200001 ramp=400 → at step0 λ=0.0000 p=0.0000
+
+=== BEFORE free-run diagnostic (held-out) ===
+  decode_rmse: 0.063941
+  fr_action_corr_clean: 0.913947
+  fr_action_corr_gt: 0.915479
+  fr_action_rmse_clean: 0.293079
+  fr_action_rmse_gt: 0.290605
+  fr_prefix_exact_1: 0.484375
+  fr_prefix_exact_16: 0.000000
+  fr_prefix_exact_2: 0.046875
+  fr_prefix_exact_4: 0.000000
+  fr_prefix_exact_8: 0.000000
+  fr_reg0_acc: 0.484375
+  fr_reg10_acc: 0.031250
+  fr_reg11_acc: 0.078125
+  fr_reg12_acc: 0.078125
+  fr_reg13_acc: 0.093750
+  fr_reg14_acc: 0.171875
+  fr_reg15_acc: 0.187500
+  fr_reg1_acc: 0.109375
+  fr_reg2_acc: 0.140625
+  fr_reg3_acc: 0.125000
+  fr_reg4_acc: 0.062500
+  fr_reg5_acc: 0.093750
+  fr_reg6_acc: 0.125000
+  fr_reg7_acc: 0.109375
+  fr_reg8_acc: 0.140625
+  fr_reg9_acc: 0.093750
+  fr_seq_exact: 0.000000
+  fr_token_acc: 0.132812
+  tf_action_corr_gt: 0.973745
+  tf_action_rmse_gt: 0.157963
+  tf_prefix_exact_1: 0.484375
+  tf_prefix_exact_16: 0.000000
+  tf_prefix_exact_2: 0.046875
+  tf_prefix_exact_4: 0.000000
+  tf_prefix_exact_8: 0.000000
+  tf_reg0_acc: 0.484375
+  tf_reg10_acc: 0.281250
+  tf_reg11_acc: 0.281250
+  tf_reg12_acc: 0.281250
+  tf_reg13_acc: 0.375000
+  tf_reg14_acc: 0.593750
+  tf_reg15_acc: 0.609375
+  tf_reg1_acc: 0.093750
+  tf_reg2_acc: 0.109375
+  tf_reg3_acc: 0.156250
+  tf_reg4_acc: 0.078125
+  tf_reg5_acc: 0.156250
+  tf_reg6_acc: 0.234375
+  tf_reg7_acc: 0.203125
+  tf_reg8_acc: 0.296875
+  tf_reg9_acc: 0.578125
+  tf_seq_exact: 0.000000
+  tf_token_acc: 0.300781
+
+first update (incl JIT): 12.53s step=200002
+  ss_coef=0.0000 ss_p=0.0000 replaced=0.0000 ss_acc=0.0000
+[80/800] step=200082 loss=10.4253 λ=0.100 p=0.150 repl=0.146 ss_acc=0.230 tf_acc=0.270 q=-95.428 |Δa|=0.2299
+[160/800] step=200162 loss=66.7734 λ=0.200 p=0.200 repl=0.190 ss_acc=0.223 tf_acc=0.251 q=-99.204 |Δa|=0.2045
+[240/800] step=200242 loss=4.6456 λ=0.300 p=0.250 repl=0.229 ss_acc=0.203 tf_acc=0.242 q=-97.960 |Δa|=0.1796
+[320/800] step=200322 loss=5.1121 λ=0.400 p=0.300 repl=0.302 ss_acc=0.196 tf_acc=0.250 q=-93.231 |Δa|=0.1751
+[400/800] step=200402 loss=5.3749 λ=0.500 p=0.350 repl=0.316 ss_acc=0.208 tf_acc=0.261 q=-92.897 |Δa|=0.1645
+[480/800] step=200482 loss=4.4984 λ=0.500 p=0.350 repl=0.359 ss_acc=0.197 tf_acc=0.252 q=-92.678 |Δa|=0.1602
+[560/800] step=200562 loss=4.5539 λ=0.500 p=0.350 repl=0.351 ss_acc=0.206 tf_acc=0.252 q=-96.473 |Δa|=0.1546
+[640/800] step=200642 loss=4.6561 λ=0.500 p=0.350 repl=0.363 ss_acc=0.224 tf_acc=0.276 q=-94.927 |Δa|=0.1526
+[720/800] step=200722 loss=4.6638 λ=0.500 p=0.350 repl=0.380 ss_acc=0.191 tf_acc=0.255 q=-98.151 |Δa|=0.1530
+[799/800] step=200801 loss=4.0746 λ=0.500 p=0.350 repl=0.360 ss_acc=0.201 tf_acc=0.251 q=-97.256 |Δa|=0.1501
+
+=== speed: 138.61 updates/s over 5.8s (800 updates) ===
+memory: bytes_in_use=153033216 peak=626929664 (pre=153203200)
+
+=== AFTER free-run diagnostic (same held-out) ===
+  decode_rmse: 0.063941
+  fr_action_corr_clean: 0.912543
+  fr_action_corr_gt: 0.914155
+  fr_action_rmse_clean: 0.298053
+  fr_action_rmse_gt: 0.295450
+  fr_prefix_exact_1: 0.468750
+  fr_prefix_exact_16: 0.000000
+  fr_prefix_exact_2: 0.062500
+  fr_prefix_exact_4: 0.000000
+  fr_prefix_exact_8: 0.000000
+  fr_reg0_acc: 0.468750
+  fr_reg10_acc: 0.046875
+  fr_reg11_acc: 0.062500
+  fr_reg12_acc: 0.078125
+  fr_reg13_acc: 0.046875
+  fr_reg14_acc: 0.171875
+  fr_reg15_acc: 0.171875
+  fr_reg1_acc: 0.125000
+  fr_reg2_acc: 0.140625
+  fr_reg3_acc: 0.093750
+  fr_reg4_acc: 0.093750
+  fr_reg5_acc: 0.109375
+  fr_reg6_acc: 0.109375
+  fr_reg7_acc: 0.078125
+  fr_reg8_acc: 0.140625
+  fr_reg9_acc: 0.046875
+  fr_seq_exact: 0.000000
+  fr_token_acc: 0.124023
+  tf_action_corr_gt: 0.973825
+  tf_action_rmse_gt: 0.158492
+  tf_prefix_exact_1: 0.468750
+  tf_prefix_exact_16: 0.000000
+  tf_prefix_exact_2: 0.062500
+  tf_prefix_exact_4: 0.000000
+  tf_prefix_exact_8: 0.000000
+  tf_reg0_acc: 0.468750
+  tf_reg10_acc: 0.281250
+  tf_reg11_acc: 0.296875
+  tf_reg12_acc: 0.250000
+  tf_reg13_acc: 0.359375
+  tf_reg14_acc: 0.546875
+  tf_reg15_acc: 0.562500
+  tf_reg1_acc: 0.109375
+  tf_reg2_acc: 0.109375
+  tf_reg3_acc: 0.125000
+  tf_reg4_acc: 0.078125
+  tf_reg5_acc: 0.140625
+  tf_reg6_acc: 0.203125
+  tf_reg7_acc: 0.187500
+  tf_reg8_acc: 0.281250
+  tf_reg9_acc: 0.546875
+  tf_seq_exact: 0.000000
+  tf_token_acc: 0.284180
+
+=== BEFORE → AFTER deltas (held-out) ===
+  tf_token_acc: 0.3008 → 0.2842  (Δ=-0.0166)
+  fr_token_acc: 0.1328 → 0.1240  (Δ=-0.0088)
+  tf_seq_exact: 0.0000 → 0.0000  (Δ=+0.0000)
+  fr_seq_exact: 0.0000 → 0.0000  (Δ=+0.0000)
+  tf_prefix_exact_1: 0.4844 → 0.4688  (Δ=-0.0156)
+  fr_prefix_exact_1: 0.4844 → 0.4688  (Δ=-0.0156)
+  tf_prefix_exact_4: 0.0000 → 0.0000  (Δ=+0.0000)
+  fr_prefix_exact_4: 0.0000 → 0.0000  (Δ=+0.0000)
+  tf_prefix_exact_8: 0.0000 → 0.0000  (Δ=+0.0000)
+  fr_prefix_exact_8: 0.0000 → 0.0000  (Δ=+0.0000)
+  tf_action_rmse_gt: 0.1580 → 0.1585  (Δ=+0.0005)
+  fr_action_rmse_gt: 0.2906 → 0.2955  (Δ=+0.0048)
+  tf_action_corr_gt: 0.9737 → 0.9738  (Δ=+0.0001)
+  fr_action_corr_gt: 0.9155 → 0.9142  (Δ=-0.0013)
+
+exposure gap token (TF-FR): 0.1680 → 0.1602 (Δ=-0.0078)
+exposure gap seq   (TF-FR): 0.0000 → 0.0000 (Δ=+0.0000)
+Saved to my_exps/dari_ss_smoke/run_ss_ft_from200k/params_200801.pkl
+Restored from my_exps/dari_ss_smoke/run_ss_ft_from200k/params_200801.pkl
+
+save/restore: step 200801→200801 actor_leaf_max_abs_diff=0.000e+00
+
+=== stability (logged) ===
+  total_loss first/last/min/max: 10.4253/4.0746/4.0746/66.7734
+  ss_coef first/last: 0.1000/0.5000
+  ss_replaced last: 0.3604
+  grad_delta_actor last: 0.150054
+  all_finite_losses: True
+
+=== VERDICT ===
+  param_restore_ok: True
+  network.step_restored: 200001
+  ss_ramp_exercised: True
+  exposure_gap_reduced: True
+  freerun_metrics_improved: False
+  short_FT_helps_exposure: True
+
+wrote my_exps/dari_ss_smoke/run_ss_ft_from200k/smoke_report.json

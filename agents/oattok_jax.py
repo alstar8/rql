@@ -80,6 +80,39 @@ def build_codebook(levels: Sequence[int] = FSQ_LEVELS) -> jnp.ndarray:
     )
 
 
+def token_ids_to_coord_indices(
+    indices: jnp.ndarray, levels: Sequence[int] = FSQ_LEVELS
+) -> jnp.ndarray:
+    """Unpack flat FSQ token IDs to mixed-radix coordinate indices.
+
+    For ``levels=(8,5,5,5)`` the basis is ``[1,8,40,200]``. Returns integer
+    coords in ``[0, L_i)`` with shape ``(..., q)``.
+    """
+    levels_t = jnp.asarray(levels, dtype=jnp.int32)
+    basis = fsq_basis(levels)
+    return ((indices[..., None] // basis) % levels_t).astype(jnp.int32)
+
+
+def coord_indices_to_token_ids(
+    coords: jnp.ndarray, levels: Sequence[int] = FSQ_LEVELS
+) -> jnp.ndarray:
+    """Pack mixed-radix coordinate indices to flat FSQ token IDs."""
+    basis = fsq_basis(levels)
+    return (coords.astype(jnp.int32) * basis).sum(axis=-1).astype(jnp.int32)
+
+
+def fsq_class_valid_mask(
+    levels: Sequence[int] = FSQ_LEVELS, max_classes: Optional[int] = None
+) -> jnp.ndarray:
+    """Boolean mask ``(q, max_classes)`` of valid logit slots per FSQ axis."""
+    levels_t = np.asarray(levels, dtype=np.int32)
+    width = int(max_classes) if max_classes is not None else int(levels_t.max())
+    mask = np.zeros((len(levels_t), width), dtype=bool)
+    for i, level in enumerate(levels_t):
+        mask[i, : int(level)] = True
+    return jnp.asarray(mask)
+
+
 class TransformerBlock(nn.Module):
     emb_dim: int
     num_heads: int

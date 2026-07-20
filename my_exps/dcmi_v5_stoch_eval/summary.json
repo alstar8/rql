@@ -1,0 +1,134 @@
+{
+  "stopped_t1_pids": {
+    "python_workers": [
+      1741562,
+      1741565,
+      1741569
+    ],
+    "parent_bash": 1725428,
+    "launcher_bash": 1725442
+  },
+  "confirmed_t1_200k": {
+    "params_and_eval_rows": 3,
+    "xy": [
+      7.0088,
+      6.6421,
+      6.5327
+    ],
+    "success": [
+      0,
+      0,
+      0
+    ]
+  },
+  "t20_left_alone": "completed naturally to 300k (params_300000.pkl present); not killed",
+  "eval": {
+    "script": "/tmp/dcmi_v5_stoch_maskgit_eval.py",
+    "gpu": "CUDA_VISIBLE_DEVICES=0",
+    "ckpts": "t20 params_200000.pkl seeds 0,1,2",
+    "episodes": 30,
+    "temps": [
+      0.0,
+      0.5,
+      1.0
+    ],
+    "target_stoch_temps": [
+      0.5,
+      1.0
+    ],
+    "elapsed_sec": 2190.9610760211945
+  },
+  "aggregate": [
+    {
+      "mode": "api",
+      "temperature": 0.0,
+      "n_seeds": 3,
+      "n_episodes_per_seed": 30,
+      "success_mean": 0.0,
+      "return_mean": -2000.0,
+      "xy_mean": 5.0357075969347855,
+      "xy_mean_std_across_seeds": 1.0560647633924716,
+      "xy_max_mean": 20.207717304581198,
+      "action_std_mean": 0.6819857557614645,
+      "action_unique_frac": 0.8942444444444444,
+      "action_step_delta_mean": 1.8229070901870728,
+      "conf_peak_prob_mean": 0.4247346756358941,
+      "conf_entropy_mean": 1.3524992143114407,
+      "conf_argmax_agree_mean": 0.9999999962747097,
+      "conf_remain_schedule_err_sum": 0.0
+    },
+    {
+      "mode": "api",
+      "temperature": 0.5,
+      "n_seeds": 3,
+      "n_episodes_per_seed": 30,
+      "success_mean": 0.0,
+      "return_mean": -2000.0,
+      "xy_mean": 5.817927536137767,
+      "xy_mean_std_across_seeds": 1.7152253965586124,
+      "xy_max_mean": 20.863157948972567,
+      "action_std_mean": 0.6637418071428934,
+      "action_unique_frac": 1.0,
+      "action_step_delta_mean": 2.0302204291025796,
+      "conf_peak_prob_mean": 0.453423207004865,
+      "conf_entropy_mean": 1.2989329472184181,
+      "conf_argmax_agree_mean": 0.607828330869476,
+      "conf_remain_schedule_err_sum": 0.0
+    },
+    {
+      "mode": "api",
+      "temperature": 1.0,
+      "n_seeds": 3,
+      "n_episodes_per_seed": 30,
+      "success_mean": 0.0,
+      "return_mean": -2000.0,
+      "xy_mean": 5.929779396386688,
+      "xy_mean_std_across_seeds": 2.2624006219314396,
+      "xy_max_mean": 22.406616408725696,
+      "action_std_mean": 0.6463547945022583,
+      "action_unique_frac": 1.0,
+      "action_step_delta_mean": 2.133202314376831,
+      "conf_peak_prob_mean": 0.4641735137750705,
+      "conf_entropy_mean": 1.277717463672161,
+      "conf_argmax_agree_mean": 0.47116359664748114,
+      "conf_remain_schedule_err_sum": 0.0
+    },
+    {
+      "mode": "target_stoch",
+      "temperature": 0.5,
+      "n_seeds": 3,
+      "n_episodes_per_seed": 30,
+      "success_mean": 0.0,
+      "return_mean": -2000.0,
+      "xy_mean": 5.841712513154527,
+      "xy_mean_std_across_seeds": 1.495756337656811,
+      "xy_max_mean": 20.239734867597257,
+      "action_std_mean": 0.6653740604718527,
+      "action_unique_frac": 1.0,
+      "action_step_delta_mean": 1.980869174003601,
+      "conf_peak_prob_mean": 0.4481440708041191,
+      "conf_entropy_mean": 1.3060691679517429,
+      "conf_argmax_agree_mean": 0.6124189433952173,
+      "conf_remain_schedule_err_sum": 0.0
+    },
+    {
+      "mode": "target_stoch",
+      "temperature": 1.0,
+      "n_seeds": 3,
+      "n_episodes_per_seed": 30,
+      "success_mean": 0.0,
+      "return_mean": -2000.0,
+      "xy_mean": 7.453066034856808,
+      "xy_mean_std_across_seeds": 2.0391222040918104,
+      "xy_max_mean": 26.648568483086805,
+      "action_std_mean": 0.6459193627039591,
+      "action_unique_frac": 1.0,
+      "action_step_delta_mean": 2.1215627988179526,
+      "conf_peak_prob_mean": 0.4722775835543871,
+      "conf_entropy_mean": 1.2537161285678546,
+      "conf_argmax_agree_mean": 0.46435536940892536,
+      "conf_remain_schedule_err_sum": 0.0
+    }
+  ],
+  "conclusion": "Deterministic coord-wise mode is NOT the main cause of zero success. Stochastic MaskGIT never unlocked success; xy gains are modest/noisy. Prefer diagnosing AWR/overconcentration/representation over switching eval to categorical sampling."
+}

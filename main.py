@@ -17,7 +17,12 @@ from agents import agents
 from envs.env_utils import make_env_and_datasets
 from envs.ogbench_utils import make_ogbench_env_and_datasets
 
-from utils.datasets import Dataset, ReplayBuffer
+from utils.datasets import (
+    Dataset,
+    ReplayBuffer,
+    compute_discounted_mc_returns,
+    compute_episode_success_flags,
+)
 from utils.evaluation import evaluate, flatten
 from utils.flax_utils import restore_agent, save_agent
 from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, prepare_eval_video, setup_experiment_logging
@@ -116,6 +121,35 @@ def main(_):
             sparse_rewards = (ds["rewards"] != 0.0) * -1.0
             ds_dict = {k: v for k, v in ds.items()}
             ds_dict["rewards"] = sparse_rewards
+            ds = Dataset.create(**ds_dict)
+        # Optional MC return-to-go (DiscreteARIQL mc_return mode). Off by default
+        # so other agents / IQL runs are unchanged.
+        if bool(config.get("use_mc_returns", False)):
+            discount = float(config.get("discount", 0.99))
+            mc_returns = compute_discounted_mc_returns(
+                ds["rewards"], ds["terminals"], discount
+            )
+            ds_dict = {k: v for k, v in ds.items()}
+            ds_dict["mc_returns"] = mc_returns
+            ds = Dataset.create(**ds_dict)
+        # Optional episode-success flags (DiscreteARIQL trajectory_success mode).
+        # OGBench convention in this pipeline: masks <= 0 mark goal/success
+        # transitions (humanoidmaze rewards in {-1,0}; masks=0 on goal). The
+        # generic helper does not hardcode rewards — only the success signal.
+        # Launcher is task-specific; other agents leave use_trajectory_success
+        # False and are unaffected.
+        if bool(config.get("use_trajectory_success", False)):
+            step_success = np.asarray(ds["masks"]) <= 0
+            traj_flags = compute_episode_success_flags(
+                step_success, ds["terminals"]
+            )
+            if traj_flags.shape != np.asarray(ds["rewards"]).shape:
+                raise ValueError(
+                    f"trajectory_success shape {traj_flags.shape} != "
+                    f"rewards shape {np.asarray(ds['rewards']).shape}"
+                )
+            ds_dict = {k: v for k, v in ds.items()}
+            ds_dict["trajectory_success"] = traj_flags
             ds = Dataset.create(**ds_dict)
         return ds
 
@@ -245,8 +279,9 @@ def main(_):
             ob = next_ob
 
             for _ in range(FLAGS.utd):
-                # Update agent.
-                batch = train_dataset.sample(config['batch_size'])
+                # Sample from the growing replay (offline seed + online appends).
+                # ``replay_buffer`` aliases the offline-seeded buffer created above.
+                batch = replay_buffer.sample(config['batch_size'])
                 agent, update_info = agent.update(batch)
 
         # Log metrics.

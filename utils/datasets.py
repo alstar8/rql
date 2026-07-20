@@ -12,6 +12,100 @@ def get_size(data):
     return max(jax.tree_util.tree_leaves(sizes))
 
 
+def compute_discounted_mc_returns(rewards, terminals, discount):
+    """Discounted Monte Carlo return-to-go per transition (episode-safe).
+
+    For each timestep ``t`` within an episode::
+
+        G_t = r_t + gamma * (1 - terminal_t) * G_{t+1}
+
+    with ``G_{T+1} = 0`` after the final transition. When ``terminal_t = 1``,
+    bootstrap is cut so ``G_t = r_t`` and the next earlier episode is isolated.
+
+    Args:
+        rewards: 1-D array of shape ``(N,)``.
+        terminals: 1-D array of shape ``(N,)`` (0/1 or bool).
+        discount: Scalar discount ``gamma`` in ``[0, 1]``.
+
+    Returns:
+        ``np.ndarray`` of shape ``(N,)`` with the same dtype as ``rewards``
+        when it is floating, else ``float32``. Efficient single reverse pass
+        suitable for ~2M rows.
+    """
+    rewards = np.asarray(rewards)
+    terminals = np.asarray(terminals)
+    if rewards.ndim != 1:
+        raise ValueError(f"rewards must be 1-D, got shape {rewards.shape}")
+    if terminals.shape != rewards.shape:
+        raise ValueError(
+            f"terminals shape {terminals.shape} != rewards shape {rewards.shape}"
+        )
+    n = int(rewards.shape[0])
+    if n == 0:
+        out_dtype = (
+            rewards.dtype
+            if np.issubdtype(rewards.dtype, np.floating)
+            else np.float32
+        )
+        return np.zeros((0,), dtype=out_dtype)
+
+    gamma = float(discount)
+    # Accumulate in float64 for numerical stability on long horizons.
+    rew = rewards.astype(np.float64, copy=False)
+    term = terminals.astype(np.float64, copy=False)
+    out = np.empty(n, dtype=np.float64)
+    g = 0.0
+    for t in range(n - 1, -1, -1):
+        g = rew[t] + gamma * (1.0 - term[t]) * g
+        out[t] = g
+
+    if np.issubdtype(rewards.dtype, np.floating):
+        return out.astype(rewards.dtype, copy=False)
+    return out.astype(np.float32)
+
+
+def compute_episode_success_flags(successes, terminals):
+    """Per-transition flags: 1 for all steps in any episode with a success.
+
+    Generic episode-boundary helper: does **not** interpret rewards. The caller
+    supplies a per-transition success signal (bool / 0-1). Any transition in an
+    episode that contains at least one True success is marked ``1.0``, including
+    transitions *before* the success. Episodes are cut at ``terminals > 0``;
+    a final unterminated suffix is treated as its own episode. No cross-episode
+    leakage.
+
+    Args:
+        successes: 1-D array of shape ``(N,)`` (bool or 0/1).
+        terminals: 1-D array of shape ``(N,)`` (0/1 or bool).
+
+    Returns:
+        ``np.ndarray`` float32 of shape ``(N,)`` with values in ``{0.0, 1.0}``.
+    """
+    successes = np.asarray(successes)
+    terminals = np.asarray(terminals)
+    if successes.ndim != 1:
+        raise ValueError(f"successes must be 1-D, got shape {successes.shape}")
+    if terminals.shape != successes.shape:
+        raise ValueError(
+            f"terminals shape {terminals.shape} != successes shape {successes.shape}"
+        )
+    n = int(successes.shape[0])
+    if n == 0:
+        return np.zeros((0,), dtype=np.float32)
+
+    succ = successes.astype(bool, copy=False)
+    term = terminals > 0
+    out = np.zeros(n, dtype=np.float32)
+    start = 0
+    for t in range(n):
+        if term[t] or t == n - 1:
+            end = t  # inclusive
+            if np.any(succ[start : end + 1]):
+                out[start : end + 1] = 1.0
+            start = t + 1
+    return out
+
+
 @partial(jax.jit, static_argnames=('padding',))
 def random_crop(img, crop_from, padding):
     """Randomly crop an image.
@@ -112,6 +206,10 @@ class Dataset(FrozenDict):
         rews = []
         terminals = []
         masks = []
+        has_mc = "mc_returns" in self._dict
+        mc_rets = [] if has_mc else None
+        has_traj_succ = "trajectory_success" in self._dict
+        traj_succ = [] if has_traj_succ else None
 
         for i in range(n):
             cur_idxs = np.minimum(i + start_locs, bt_terminal_locs)
@@ -120,12 +218,32 @@ class Dataset(FrozenDict):
             rews.append(jax.tree_util.tree_map(lambda arr: np.expand_dims(arr[cur_idxs], 0), self['rewards']))
             terminals.append(jax.tree_util.tree_map(lambda arr: np.expand_dims(arr[cur_idxs], 0), self['terminals']))
             masks.append(jax.tree_util.tree_map(lambda arr: np.expand_dims(arr[cur_idxs], 0), self['masks']))
+            if has_mc:
+                mc_rets.append(
+                    jax.tree_util.tree_map(
+                        lambda arr: np.expand_dims(arr[cur_idxs], 0),
+                        self["mc_returns"],
+                    )
+                )
+            if has_traj_succ:
+                traj_succ.append(
+                    jax.tree_util.tree_map(
+                        lambda arr: np.expand_dims(arr[cur_idxs], 0),
+                        self["trajectory_success"],
+                    )
+                )
 
         batch['observations'] = np.concatenate(obs, 0)
         batch['actions'] = np.concatenate(actions, 0)
         batch['rewards'] = np.concatenate(rews, 0)
         batch['terminals'] = np.concatenate(terminals, 0)
         batch['masks'] = np.concatenate(masks, 0)
+        if has_mc:
+            # (H+1, B) — same layout as rewards; actor uses index 0 (G at s_t).
+            batch["mc_returns"] = np.concatenate(mc_rets, 0)
+        if has_traj_succ:
+            # (H+1, B) — same layout as rewards; actor uses index 0 (flag at s_t).
+            batch["trajectory_success"] = np.concatenate(traj_succ, 0)
 
         return batch
 

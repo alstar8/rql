@@ -1,0 +1,4195 @@
+{
+  "title": "ConsensusFlow empirical aggregation (authoritative)",
+  "generated_utc": "2026-07-16T14:43:21Z",
+  "paper_seed_protocol": {
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "metric_primary": "paper_last3_at_2m",
+    "metric_definition": "For each (task, seed): mean evaluation/success at steps 1800000, 1900000, 2000000. Then mean over seeds 0,1,2. Then mean over tasks.",
+    "ablation_budget_step": 1000000,
+    "ablation_budget_note": "Ablations use a common shorter budget than 2M when ablation_budget=1000000 < 2000000; label clearly and never compare mismatched budgets as equivalent."
+  },
+  "ogbench": {
+    "source_csv": "my_exps/ogbench50_all50_metrics_2m.csv",
+    "source_csv_sha256": "dd33b3de578012bd27549fabd86ff48f25dd84a3dd7ccae8ca9b9ccb84766fa8",
+    "raw_save_dir": "exp",
+    "report_step": 2000000,
+    "report_checkpoints": "1800k/1900k/2000k",
+    "from_csv": {
+      "baseline": {
+        "grand_mean": 0.5532,
+        "n_tasks": 50,
+        "incomplete_tasks": [],
+        "domain_means": {
+          "antmaze-giant": 0.36000000000000004,
+          "antmaze-large": 0.7262222222222221,
+          "cube-double": 0.07777777777777777,
+          "cube-quadruple": 0.52,
+          "cube-triple": 0.03422222222222221,
+          "humanoidmaze-large": 0.4533333333333333,
+          "humanoidmaze-medium": 0.9928888888888888,
+          "puzzle-3x3": 0.9995555555555555,
+          "puzzle-4x4": 0.6426666666666667,
+          "scene": 0.7253333333333334
+        }
+      },
+      "v6": {
+        "grand_mean": 0.5874888888888887,
+        "n_tasks": 50,
+        "incomplete_tasks": [
+          {
+            "task_id": "cube-quadruple-task3",
+            "n": 2,
+            "seeds_present": [
+              0,
+              2
+            ]
+          },
+          {
+            "task_id": "cube-quadruple-task4",
+            "n": 2,
+            "seeds_present": [
+              0,
+              2
+            ]
+          },
+          {
+            "task_id": "cube-quadruple-task5",
+            "n": 2,
+            "seeds_present": [
+              0,
+              2
+            ]
+          }
+        ],
+        "domain_means": {
+          "antmaze-giant": 0.37955555555555553,
+          "antmaze-large": 0.8475555555555555,
+          "cube-double": 0.18355555555555556,
+          "cube-quadruple": 0.5237777777777778,
+          "cube-triple": 0.03333333333333332,
+          "humanoidmaze-large": 0.556,
+          "humanoidmaze-medium": 0.9879999999999999,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.42088888888888887,
+          "scene": 0.9422222222222223
+        }
+      },
+      "v7": {
+        "grand_mean": 0.5809333333333333,
+        "n_tasks": 50,
+        "incomplete_tasks": [],
+        "domain_means": {
+          "antmaze-giant": 0.33466666666666667,
+          "antmaze-large": 0.7444444444444444,
+          "cube-double": 0.14133333333333337,
+          "cube-quadruple": 0.5373333333333333,
+          "cube-triple": 0.027111111111111114,
+          "humanoidmaze-large": 0.5328888888888887,
+          "humanoidmaze-medium": 0.9924444444444444,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.5915555555555556,
+          "scene": 0.9075555555555554
+        }
+      },
+      "v8": {
+        "grand_mean": 0.5902222222222222,
+        "n_tasks": 50,
+        "incomplete_tasks": [],
+        "domain_means": {
+          "antmaze-giant": 0.32844444444444443,
+          "antmaze-large": 0.8257777777777777,
+          "cube-double": 0.17022222222222222,
+          "cube-quadruple": 0.5133333333333334,
+          "cube-triple": 0.03599999999999999,
+          "humanoidmaze-large": 0.4875555555555556,
+          "humanoidmaze-medium": 0.9893333333333333,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.6097777777777778,
+          "scene": 0.9417777777777777
+        }
+      },
+      "v9": {
+        "grand_mean": 0.5916,
+        "n_tasks": 50,
+        "incomplete_tasks": [],
+        "domain_means": {
+          "antmaze-giant": 0.3204444444444444,
+          "antmaze-large": 0.8257777777777777,
+          "cube-double": 0.19377777777777777,
+          "cube-quadruple": 0.5813333333333334,
+          "cube-triple": 0.02488888888888889,
+          "humanoidmaze-large": 0.5626666666666666,
+          "humanoidmaze-medium": 0.9902222222222223,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.46977777777777774,
+          "scene": 0.947111111111111
+        }
+      }
+    },
+    "from_raw": {
+      "baseline": {
+        "grand_mean": 0.5532,
+        "n_tasks": 50,
+        "incomplete_tasks": [],
+        "domain_means": {
+          "antmaze-giant": 0.36000000000000004,
+          "antmaze-large": 0.7262222222222221,
+          "cube-double": 0.07777777777777777,
+          "cube-quadruple": 0.52,
+          "cube-triple": 0.03422222222222221,
+          "humanoidmaze-large": 0.4533333333333333,
+          "humanoidmaze-medium": 0.9928888888888888,
+          "puzzle-3x3": 0.9995555555555555,
+          "puzzle-4x4": 0.6426666666666667,
+          "scene": 0.7253333333333334
+        },
+        "per_task": {
+          "scene-task1": {
+            "mean": 0.9088888888888889,
+            "n": 3,
+            "seed_values": [
+              0.8666666666666667,
+              0.96,
+              0.9
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task2": {
+            "mean": 0.45777777777777784,
+            "n": 3,
+            "seed_values": [
+              0.3866666666666667,
+              0.5333333333333333,
+              0.45333333333333337
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task3": {
+            "mean": 0.8133333333333335,
+            "n": 3,
+            "seed_values": [
+              0.8466666666666667,
+              0.7933333333333333,
+              0.8000000000000002
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task4": {
+            "mean": 0.7977777777777777,
+            "n": 3,
+            "seed_values": [
+              0.4133333333333333,
+              0.9933333333333333,
+              0.9866666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task5": {
+            "mean": 0.6488888888888888,
+            "n": 3,
+            "seed_values": [
+              0.6466666666666666,
+              0.6933333333333334,
+              0.6066666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task1": {
+            "mean": 0.9977777777777778,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task2": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task3": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task4": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task5": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task1": {
+            "mean": 0.6333333333333334,
+            "n": 3,
+            "seed_values": [
+              0.8866666666666667,
+              1.0,
+              0.013333333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task2": {
+            "mean": 0.6333333333333334,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.9133333333333334,
+              0.9866666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task3": {
+            "mean": 0.7155555555555555,
+            "n": 3,
+            "seed_values": [
+              0.7000000000000001,
+              0.7333333333333333,
+              0.7133333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task4": {
+            "mean": 0.4288888888888889,
+            "n": 3,
+            "seed_values": [
+              0.08,
+              0.20666666666666667,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task5": {
+            "mean": 0.8022222222222223,
+            "n": 3,
+            "seed_values": [
+              0.42,
+              0.9866666666666667,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task1": {
+            "mean": 0.2511111111111111,
+            "n": 3,
+            "seed_values": [
+              0.24666666666666667,
+              0.21333333333333335,
+              0.2933333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task2": {
+            "mean": 0.04,
+            "n": 3,
+            "seed_values": [
+              0.02666666666666667,
+              0.02666666666666667,
+              0.06666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task3": {
+            "mean": 0.031111111111111114,
+            "n": 3,
+            "seed_values": [
+              0.02,
+              0.04666666666666667,
+              0.02666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task4": {
+            "mean": 0.013333333333333334,
+            "n": 3,
+            "seed_values": [
+              0.02,
+              0.013333333333333334,
+              0.006666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task5": {
+            "mean": 0.05333333333333332,
+            "n": 3,
+            "seed_values": [
+              0.06,
+              0.05333333333333332,
+              0.04666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task1": {
+            "mean": 0.15333333333333332,
+            "n": 3,
+            "seed_values": [
+              0.11333333333333333,
+              0.21333333333333335,
+              0.13333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task2": {
+            "mean": 0.0022222222222222222,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.006666666666666667,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task3": {
+            "mean": 0.006666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.013333333333333334,
+              0.006666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task4": {
+            "mean": 0.0022222222222222222,
+            "n": 3,
+            "seed_values": [
+              0.006666666666666667,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task5": {
+            "mean": 0.006666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.006666666666666667,
+              0.0,
+              0.013333333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task1": {
+            "mean": 0.9511111111111111,
+            "n": 3,
+            "seed_values": [
+              0.9466666666666667,
+              0.98,
+              0.9266666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task2": {
+            "mean": 0.8088888888888889,
+            "n": 3,
+            "seed_values": [
+              0.88,
+              0.68,
+              0.8666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task3": {
+            "mean": 0.5355555555555557,
+            "n": 3,
+            "seed_values": [
+              0.49333333333333335,
+              0.5866666666666668,
+              0.5266666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task4": {
+            "mean": 0.30444444444444446,
+            "n": 3,
+            "seed_values": [
+              0.3466666666666667,
+              0.16666666666666666,
+              0.39999999999999997
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task5": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task1": {
+            "mean": 0.6511111111111111,
+            "n": 3,
+            "seed_values": [
+              0.6666666666666666,
+              0.64,
+              0.6466666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task2": {
+            "mean": 0.3755555555555556,
+            "n": 3,
+            "seed_values": [
+              0.26666666666666666,
+              0.49333333333333335,
+              0.3666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task3": {
+            "mean": 0.9733333333333333,
+            "n": 3,
+            "seed_values": [
+              0.9666666666666667,
+              0.98,
+              0.9733333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task4": {
+            "mean": 0.84,
+            "n": 3,
+            "seed_values": [
+              0.8733333333333334,
+              0.7933333333333333,
+              0.8533333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task5": {
+            "mean": 0.791111111111111,
+            "n": 3,
+            "seed_values": [
+              0.8133333333333334,
+              0.6999999999999998,
+              0.86
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task1": {
+            "mean": 0.03333333333333333,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.006666666666666667,
+              0.09333333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task2": {
+            "mean": 0.8222222222222223,
+            "n": 3,
+            "seed_values": [
+              0.8266666666666668,
+              0.8533333333333334,
+              0.7866666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task3": {
+            "mean": 0.28444444444444444,
+            "n": 3,
+            "seed_values": [
+              0.32666666666666666,
+              0.28,
+              0.24666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task4": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task5": {
+            "mean": 0.66,
+            "n": 3,
+            "seed_values": [
+              0.68,
+              0.64,
+              0.66
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task1": {
+            "mean": 0.9844444444444443,
+            "n": 3,
+            "seed_values": [
+              0.98,
+              0.9933333333333333,
+              0.98
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task2": {
+            "mean": 0.9933333333333333,
+            "n": 3,
+            "seed_values": [
+              0.9866666666666667,
+              1.0,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task3": {
+            "mean": 0.9977777777777778,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9933333333333333,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task4": {
+            "mean": 0.991111111111111,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              0.9866666666666667,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task5": {
+            "mean": 0.9977777777777778,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task1": {
+            "mean": 0.6311111111111111,
+            "n": 3,
+            "seed_values": [
+              0.7399999999999999,
+              0.5133333333333333,
+              0.64
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task2": {
+            "mean": 0.02888888888888889,
+            "n": 3,
+            "seed_values": [
+              0.03333333333333333,
+              0.006666666666666667,
+              0.04666666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task3": {
+            "mean": 0.64,
+            "n": 3,
+            "seed_values": [
+              0.56,
+              0.7066666666666667,
+              0.6533333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task4": {
+            "mean": 0.5733333333333334,
+            "n": 3,
+            "seed_values": [
+              0.5933333333333334,
+              0.5800000000000001,
+              0.5466666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task5": {
+            "mean": 0.3933333333333333,
+            "n": 3,
+            "seed_values": [
+              0.3933333333333333,
+              0.4666666666666666,
+              0.32
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          }
+        }
+      },
+      "v6": {
+        "grand_mean": 0.5874888888888887,
+        "n_tasks": 50,
+        "incomplete_tasks": [
+          {
+            "task_id": "cube-quadruple-task3",
+            "n": 2,
+            "seeds_present": [
+              0,
+              2
+            ]
+          },
+          {
+            "task_id": "cube-quadruple-task4",
+            "n": 2,
+            "seeds_present": [
+              0,
+              2
+            ]
+          },
+          {
+            "task_id": "cube-quadruple-task5",
+            "n": 2,
+            "seeds_present": [
+              0,
+              2
+            ]
+          }
+        ],
+        "domain_means": {
+          "antmaze-giant": 0.37955555555555553,
+          "antmaze-large": 0.8475555555555555,
+          "cube-double": 0.18355555555555556,
+          "cube-quadruple": 0.5237777777777778,
+          "cube-triple": 0.03333333333333332,
+          "humanoidmaze-large": 0.556,
+          "humanoidmaze-medium": 0.9879999999999999,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.42088888888888887,
+          "scene": 0.9422222222222223
+        },
+        "per_task": {
+          "scene-task1": {
+            "mean": 0.991111111111111,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              0.98,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task2": {
+            "mean": 0.8777777777777777,
+            "n": 3,
+            "seed_values": [
+              0.86,
+              0.9199999999999999,
+              0.8533333333333332
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task3": {
+            "mean": 0.9488888888888889,
+            "n": 3,
+            "seed_values": [
+              0.9333333333333332,
+              0.9466666666666667,
+              0.9666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task4": {
+            "mean": 0.991111111111111,
+            "n": 3,
+            "seed_values": [
+              0.98,
+              1.0,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task5": {
+            "mean": 0.9022222222222221,
+            "n": 3,
+            "seed_values": [
+              0.8733333333333334,
+              0.94,
+              0.8933333333333332
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task1": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task2": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task3": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task4": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task5": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task1": {
+            "mean": 0.728888888888889,
+            "n": 3,
+            "seed_values": [
+              0.66,
+              1.0,
+              0.5266666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task2": {
+            "mean": 0.0044444444444444444,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.013333333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task3": {
+            "mean": 0.35555555555555557,
+            "n": 3,
+            "seed_values": [
+              0.02,
+              0.6733333333333333,
+              0.37333333333333335
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task4": {
+            "mean": 0.5755555555555555,
+            "n": 3,
+            "seed_values": [
+              0.6466666666666666,
+              1.0,
+              0.08
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task5": {
+            "mean": 0.43999999999999995,
+            "n": 3,
+            "seed_values": [
+              0.34,
+              0.84,
+              0.14
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task1": {
+            "mean": 0.42,
+            "n": 3,
+            "seed_values": [
+              0.4266666666666667,
+              0.39333333333333337,
+              0.44
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task2": {
+            "mean": 0.13111111111111112,
+            "n": 3,
+            "seed_values": [
+              0.17333333333333334,
+              0.14,
+              0.08
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task3": {
+            "mean": 0.08,
+            "n": 3,
+            "seed_values": [
+              0.10000000000000002,
+              0.04,
+              0.09999999999999999
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task4": {
+            "mean": 0.042222222222222223,
+            "n": 3,
+            "seed_values": [
+              0.05333333333333334,
+              0.04666666666666667,
+              0.02666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task5": {
+            "mean": 0.24444444444444446,
+            "n": 3,
+            "seed_values": [
+              0.2733333333333334,
+              0.22,
+              0.24
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task1": {
+            "mean": 0.13555555555555554,
+            "n": 3,
+            "seed_values": [
+              0.12666666666666668,
+              0.14666666666666667,
+              0.13333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task2": {
+            "mean": 0.011111111111111112,
+            "n": 3,
+            "seed_values": [
+              0.006666666666666667,
+              0.013333333333333334,
+              0.013333333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task3": {
+            "mean": 0.0022222222222222222,
+            "n": 3,
+            "seed_values": [
+              0.006666666666666667,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task4": {
+            "mean": 0.0022222222222222222,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.006666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task5": {
+            "mean": 0.015555555555555557,
+            "n": 3,
+            "seed_values": [
+              0.02,
+              0.02,
+              0.006666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task1": {
+            "mean": 0.8933333333333332,
+            "n": 3,
+            "seed_values": [
+              0.7999999999999999,
+              0.9666666666666667,
+              0.9133333333333332
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task2": {
+            "mean": 0.7755555555555556,
+            "n": 3,
+            "seed_values": [
+              0.8066666666666666,
+              0.8066666666666666,
+              0.7133333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task3": {
+            "mean": 0.6133333333333333,
+            "n": 2,
+            "seed_values": [
+              0.5933333333333333,
+              0.6333333333333333
+            ],
+            "seeds_present": [
+              0,
+              2
+            ]
+          },
+          "cube-quadruple-task4": {
+            "mean": 0.33666666666666667,
+            "n": 2,
+            "seed_values": [
+              0.37333333333333335,
+              0.3
+            ],
+            "seeds_present": [
+              0,
+              2
+            ]
+          },
+          "cube-quadruple-task5": {
+            "mean": 0.0,
+            "n": 2,
+            "seed_values": [
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              2
+            ]
+          },
+          "antmaze-large-task1": {
+            "mean": 0.8777777777777778,
+            "n": 3,
+            "seed_values": [
+              0.9133333333333332,
+              0.8466666666666667,
+              0.8733333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task2": {
+            "mean": 0.6644444444444444,
+            "n": 3,
+            "seed_values": [
+              0.6866666666666666,
+              0.7066666666666667,
+              0.6
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task3": {
+            "mean": 0.9733333333333333,
+            "n": 3,
+            "seed_values": [
+              0.9666666666666667,
+              0.9866666666666667,
+              0.9666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task4": {
+            "mean": 0.8733333333333332,
+            "n": 3,
+            "seed_values": [
+              0.84,
+              0.8999999999999999,
+              0.88
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task5": {
+            "mean": 0.8488888888888888,
+            "n": 3,
+            "seed_values": [
+              0.8733333333333332,
+              0.7799999999999999,
+              0.8933333333333332
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task1": {
+            "mean": 0.1311111111111111,
+            "n": 3,
+            "seed_values": [
+              0.08,
+              0.12666666666666668,
+              0.18666666666666668
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task2": {
+            "mean": 0.5977777777777777,
+            "n": 3,
+            "seed_values": [
+              0.58,
+              0.9199999999999999,
+              0.2933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task3": {
+            "mean": 0.5377777777777778,
+            "n": 3,
+            "seed_values": [
+              0.5866666666666667,
+              0.5333333333333333,
+              0.49333333333333335
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task4": {
+            "mean": 0.011111111111111112,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.013333333333333334,
+              0.02
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task5": {
+            "mean": 0.62,
+            "n": 3,
+            "seed_values": [
+              0.7066666666666667,
+              0.7466666666666666,
+              0.4066666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task1": {
+            "mean": 0.9844444444444443,
+            "n": 3,
+            "seed_values": [
+              0.9733333333333333,
+              0.9866666666666667,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task2": {
+            "mean": 0.991111111111111,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              0.9866666666666667,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task3": {
+            "mean": 0.991111111111111,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              0.9866666666666667,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task4": {
+            "mean": 0.9733333333333333,
+            "n": 3,
+            "seed_values": [
+              0.9733333333333333,
+              0.9866666666666667,
+              0.96
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task5": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task1": {
+            "mean": 0.8933333333333332,
+            "n": 3,
+            "seed_values": [
+              0.9133333333333332,
+              0.86,
+              0.9066666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task2": {
+            "mean": 0.17777777777777778,
+            "n": 3,
+            "seed_values": [
+              0.2333333333333333,
+              0.06,
+              0.24000000000000002
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task3": {
+            "mean": 0.40444444444444455,
+            "n": 3,
+            "seed_values": [
+              0.20000000000000004,
+              0.5466666666666667,
+              0.46666666666666673
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task4": {
+            "mean": 0.5822222222222222,
+            "n": 3,
+            "seed_values": [
+              0.38000000000000006,
+              0.6866666666666666,
+              0.68
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task5": {
+            "mean": 0.7222222222222222,
+            "n": 3,
+            "seed_values": [
+              0.7666666666666666,
+              0.7066666666666667,
+              0.6933333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          }
+        }
+      },
+      "v7": {
+        "grand_mean": 0.5809333333333333,
+        "n_tasks": 50,
+        "incomplete_tasks": [],
+        "domain_means": {
+          "antmaze-giant": 0.33466666666666667,
+          "antmaze-large": 0.7444444444444444,
+          "cube-double": 0.14133333333333337,
+          "cube-quadruple": 0.5373333333333333,
+          "cube-triple": 0.027111111111111114,
+          "humanoidmaze-large": 0.5328888888888887,
+          "humanoidmaze-medium": 0.9924444444444444,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.5915555555555556,
+          "scene": 0.9075555555555554
+        },
+        "per_task": {
+          "scene-task1": {
+            "mean": 0.9933333333333333,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              0.9866666666666667,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task2": {
+            "mean": 0.6844444444444444,
+            "n": 3,
+            "seed_values": [
+              0.7599999999999999,
+              0.66,
+              0.6333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task3": {
+            "mean": 0.9577777777777777,
+            "n": 3,
+            "seed_values": [
+              0.9533333333333333,
+              0.94,
+              0.98
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task4": {
+            "mean": 0.9933333333333333,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              0.9933333333333333,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task5": {
+            "mean": 0.9088888888888889,
+            "n": 3,
+            "seed_values": [
+              0.8866666666666667,
+              0.94,
+              0.9
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task1": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task2": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task3": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task4": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task5": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task1": {
+            "mean": 0.8955555555555557,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9866666666666667,
+              0.7000000000000001
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task2": {
+            "mean": 0.43555555555555553,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.35333333333333333,
+              0.9533333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task3": {
+            "mean": 0.6533333333333333,
+            "n": 3,
+            "seed_values": [
+              0.25333333333333335,
+              1.0,
+              0.7066666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task4": {
+            "mean": 0.5222222222222223,
+            "n": 3,
+            "seed_values": [
+              0.2333333333333333,
+              0.4066666666666667,
+              0.9266666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task5": {
+            "mean": 0.4511111111111111,
+            "n": 3,
+            "seed_values": [
+              0.11333333333333333,
+              1.0,
+              0.24
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task1": {
+            "mean": 0.34,
+            "n": 3,
+            "seed_values": [
+              0.32,
+              0.32666666666666666,
+              0.37333333333333335
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task2": {
+            "mean": 0.10666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.06,
+              0.11333333333333333,
+              0.14666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task3": {
+            "mean": 0.10888888888888891,
+            "n": 3,
+            "seed_values": [
+              0.12666666666666668,
+              0.05333333333333334,
+              0.1466666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task4": {
+            "mean": 0.024444444444444446,
+            "n": 3,
+            "seed_values": [
+              0.04666666666666667,
+              0.013333333333333334,
+              0.013333333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task5": {
+            "mean": 0.12666666666666668,
+            "n": 3,
+            "seed_values": [
+              0.16,
+              0.12,
+              0.09999999999999999
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task1": {
+            "mean": 0.10666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.09333333333333334,
+              0.14,
+              0.08666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task2": {
+            "mean": 0.006666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.006666666666666667,
+              0.013333333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task3": {
+            "mean": 0.0022222222222222222,
+            "n": 3,
+            "seed_values": [
+              0.006666666666666667,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task4": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task5": {
+            "mean": 0.02,
+            "n": 3,
+            "seed_values": [
+              0.02,
+              0.02,
+              0.02
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task1": {
+            "mean": 0.8888888888888888,
+            "n": 3,
+            "seed_values": [
+              0.9866666666666667,
+              0.7999999999999999,
+              0.8799999999999999
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task2": {
+            "mean": 0.7355555555555555,
+            "n": 3,
+            "seed_values": [
+              0.7133333333333334,
+              0.6999999999999998,
+              0.7933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task3": {
+            "mean": 0.7422222222222223,
+            "n": 3,
+            "seed_values": [
+              0.7133333333333334,
+              0.7533333333333333,
+              0.7600000000000001
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task4": {
+            "mean": 0.31777777777777777,
+            "n": 3,
+            "seed_values": [
+              0.3466666666666667,
+              0.22666666666666668,
+              0.38000000000000006
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task5": {
+            "mean": 0.0022222222222222222,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.006666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task1": {
+            "mean": 0.7711111111111112,
+            "n": 3,
+            "seed_values": [
+              0.7933333333333333,
+              0.7333333333333334,
+              0.7866666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task2": {
+            "mean": 0.3222222222222222,
+            "n": 3,
+            "seed_values": [
+              0.29333333333333333,
+              0.38666666666666666,
+              0.2866666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task3": {
+            "mean": 0.9733333333333333,
+            "n": 3,
+            "seed_values": [
+              0.96,
+              0.9866666666666667,
+              0.9733333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task4": {
+            "mean": 0.8377777777777777,
+            "n": 3,
+            "seed_values": [
+              0.86,
+              0.8533333333333334,
+              0.7999999999999999
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task5": {
+            "mean": 0.8177777777777778,
+            "n": 3,
+            "seed_values": [
+              0.8000000000000002,
+              0.8333333333333334,
+              0.82
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task1": {
+            "mean": 0.09777777777777778,
+            "n": 3,
+            "seed_values": [
+              0.1466666666666667,
+              0.0,
+              0.14666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task2": {
+            "mean": 0.4577777777777778,
+            "n": 3,
+            "seed_values": [
+              0.27999999999999997,
+              0.8733333333333334,
+              0.22
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task3": {
+            "mean": 0.508888888888889,
+            "n": 3,
+            "seed_values": [
+              0.44,
+              0.5466666666666667,
+              0.54
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task4": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task5": {
+            "mean": 0.6088888888888889,
+            "n": 3,
+            "seed_values": [
+              0.6533333333333333,
+              0.5,
+              0.6733333333333332
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task1": {
+            "mean": 0.991111111111111,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9933333333333333,
+              0.98
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task2": {
+            "mean": 0.9955555555555554,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9933333333333333,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task3": {
+            "mean": 0.9955555555555554,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9933333333333333,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task4": {
+            "mean": 0.9844444444444443,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.98,
+              0.9733333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task5": {
+            "mean": 0.9955555555555556,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9866666666666667,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task1": {
+            "mean": 0.8533333333333334,
+            "n": 3,
+            "seed_values": [
+              0.86,
+              0.8733333333333334,
+              0.8266666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task2": {
+            "mean": 0.07777777777777778,
+            "n": 3,
+            "seed_values": [
+              0.06666666666666667,
+              0.05333333333333334,
+              0.11333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task3": {
+            "mean": 0.5177777777777778,
+            "n": 3,
+            "seed_values": [
+              0.35333333333333333,
+              0.5133333333333333,
+              0.6866666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task4": {
+            "mean": 0.5666666666666665,
+            "n": 3,
+            "seed_values": [
+              0.49333333333333335,
+              0.6733333333333332,
+              0.5333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task5": {
+            "mean": 0.6488888888888887,
+            "n": 3,
+            "seed_values": [
+              0.6666666666666666,
+              0.6133333333333333,
+              0.6666666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          }
+        }
+      },
+      "v8": {
+        "grand_mean": 0.5902222222222222,
+        "n_tasks": 50,
+        "incomplete_tasks": [],
+        "domain_means": {
+          "antmaze-giant": 0.32844444444444443,
+          "antmaze-large": 0.8257777777777777,
+          "cube-double": 0.17022222222222222,
+          "cube-quadruple": 0.5133333333333334,
+          "cube-triple": 0.03599999999999999,
+          "humanoidmaze-large": 0.4875555555555556,
+          "humanoidmaze-medium": 0.9893333333333333,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.6097777777777778,
+          "scene": 0.9417777777777777
+        },
+        "per_task": {
+          "scene-task1": {
+            "mean": 0.9977777777777778,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9933333333333333,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task2": {
+            "mean": 0.8622222222222223,
+            "n": 3,
+            "seed_values": [
+              0.8333333333333334,
+              0.8866666666666667,
+              0.8666666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task3": {
+            "mean": 0.9422222222222222,
+            "n": 3,
+            "seed_values": [
+              0.9133333333333334,
+              0.9533333333333333,
+              0.96
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task4": {
+            "mean": 0.9955555555555554,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9933333333333333,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task5": {
+            "mean": 0.9111111111111111,
+            "n": 3,
+            "seed_values": [
+              0.8933333333333334,
+              0.8733333333333334,
+              0.9666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task1": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task2": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task3": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task4": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task5": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task1": {
+            "mean": 0.6777777777777777,
+            "n": 3,
+            "seed_values": [
+              0.5333333333333333,
+              1.0,
+              0.5
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task2": {
+            "mean": 0.7044444444444444,
+            "n": 3,
+            "seed_values": [
+              0.98,
+              0.13333333333333333,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task3": {
+            "mean": 0.3111111111111111,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.5533333333333333,
+              0.38000000000000006
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task4": {
+            "mean": 0.94,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              0.8266666666666667,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task5": {
+            "mean": 0.4155555555555555,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.0,
+              0.24666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task1": {
+            "mean": 0.3933333333333333,
+            "n": 3,
+            "seed_values": [
+              0.36000000000000004,
+              0.4266666666666666,
+              0.39333333333333337
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task2": {
+            "mean": 0.11555555555555556,
+            "n": 3,
+            "seed_values": [
+              0.11333333333333334,
+              0.10666666666666669,
+              0.12666666666666668
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task3": {
+            "mean": 0.0888888888888889,
+            "n": 3,
+            "seed_values": [
+              0.08666666666666667,
+              0.08,
+              0.10000000000000002
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task4": {
+            "mean": 0.035555555555555556,
+            "n": 3,
+            "seed_values": [
+              0.05333333333333334,
+              0.02666666666666667,
+              0.02666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task5": {
+            "mean": 0.21777777777777776,
+            "n": 3,
+            "seed_values": [
+              0.2333333333333333,
+              0.20666666666666667,
+              0.21333333333333335
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task1": {
+            "mean": 0.14888888888888888,
+            "n": 3,
+            "seed_values": [
+              0.16,
+              0.12,
+              0.16666666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task2": {
+            "mean": 0.006666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.02,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task3": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task4": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task5": {
+            "mean": 0.024444444444444446,
+            "n": 3,
+            "seed_values": [
+              0.03333333333333333,
+              0.006666666666666667,
+              0.03333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task1": {
+            "mean": 0.9044444444444445,
+            "n": 3,
+            "seed_values": [
+              0.94,
+              0.8866666666666667,
+              0.8866666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task2": {
+            "mean": 0.8866666666666666,
+            "n": 3,
+            "seed_values": [
+              0.94,
+              0.7666666666666666,
+              0.9533333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task3": {
+            "mean": 0.6044444444444445,
+            "n": 3,
+            "seed_values": [
+              0.37999999999999995,
+              0.7999999999999999,
+              0.6333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task4": {
+            "mean": 0.17111111111111113,
+            "n": 3,
+            "seed_values": [
+              0.16,
+              0.15333333333333332,
+              0.20000000000000004
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task5": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task1": {
+            "mean": 0.8711111111111113,
+            "n": 3,
+            "seed_values": [
+              0.8533333333333334,
+              0.8666666666666667,
+              0.8933333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task2": {
+            "mean": 0.5666666666666668,
+            "n": 3,
+            "seed_values": [
+              0.6133333333333334,
+              0.5266666666666667,
+              0.5599999999999999
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task3": {
+            "mean": 0.9666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.9666666666666667,
+              0.9533333333333333,
+              0.98
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task4": {
+            "mean": 0.8488888888888889,
+            "n": 3,
+            "seed_values": [
+              0.9066666666666667,
+              0.7933333333333333,
+              0.8466666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task5": {
+            "mean": 0.8755555555555555,
+            "n": 3,
+            "seed_values": [
+              0.88,
+              0.8866666666666667,
+              0.86
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task1": {
+            "mean": 0.1288888888888889,
+            "n": 3,
+            "seed_values": [
+              0.26666666666666666,
+              0.0,
+              0.12
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task2": {
+            "mean": 0.44,
+            "n": 3,
+            "seed_values": [
+              0.8133333333333335,
+              0.35333333333333333,
+              0.15333333333333335
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task3": {
+            "mean": 0.4155555555555555,
+            "n": 3,
+            "seed_values": [
+              0.4666666666666666,
+              0.42,
+              0.36000000000000004
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task4": {
+            "mean": 0.03777777777777778,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.11333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task5": {
+            "mean": 0.62,
+            "n": 3,
+            "seed_values": [
+              0.7399999999999999,
+              0.66,
+              0.45999999999999996
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task1": {
+            "mean": 0.9866666666666667,
+            "n": 3,
+            "seed_values": [
+              0.9733333333333333,
+              0.9933333333333333,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task2": {
+            "mean": 0.9933333333333333,
+            "n": 3,
+            "seed_values": [
+              0.9866666666666667,
+              1.0,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task3": {
+            "mean": 0.9888888888888889,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9866666666666667,
+              0.98
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task4": {
+            "mean": 0.98,
+            "n": 3,
+            "seed_values": [
+              0.9533333333333333,
+              0.9933333333333333,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task5": {
+            "mean": 0.9977777777777778,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task1": {
+            "mean": 0.8577777777777778,
+            "n": 3,
+            "seed_values": [
+              0.7866666666666667,
+              0.86,
+              0.9266666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task2": {
+            "mean": 0.08444444444444445,
+            "n": 3,
+            "seed_values": [
+              0.10000000000000002,
+              0.08666666666666667,
+              0.06666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task3": {
+            "mean": 0.34888888888888886,
+            "n": 3,
+            "seed_values": [
+              0.26,
+              0.5,
+              0.2866666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task4": {
+            "mean": 0.4511111111111112,
+            "n": 3,
+            "seed_values": [
+              0.5533333333333333,
+              0.26666666666666666,
+              0.5333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task5": {
+            "mean": 0.6955555555555556,
+            "n": 3,
+            "seed_values": [
+              0.68,
+              0.7333333333333334,
+              0.6733333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          }
+        }
+      },
+      "v9": {
+        "grand_mean": 0.5916,
+        "n_tasks": 50,
+        "incomplete_tasks": [],
+        "domain_means": {
+          "antmaze-giant": 0.3204444444444444,
+          "antmaze-large": 0.8257777777777777,
+          "cube-double": 0.19377777777777777,
+          "cube-quadruple": 0.5813333333333334,
+          "cube-triple": 0.02488888888888889,
+          "humanoidmaze-large": 0.5626666666666666,
+          "humanoidmaze-medium": 0.9902222222222223,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.46977777777777774,
+          "scene": 0.947111111111111
+        },
+        "per_task": {
+          "scene-task1": {
+            "mean": 0.9933333333333333,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9866666666666667,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task2": {
+            "mean": 0.8799999999999999,
+            "n": 3,
+            "seed_values": [
+              0.8866666666666667,
+              0.82,
+              0.9333333333333332
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task3": {
+            "mean": 0.9311111111111111,
+            "n": 3,
+            "seed_values": [
+              0.94,
+              0.9266666666666666,
+              0.9266666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task4": {
+            "mean": 0.9933333333333333,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              0.9866666666666667,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "scene-task5": {
+            "mean": 0.9377777777777777,
+            "n": 3,
+            "seed_values": [
+              0.9733333333333333,
+              0.9066666666666666,
+              0.9333333333333332
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task1": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task2": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task3": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task4": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-3x3-task5": {
+            "mean": 1.0,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task1": {
+            "mean": 0.7844444444444445,
+            "n": 3,
+            "seed_values": [
+              0.5333333333333333,
+              0.82,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task2": {
+            "mean": 0.19999999999999998,
+            "n": 3,
+            "seed_values": [
+              0.06,
+              0.35333333333333333,
+              0.18666666666666668
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task3": {
+            "mean": 0.46444444444444444,
+            "n": 3,
+            "seed_values": [
+              0.8133333333333334,
+              0.3333333333333333,
+              0.24666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task4": {
+            "mean": 0.3066666666666667,
+            "n": 3,
+            "seed_values": [
+              0.26,
+              0.6533333333333333,
+              0.006666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "puzzle-4x4-task5": {
+            "mean": 0.5933333333333333,
+            "n": 3,
+            "seed_values": [
+              0.26666666666666666,
+              0.8466666666666667,
+              0.6666666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task1": {
+            "mean": 0.4666666666666666,
+            "n": 3,
+            "seed_values": [
+              0.4466666666666666,
+              0.5066666666666667,
+              0.4466666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task2": {
+            "mean": 0.13333333333333333,
+            "n": 3,
+            "seed_values": [
+              0.14,
+              0.12666666666666668,
+              0.13333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task3": {
+            "mean": 0.10444444444444445,
+            "n": 3,
+            "seed_values": [
+              0.11333333333333333,
+              0.06666666666666667,
+              0.13333333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task4": {
+            "mean": 0.02888888888888889,
+            "n": 3,
+            "seed_values": [
+              0.02,
+              0.02,
+              0.04666666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-double-task5": {
+            "mean": 0.2355555555555556,
+            "n": 3,
+            "seed_values": [
+              0.22666666666666668,
+              0.22666666666666666,
+              0.25333333333333335
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task1": {
+            "mean": 0.11111111111111112,
+            "n": 3,
+            "seed_values": [
+              0.04666666666666667,
+              0.08666666666666667,
+              0.20000000000000004
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task2": {
+            "mean": 0.006666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.013333333333333334,
+              0.006666666666666667,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task3": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task4": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-triple-task5": {
+            "mean": 0.006666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.006666666666666667,
+              0.006666666666666667,
+              0.006666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task1": {
+            "mean": 0.8844444444444445,
+            "n": 3,
+            "seed_values": [
+              0.8466666666666667,
+              0.8866666666666667,
+              0.92
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task2": {
+            "mean": 0.86,
+            "n": 3,
+            "seed_values": [
+              0.8533333333333334,
+              0.8066666666666666,
+              0.9199999999999999
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task3": {
+            "mean": 0.7622222222222222,
+            "n": 3,
+            "seed_values": [
+              0.5,
+              0.8866666666666666,
+              0.8999999999999999
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task4": {
+            "mean": 0.39999999999999997,
+            "n": 3,
+            "seed_values": [
+              0.6266666666666667,
+              0.2866666666666667,
+              0.2866666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "cube-quadruple-task5": {
+            "mean": 0.0,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task1": {
+            "mean": 0.8666666666666667,
+            "n": 3,
+            "seed_values": [
+              0.92,
+              0.8733333333333334,
+              0.8066666666666666
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task2": {
+            "mean": 0.5955555555555555,
+            "n": 3,
+            "seed_values": [
+              0.6266666666666666,
+              0.5866666666666667,
+              0.5733333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task3": {
+            "mean": 0.9688888888888889,
+            "n": 3,
+            "seed_values": [
+              0.98,
+              0.9466666666666667,
+              0.98
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task4": {
+            "mean": 0.8555555555555555,
+            "n": 3,
+            "seed_values": [
+              0.8466666666666667,
+              0.84,
+              0.88
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-large-task5": {
+            "mean": 0.8422222222222223,
+            "n": 3,
+            "seed_values": [
+              0.8466666666666667,
+              0.8533333333333334,
+              0.8266666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task1": {
+            "mean": 0.13999999999999999,
+            "n": 3,
+            "seed_values": [
+              0.32666666666666666,
+              0.08666666666666667,
+              0.006666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task2": {
+            "mean": 0.4288888888888888,
+            "n": 3,
+            "seed_values": [
+              0.7399999999999999,
+              0.3666666666666667,
+              0.18000000000000002
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task3": {
+            "mean": 0.5244444444444444,
+            "n": 3,
+            "seed_values": [
+              0.5333333333333333,
+              0.5333333333333333,
+              0.5066666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task4": {
+            "mean": 0.02888888888888889,
+            "n": 3,
+            "seed_values": [
+              0.0,
+              0.07333333333333333,
+              0.013333333333333334
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "antmaze-giant-task5": {
+            "mean": 0.48000000000000004,
+            "n": 3,
+            "seed_values": [
+              0.43333333333333335,
+              0.6066666666666668,
+              0.4000000000000001
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task1": {
+            "mean": 0.991111111111111,
+            "n": 3,
+            "seed_values": [
+              0.9933333333333333,
+              0.9866666666666667,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task2": {
+            "mean": 0.9977777777777778,
+            "n": 3,
+            "seed_values": [
+              1.0,
+              0.9933333333333333,
+              1.0
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task3": {
+            "mean": 0.991111111111111,
+            "n": 3,
+            "seed_values": [
+              0.98,
+              1.0,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task4": {
+            "mean": 0.9866666666666667,
+            "n": 3,
+            "seed_values": [
+              0.9733333333333333,
+              0.9933333333333333,
+              0.9933333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-medium-task5": {
+            "mean": 0.9844444444444443,
+            "n": 3,
+            "seed_values": [
+              0.98,
+              1.0,
+              0.9733333333333333
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task1": {
+            "mean": 0.8777777777777778,
+            "n": 3,
+            "seed_values": [
+              0.8666666666666666,
+              0.8866666666666667,
+              0.88
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task2": {
+            "mean": 0.09333333333333334,
+            "n": 3,
+            "seed_values": [
+              0.11333333333333333,
+              0.04,
+              0.12666666666666668
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task3": {
+            "mean": 0.39999999999999997,
+            "n": 3,
+            "seed_values": [
+              0.4666666666666666,
+              0.3666666666666667,
+              0.3666666666666667
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task4": {
+            "mean": 0.7400000000000001,
+            "n": 3,
+            "seed_values": [
+              0.7866666666666667,
+              0.7733333333333333,
+              0.66
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          },
+          "humanoidmaze-large-task5": {
+            "mean": 0.7022222222222222,
+            "n": 3,
+            "seed_values": [
+              0.7533333333333333,
+              0.6533333333333333,
+              0.6999999999999998
+            ],
+            "seeds_present": [
+              0,
+              1,
+              2
+            ]
+          }
+        }
+      }
+    },
+    "csv_vs_raw": {
+      "methods": {
+        "baseline": {
+          "csv_grand_mean": 0.5532,
+          "raw_grand_mean": 0.5532,
+          "abs_delta": 0.0,
+          "match": true,
+          "n_task_mismatches": 0,
+          "task_mismatches_head": []
+        },
+        "v6": {
+          "csv_grand_mean": 0.5874888888888887,
+          "raw_grand_mean": 0.5874888888888887,
+          "abs_delta": 0.0,
+          "match": true,
+          "n_task_mismatches": 0,
+          "task_mismatches_head": []
+        },
+        "v7": {
+          "csv_grand_mean": 0.5809333333333333,
+          "raw_grand_mean": 0.5809333333333333,
+          "abs_delta": 0.0,
+          "match": true,
+          "n_task_mismatches": 0,
+          "task_mismatches_head": []
+        },
+        "v8": {
+          "csv_grand_mean": 0.5902222222222222,
+          "raw_grand_mean": 0.5902222222222222,
+          "abs_delta": 0.0,
+          "match": true,
+          "n_task_mismatches": 0,
+          "task_mismatches_head": []
+        },
+        "v9": {
+          "csv_grand_mean": 0.5916,
+          "raw_grand_mean": 0.5916,
+          "abs_delta": 0.0,
+          "match": true,
+          "n_task_mismatches": 0,
+          "task_mismatches_head": []
+        }
+      },
+      "all_match": true
+    },
+    "statistics": {
+      "baseline": {
+        "n_shared_tasks": 50,
+        "method_bootstrap_ci": {
+          "mean": 0.5531999999999999,
+          "ci_low": 0.44994888888888895,
+          "ci_high": 0.655911111111111,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "baseline_bootstrap_ci": {
+          "mean": 0.5531999999999999,
+          "ci_low": 0.45079555555555556,
+          "ci_high": 0.656981111111111,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_delta_bootstrap_ci": {
+          "mean_delta": 0.0,
+          "ci_low": 0.0,
+          "ci_high": 0.0,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_tests": {
+          "n_paired": 50,
+          "mean_delta": 0.0,
+          "std_delta": 0.0,
+          "paired_t": {
+            "statistic": NaN,
+            "pvalue": NaN
+          },
+          "wilcoxon": {
+            "statistic": 0.0,
+            "pvalue": 1.0,
+            "note": "all paired deltas are zero"
+          },
+          "win_loss_tie": {
+            "win": 0,
+            "loss": 0,
+            "tie": 50
+          }
+        },
+        "domain_means": {
+          "antmaze-giant": 0.36000000000000004,
+          "antmaze-large": 0.7262222222222221,
+          "cube-double": 0.07777777777777777,
+          "cube-quadruple": 0.52,
+          "cube-triple": 0.03422222222222221,
+          "humanoidmaze-large": 0.4533333333333333,
+          "humanoidmaze-medium": 0.9928888888888888,
+          "puzzle-3x3": 0.9995555555555555,
+          "puzzle-4x4": 0.6426666666666667,
+          "scene": 0.7253333333333334
+        },
+        "incomplete_tasks": [],
+        "grand_mean": 0.5532
+      },
+      "v6": {
+        "n_shared_tasks": 50,
+        "method_bootstrap_ci": {
+          "mean": 0.5874888888888887,
+          "ci_low": 0.484086111111111,
+          "ci_high": 0.6907133333333333,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "baseline_bootstrap_ci": {
+          "mean": 0.5531999999999999,
+          "ci_low": 0.44813,
+          "ci_high": 0.6550744444444443,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_delta_bootstrap_ci": {
+          "mean_delta": 0.03428888888888887,
+          "ci_low": -0.015267222222222236,
+          "ci_high": 0.08053388888888885,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_tests": {
+          "n_paired": 50,
+          "mean_delta": 0.03428888888888887,
+          "std_delta": 0.1772819062274438,
+          "paired_t": {
+            "statistic": 1.3676469510418676,
+            "pvalue": 0.17766300327111464
+          },
+          "wilcoxon": {
+            "statistic": 267.0,
+            "pvalue": 0.021052664243024103
+          },
+          "win_loss_tie": {
+            "win": 29,
+            "loss": 13,
+            "tie": 8
+          }
+        },
+        "domain_means": {
+          "antmaze-giant": 0.37955555555555553,
+          "antmaze-large": 0.8475555555555555,
+          "cube-double": 0.18355555555555556,
+          "cube-quadruple": 0.5237777777777778,
+          "cube-triple": 0.03333333333333332,
+          "humanoidmaze-large": 0.556,
+          "humanoidmaze-medium": 0.9879999999999999,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.42088888888888887,
+          "scene": 0.9422222222222223
+        },
+        "incomplete_tasks": [
+          {
+            "task_id": "cube-quadruple-task3",
+            "n": 2,
+            "seeds_present": [
+              0,
+              2
+            ]
+          },
+          {
+            "task_id": "cube-quadruple-task4",
+            "n": 2,
+            "seeds_present": [
+              0,
+              2
+            ]
+          },
+          {
+            "task_id": "cube-quadruple-task5",
+            "n": 2,
+            "seeds_present": [
+              0,
+              2
+            ]
+          }
+        ],
+        "grand_mean": 0.5874888888888887
+      },
+      "v7": {
+        "n_shared_tasks": 50,
+        "method_bootstrap_ci": {
+          "mean": 0.5809333333333333,
+          "ci_low": 0.47519666666666666,
+          "ci_high": 0.6840444444444445,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "baseline_bootstrap_ci": {
+          "mean": 0.5531999999999999,
+          "ci_low": 0.44831,
+          "ci_high": 0.6529777777777778,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_delta_bootstrap_ci": {
+          "mean_delta": 0.02773333333333332,
+          "ci_low": -0.009022222222222242,
+          "ci_high": 0.06218111111111107,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_tests": {
+          "n_paired": 50,
+          "mean_delta": 0.02773333333333332,
+          "std_delta": 0.12849438412759745,
+          "paired_t": {
+            "statistic": 1.5261700500026032,
+            "pvalue": 0.13339699373258984
+          },
+          "wilcoxon": {
+            "statistic": 327.0,
+            "pvalue": 0.04991490545468203
+          },
+          "win_loss_tie": {
+            "win": 27,
+            "loss": 17,
+            "tie": 6
+          }
+        },
+        "domain_means": {
+          "antmaze-giant": 0.33466666666666667,
+          "antmaze-large": 0.7444444444444444,
+          "cube-double": 0.14133333333333337,
+          "cube-quadruple": 0.5373333333333333,
+          "cube-triple": 0.027111111111111114,
+          "humanoidmaze-large": 0.5328888888888887,
+          "humanoidmaze-medium": 0.9924444444444444,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.5915555555555556,
+          "scene": 0.9075555555555554
+        },
+        "incomplete_tasks": [],
+        "grand_mean": 0.5809333333333333
+      },
+      "v8": {
+        "n_shared_tasks": 50,
+        "method_bootstrap_ci": {
+          "mean": 0.5902222222222222,
+          "ci_low": 0.48359888888888886,
+          "ci_high": 0.6934666666666667,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "baseline_bootstrap_ci": {
+          "mean": 0.5531999999999999,
+          "ci_low": 0.4484888888888889,
+          "ci_high": 0.6527111111111111,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_delta_bootstrap_ci": {
+          "mean_delta": 0.03702222222222223,
+          "ci_low": -0.010979999999999995,
+          "ci_high": 0.08289,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_tests": {
+          "n_paired": 50,
+          "mean_delta": 0.03702222222222223,
+          "std_delta": 0.1696376824607599,
+          "paired_t": {
+            "statistic": 1.5432104475952273,
+            "pvalue": 0.12921400268687552
+          },
+          "wilcoxon": {
+            "statistic": 278.5,
+            "pvalue": 0.018844156051303473
+          },
+          "win_loss_tie": {
+            "win": 29,
+            "loss": 14,
+            "tie": 7
+          }
+        },
+        "domain_means": {
+          "antmaze-giant": 0.32844444444444443,
+          "antmaze-large": 0.8257777777777777,
+          "cube-double": 0.17022222222222222,
+          "cube-quadruple": 0.5133333333333334,
+          "cube-triple": 0.03599999999999999,
+          "humanoidmaze-large": 0.4875555555555556,
+          "humanoidmaze-medium": 0.9893333333333333,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.6097777777777778,
+          "scene": 0.9417777777777777
+        },
+        "incomplete_tasks": [],
+        "grand_mean": 0.5902222222222222
+      },
+      "v9": {
+        "n_shared_tasks": 50,
+        "method_bootstrap_ci": {
+          "mean": 0.5916,
+          "ci_low": 0.48728777777777776,
+          "ci_high": 0.6916466666666667,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "baseline_bootstrap_ci": {
+          "mean": 0.5531999999999999,
+          "ci_low": 0.4491099999999999,
+          "ci_high": 0.6544022222222222,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_delta_bootstrap_ci": {
+          "mean_delta": 0.03839999999999999,
+          "ci_low": -0.007335555555555571,
+          "ci_high": 0.08288888888888886,
+          "n": 50,
+          "n_boot": 10000,
+          "alpha": 0.05
+        },
+        "paired_tests": {
+          "n_paired": 50,
+          "mean_delta": 0.03839999999999999,
+          "std_delta": 0.16559506749731606,
+          "paired_t": {
+            "statistic": 1.639716738422991,
+            "pvalue": 0.10746937636795055
+          },
+          "wilcoxon": {
+            "statistic": 311.5,
+            "pvalue": 0.032232385612084226
+          },
+          "win_loss_tie": {
+            "win": 29,
+            "loss": 15,
+            "tie": 6
+          }
+        },
+        "domain_means": {
+          "antmaze-giant": 0.3204444444444444,
+          "antmaze-large": 0.8257777777777777,
+          "cube-double": 0.19377777777777777,
+          "cube-quadruple": 0.5813333333333334,
+          "cube-triple": 0.02488888888888889,
+          "humanoidmaze-large": 0.5626666666666666,
+          "humanoidmaze-medium": 0.9902222222222223,
+          "puzzle-3x3": 1.0,
+          "puzzle-4x4": 0.46977777777777774,
+          "scene": 0.947111111111111
+        },
+        "incomplete_tasks": [],
+        "grand_mean": 0.5916
+      }
+    }
+  },
+  "ablations": {
+    "skipped": true
+  },
+  "ablation_switch_documentation": {
+    "full": {
+      "run_group": "humanoidmaze-large-dflrql9-2m",
+      "description": "Full ConsensusFlow/v9 defaults (reused from matched 2M runs)",
+      "flags": {
+        "guidance_coef": 0.5,
+        "distill_coef": 1.0,
+        "consensus_floor": 0.01,
+        "conflict_power": 2.0,
+        "residual_coef": 0.25,
+        "ensemble_ct": 10
+      }
+    },
+    "no_guidance": {
+      "run_group": "humanoidmaze-large-cf-ablation-noguidance-1m",
+      "description": "guidance_coef=0 (no guidance term at train/sample)",
+      "flags": {
+        "guidance_coef": 0.0,
+        "distill_coef": 1.0,
+        "consensus_floor": 0.01,
+        "conflict_power": 2.0,
+        "residual_coef": 0.25,
+        "ensemble_ct": 10
+      }
+    },
+    "no_conflict": {
+      "run_group": "humanoidmaze-large-cf-ablation-noconflict-1m",
+      "description": "conflict_power=0 \u2192 kill_frac=1-trust^0=0 for all trust (disables trust-weighted BC-conflict projection; residual damping remains)",
+      "flags": {
+        "guidance_coef": 0.5,
+        "distill_coef": 1.0,
+        "consensus_floor": 0.01,
+        "conflict_power": 0.0,
+        "residual_coef": 0.25,
+        "ensemble_ct": 10
+      }
+    },
+    "no_residual": {
+      "run_group": "humanoidmaze-large-cf-ablation-noresidual-1m",
+      "description": "residual_coef=0 (disables residual damping when BC aligns)",
+      "flags": {
+        "guidance_coef": 0.5,
+        "distill_coef": 1.0,
+        "consensus_floor": 0.01,
+        "conflict_power": 2.0,
+        "residual_coef": 0.0,
+        "ensemble_ct": 10
+      }
+    },
+    "no_floor": {
+      "run_group": "humanoidmaze-large-cf-ablation-nofloor-1m",
+      "description": "consensus_floor=0 disables the batch-relative scale-free floor (closest controlled switch). Distill target remains q_grad/(||q_grad||+1e-6) unit normalization; not a raw-gradient ablation.",
+      "flags": {
+        "guidance_coef": 0.5,
+        "distill_coef": 1.0,
+        "consensus_floor": 0.0,
+        "conflict_power": 2.0,
+        "residual_coef": 0.25,
+        "ensemble_ct": 10
+      }
+    },
+    "single_critic": {
+      "run_group": "humanoidmaze-large-cf-ablation-singlecritic-1m",
+      "description": "ensemble_ct=1 (single critic; consensus/trust signals collapse)",
+      "flags": {
+        "guidance_coef": 0.5,
+        "distill_coef": 1.0,
+        "consensus_floor": 0.01,
+        "conflict_power": 2.0,
+        "residual_coef": 0.25,
+        "ensemble_ct": 1
+      }
+    }
+  }
+}
