@@ -9,7 +9,8 @@ Phases (exact counters, resumable):
 
 ``eval.csv`` plot steps: offline ``0..offline_steps`` and
 ``offline_steps + online_env_step`` online. Warmup is absent from eval.csv;
-an immediate eval is written at ``offline_steps`` after warmup completes.
+an immediate post-warmup eval is written at ``offline_steps + 1`` (so it does
+not overwrite the offline-end row at ``offline_steps``).
 
 Does not modify generic ``main.py`` or agent mathematical losses.
 """
@@ -424,6 +425,9 @@ def main(_):
 
     train_logger = AppendCsvLogger(str(exp_dir / "train.csv"))
     warmup_logger = AppendCsvLogger(str(exp_dir / "warmup.csv"))
+    # Separate file: AppendCsvLogger freezes the header on first write, so
+    # online FastSAC keys would otherwise be dropped from train.csv.
+    online_logger = AppendCsvLogger(str(exp_dir / "online_train.csv"))
     eval_logger = AppendCsvLogger(str(exp_dir / "eval.csv"))
 
     utd = int(FLAGS.utd) if FLAGS.utd > 0 else int(config.get("utd", 4))
@@ -615,14 +619,16 @@ def main(_):
                     save_periodic=False,
                 )
         pbar.close()
-        # Immediate eval at plot step = offline_steps (warmup hidden).
+        # Immediate eval at offline_steps+1 (warmup hidden; avoid clobbering
+        # the offline-end row already logged at offline_steps).
+        post_warmup_step = int(FLAGS.offline_steps) + 1
         _run_eval(
             agent=agent,
             eval_env=eval_env,
             config=config,
             tb_logger=tb_logger,
             eval_logger=eval_logger,
-            step=FLAGS.offline_steps,
+            step=post_warmup_step,
         )
         phase = PHASE_ONLINE
         _persist(
@@ -637,7 +643,7 @@ def main(_):
             observation=None,
             numpy_rng=numpy_rng,
             journal=journal,
-            plot_epoch=FLAGS.offline_steps,
+            plot_epoch=post_warmup_step,
             save_periodic=True,
         )
 
@@ -732,7 +738,7 @@ def main(_):
             metrics.update(_info_to_metrics("replay", mix_info))
             metrics["phase/online"] = 1.0
             metrics["online_env_step"] = online_env_step
-            maybe_log(train_logger, metrics, int(pstep), online_env_step)
+            maybe_log(online_logger, metrics, int(pstep), online_env_step)
 
             if FLAGS.eval_interval > 0 and (
                 online_env_step % FLAGS.eval_interval == 0
@@ -815,6 +821,7 @@ def main(_):
 
     train_logger.close()
     warmup_logger.close()
+    online_logger.close()
     eval_logger.close()
     tb_logger.close()
     print(

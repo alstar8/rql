@@ -50,6 +50,64 @@ def _write_eval(run_dir: Path, rows: list[tuple[int, float, float]]) -> None:
             )
 
 
+def test_fastsac_duplicate_offline_end_rows_are_disambiguated(tmp_path: Path):
+    """Offline-end + post-warmup both at 1M must both survive (→ 1M and 1M+1)."""
+    from plot_dflrql_vs_baseline import parse_eval_csv
+
+    group = DEFAULT_AR_QDFL_FASTSAC_GROUP
+    run_dir = tmp_path / "rql" / group / "sd000_a"
+    run_dir.mkdir(parents=True)
+    with (run_dir / "eval.csv").open("w", newline="") as f:
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "step",
+                "evaluation/success",
+                "evaluation/episode.return",
+            ],
+        )
+        w.writeheader()
+        w.writerow(
+            {
+                "step": 1_000_000,
+                "evaluation/success": 0.68,
+                "evaluation/episode.return": -1700.0,
+            }
+        )
+        w.writerow(
+            {
+                "step": 1_000_000,
+                "evaluation/success": 0.50,
+                "evaluation/episode.return": -1800.0,
+            }
+        )
+        w.writerow(
+            {
+                "step": 1_100_000,
+                "evaluation/success": 0.55,
+                "evaluation/episode.return": -1750.0,
+            }
+        )
+
+    rows = parse_eval_csv(run_dir / "eval.csv")
+    assert [int(r["step"]) for r in rows] == [1_000_000, 1_000_001, 1_100_000]
+    assert rows[0]["success"] == 0.68
+    assert rows[1]["success"] == 0.50
+
+    agg = aggregate_single_group(
+        tmp_path,
+        "success",
+        plot_max_step=DEFAULT_ONLINE_PLOT_MAX_STEP,
+        run_group=group,
+    )
+    assert agg is not None
+    steps, mean, *_rest = agg
+    assert 1_000_000 in steps
+    assert 1_000_001 in steps
+    assert float(mean[list(steps).index(1_000_000)]) == pytest.approx(0.68)
+    assert float(mean[list(steps).index(1_000_001)]) == pytest.approx(0.50)
+
+
 def test_fastsac_series_defaults_and_warmup_policy():
     online = {s[0]: s[1] for s in build_online_series()}
     assert online["AR-QDFL + FastSAC"] == AR_QDFL_FASTSAC_PLACEHOLDER

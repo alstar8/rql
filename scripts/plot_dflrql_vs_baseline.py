@@ -118,7 +118,10 @@ AR_QDFL_FASTSAC_WARMUP_POLICY = {
     "warmup_updates": AR_QDFL_FASTSAC_WARMUP_UPDATES,
     "included_in_eval_csv": False,
     "plot_axis": "absolute_0_to_2m",
+    # Post-warmup eval is logged at offline_steps+1 (or remapped there when
+    # older runs wrote a duplicate row at offline_steps).
     "immediate_eval_at_offline_end": True,
+    "post_warmup_eval_step_offset": 1,
     "source": "scripts/run_ar_qdfl_fast_sac.py",
 }
 
@@ -281,6 +284,29 @@ V7_SPLIT_STEP = 1_000_000
 V7_2M_SEEDS = (0, 1, 2)
 
 
+def disambiguate_duplicate_eval_steps(
+    rows: list[dict[str, float]],
+) -> list[dict[str, float]]:
+    """Keep chronological duplicate steps by bumping later copies to step+k.
+
+    AR-QDFL FastSAC historically wrote both the offline-end eval and the
+    post-warmup eval at ``offline_steps``. Without remapping, last-wins merge
+    drops the true offline endpoint. Bumping the 2nd occurrence of step S to
+    S+1 matches the two-phase online-start convention (e.g. 1_000_001).
+    """
+    seen: dict[int, int] = {}
+    out: list[dict[str, float]] = []
+    for row in rows:
+        step = int(row["step"])
+        n = seen.get(step, 0)
+        seen[step] = n + 1
+        if n == 0:
+            out.append(row)
+        else:
+            out.append({**row, "step": step + n})
+    return out
+
+
 def parse_eval_csv(path: Path) -> list[dict[str, float]]:
     rows: list[dict[str, float]] = []
     with path.open() as f:
@@ -298,7 +324,7 @@ def parse_eval_csv(path: Path) -> list[dict[str, float]]:
                 )
             except (KeyError, TypeError, ValueError):
                 continue
-    return rows
+    return disambiguate_duplicate_eval_steps(rows)
 
 
 def seed_from_run_dir(run_dir: Path) -> int | None:
