@@ -852,6 +852,7 @@ def collect_multiseed_metrics(
     include_v8: bool = False,
     v9_log_root: Path | None = None,
     include_v9: bool = False,
+    include_nocrf: bool = False,
     qdflrql9_log_root: Path | None = None,
     include_qdflrql9: bool = False,
     common_max_step: bool = False,
@@ -860,7 +861,7 @@ def collect_multiseed_metrics(
     """Per-task mean/std over seeds + per-seed 50-task aggregates for headline stats.
 
     Paper protocol (default): exact ``evaluation/success`` at ``report_step``
-    only (final checkpoint). Pass ``last3_average=True`` for the superseded
+    only (final checkpoint). Pass ``last3_average=True`` for the RQL-style
     mean of the last three 100k-spaced checkpoints.
     """
     if common_max_step:
@@ -868,6 +869,8 @@ def collect_multiseed_metrics(
             methods = compare_methods
         elif include_qdflrql9:
             methods = ["baseline", "qdflrql9"]
+        elif include_nocrf:
+            methods = ["baseline", "dflrql9", "dflrql9_nocrf"]
         elif include_v9:
             methods = ["baseline", "dflrql9"]
         elif include_v8:
@@ -909,6 +912,8 @@ def collect_multiseed_metrics(
         methods.append("dflrql8")
     if include_v9:
         methods.append("dflrql9")
+    if include_nocrf:
+        methods.append("dflrql9_nocrf")
     if include_qdflrql9:
         methods.append("qdflrql9")
     rows: list[dict] = []
@@ -1001,6 +1006,13 @@ def collect_multiseed_metrics(
                 if base_m is not None and v9_m is not None
                 else None
             )
+        if include_nocrf:
+            nocrf_m = row.get("v9_nocrf_mean")
+            row["delta_v9_nocrf_mean"] = (
+                nocrf_m - base_m
+                if base_m is not None and nocrf_m is not None
+                else None
+            )
         if include_qdflrql9:
             qd_m = row.get("qdflrql9_mean")
             row["delta_qdflrql9_mean"] = (
@@ -1054,6 +1066,7 @@ def plot_all_tasks_metrics(
     include_v8: bool = False,
     v9_log_root: Path | None = None,
     include_v9: bool = False,
+    include_nocrf: bool = False,
     qdflrql9_log_root: Path | None = None,
     include_qdflrql9: bool = False,
     common_max_step: bool = False,
@@ -1075,6 +1088,7 @@ def plot_all_tasks_metrics(
         include_v8=include_v8,
         v9_log_root=v9_log_root,
         include_v9=include_v9,
+        include_nocrf=include_nocrf,
         qdflrql9_log_root=qdflrql9_log_root,
         include_qdflrql9=include_qdflrql9,
         common_max_step=common_max_step,
@@ -1129,6 +1143,8 @@ def plot_all_tasks_metrics(
             allowed.add("dflrql8")
         if include_v9:
             allowed.add("dflrql9")
+        if include_nocrf:
+            allowed.add("dflrql9_nocrf")
         if include_qdflrql9:
             allowed.add("qdflrql9")
     # Drop methods with no aggregate data (e.g. v6 when comparing only baseline+v7).
@@ -1150,6 +1166,7 @@ def plot_all_tasks_metrics(
     show_v6_delta = any(m == "dflrql6" for _, m, _ in active_methods)
     show_v8_delta = any(m == "dflrql8" for _, m, _ in active_methods)
     show_v9_delta = any(m == "dflrql9" for _, m, _ in active_methods)
+    show_nocrf_delta = any(m == "dflrql9_nocrf" for _, m, _ in active_methods)
     show_qdflrql9_delta = any(m == "qdflrql9" for _, m, _ in active_methods)
 
     fig, axes = plt.subplots(
@@ -1193,6 +1210,10 @@ def plot_all_tasks_metrics(
         delta_series.append(("v8", "delta_v8_mean", "#7c3aed", "v8 − baseline"))
     if show_v9_delta:
         delta_series.append(("v9", "delta_v9_mean", "#0f766e", "v9 − baseline"))
+    if show_nocrf_delta:
+        delta_series.append(
+            ("v9_nocrf", "delta_v9_nocrf_mean", "#ea580c", "v9-noCRF − baseline")
+        )
     if show_qdflrql9_delta:
         delta_series.append(
             ("qdflrql9", "delta_qdflrql9_mean", "#e11d48", "qdflrql9 − baseline")
@@ -1383,8 +1404,9 @@ def main() -> None:
         "--last3-average",
         action="store_true",
         help=(
-            "Legacy only: mean success over the last three 100k-spaced checkpoints "
-            "ending at --report-step. Superseded for paper figures/tables."
+            "RQL validation protocol: mean success over the last three "
+            "100k-spaced checkpoints ending at --report-step "
+            "(e.g. 800k/900k/1M or 1.8M/1.9M/2.0M)."
         ),
     )
     parser.add_argument(
@@ -1415,7 +1437,12 @@ def main() -> None:
     parser.add_argument(
         "--include-v9",
         action="store_true",
-        help="Include DFL-RQL v9 bars/deltas in the all50 metrics plot.",
+        help="Include DFL-RQL v9 / ConsensusFlow bars/deltas in the all50 metrics plot.",
+    )
+    parser.add_argument(
+        "--include-nocrf",
+        action="store_true",
+        help="Include DFL-RQL v9 no-CRF (ConsensusFlow without CRF) bars/deltas.",
     )
     parser.add_argument(
         "--qdflrql9-log-root",
@@ -1439,7 +1466,15 @@ def main() -> None:
         "--compare-methods",
         nargs="+",
         default=None,
-        choices=["baseline", "dflrql6", "dflrql7", "dflrql8", "dflrql9", "qdflrql9"],
+        choices=[
+            "baseline",
+            "dflrql6",
+            "dflrql7",
+            "dflrql8",
+            "dflrql9",
+            "dflrql9_nocrf",
+            "qdflrql9",
+        ],
         help="Methods to include when using --common-max-step.",
     )
     args = parser.parse_args()
@@ -1448,6 +1483,8 @@ def main() -> None:
     if args.common_max_step and compare_methods is None:
         if args.include_qdflrql9:
             compare_methods = ["baseline", "qdflrql9"]
+        elif args.include_nocrf:
+            compare_methods = ["baseline", "dflrql9", "dflrql9_nocrf"]
         elif args.include_v9:
             compare_methods = ["baseline", "dflrql9"]
         elif args.include_v8:
@@ -1464,6 +1501,9 @@ def main() -> None:
     )
     include_v9 = args.include_v9 or (
         compare_methods is not None and "dflrql9" in compare_methods
+    )
+    include_nocrf = args.include_nocrf or (
+        compare_methods is not None and "dflrql9_nocrf" in compare_methods
     )
     include_qdflrql9 = args.include_qdflrql9 or (
         compare_methods is not None and "qdflrql9" in compare_methods
@@ -1524,6 +1564,7 @@ def main() -> None:
         include_v8=include_v8,
         v9_log_root=Path(args.v9_log_root),
         include_v9=include_v9,
+        include_nocrf=include_nocrf,
         qdflrql9_log_root=Path(args.qdflrql9_log_root),
         include_qdflrql9=include_qdflrql9,
         common_max_step=args.common_max_step,
@@ -1563,6 +1604,7 @@ def main() -> None:
         include_v8=include_v8,
         v9_log_root=Path(args.v9_log_root),
         include_v9=include_v9,
+        include_nocrf=include_nocrf,
         qdflrql9_log_root=Path(args.qdflrql9_log_root),
         include_qdflrql9=include_qdflrql9,
         common_max_step=args.common_max_step,
@@ -1606,6 +1648,11 @@ def main() -> None:
         parts.append(f"v9 {v9_mean:.3f}±{v9_std:.3f}")
         if not np.isnan(base_mean) and not np.isnan(v9_mean):
             parts.append(f"Δv9-base={v9_mean - base_mean:+.3f}")
+    if include_nocrf and "v9_nocrf" in headline and len(per_seed_agg.get("v9_nocrf", [])):
+        nocrf_mean, nocrf_std = headline["v9_nocrf"]
+        parts.append(f"v9_nocrf {nocrf_mean:.3f}±{nocrf_std:.3f}")
+        if not np.isnan(base_mean) and not np.isnan(nocrf_mean):
+            parts.append(f"Δnocrf-base={nocrf_mean - base_mean:+.3f}")
     if include_qdflrql9 and "qdflrql9" in headline and len(per_seed_agg.get("qdflrql9", [])):
         qd_mean, qd_std = headline["qdflrql9"]
         parts.append(f"qdflrql9 {qd_mean:.3f}±{qd_std:.3f}")
