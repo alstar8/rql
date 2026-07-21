@@ -52,14 +52,17 @@ def test_rql_qflow_series_separation_and_defaults():
     offline = {s[0] for s in build_series("clf-group", all_methods=False)}
     assert "RQL→Q-Flow online" not in offline
     online = {s[0]: s[1] for s in build_online_series()}
-    assert online["RQL→Q-Flow online"] == RQL_QFLOW_ONLINE_PLACEHOLDER
-    assert online["RQL→Q-Flow actor-freeze"] == RQL_QFLOW_ACTORFREEZE_PLACEHOLDER
+    # Legacy 2M+2M RQL→Q-Flow (and actor-freeze) are omitted from the o2o plot.
+    assert "RQL→Q-Flow online" not in online
+    assert "RQL→Q-Flow actor-freeze" not in online
+    assert RQL_QFLOW_ONLINE_PLACEHOLDER not in online.values()
+    assert RQL_QFLOW_ACTORFREEZE_PLACEHOLDER not in online.values()
     assert DEFAULT_RQL_QFLOW_PHASE1_GROUP.endswith("rql-qflow-ready-2m")
     assert DEFAULT_RQL_QFLOW_PHASE2_GROUP.endswith("rql-qflow-online-4m")
     assert DEFAULT_RQL_QFLOW_ACTORFREEZE_GROUP.endswith("actorfreeze-2p1m")
     assert ONLINE_START_STEP == 2_000_000
     assert DEFAULT_PLOT_MAX_STEP == 2_000_000
-    assert DEFAULT_ONLINE_PLOT_MAX_STEP == 4_100_000
+    assert DEFAULT_ONLINE_PLOT_MAX_STEP == 2_000_000
 
 
 def test_rql_qflow_piecewise_join_at_2m(tmp_path: Path):
@@ -85,7 +88,7 @@ def test_rql_qflow_piecewise_join_at_2m(tmp_path: Path):
     agg = aggregate_two_phase_piecewise(
         exp,
         "success",
-        plot_max_step=DEFAULT_ONLINE_PLOT_MAX_STEP,
+        plot_max_step=4_100_000,
         phase1_group=DEFAULT_RQL_QFLOW_PHASE1_GROUP,
         phase2_group=DEFAULT_RQL_QFLOW_PHASE2_GROUP,
         split_step=ONLINE_START_STEP,
@@ -129,7 +132,7 @@ def test_actorfreeze_joins_ready_without_offset(tmp_path: Path):
     agg = aggregate_two_phase_piecewise(
         exp,
         "success",
-        plot_max_step=DEFAULT_ONLINE_PLOT_MAX_STEP,
+        plot_max_step=4_100_000,
         phase1_group=DEFAULT_RQL_QFLOW_PHASE1_GROUP,
         phase2_group=DEFAULT_RQL_QFLOW_ACTORFREEZE_GROUP,
         split_step=ONLINE_START_STEP,

@@ -51,12 +51,16 @@ PAPER_SEEDS = (0, 1, 2)
 PAPER_REPORT_STEP = 2_000_000
 OGBENCH_METHODS = ("baseline", "dflrql6", "dflrql7", "dflrql8", "dflrql9")
 
-# Controlled humanoidmaze-large ablations (common 1M budget; full method reused).
+# Controlled OGBench humanoidmaze-large ablations (5 tasks × seeds, common 1M budget).
+# ``full`` / ``no_crf`` reuse existing OGBench-50 curves at the exact 1M checkpoint.
+ABLATION_TASKS = (1, 2, 3, 4, 5)
+ABLATION_ENV_TEMPLATE = "humanoidmaze-large-navigate-singletask-task{task}-v0"
+
 ABLATION_SPECS = {
     "full": {
-        "run_group": "humanoidmaze-large-dflrql9-2m",
+        "run_group_template": "ogbench50-dflrql9-humanoidmaze_large_task{task}",
         "reuse_from_2m": True,
-        "description": "Full ConsensusFlow/v9 defaults (reused from matched 2M runs)",
+        "description": "Full ConsensusFlow/v9 defaults (OGBench HL tasks; reuse @1M)",
         "flags": {
             "guidance_coef": 0.5,
             "distill_coef": 1.0,
@@ -67,7 +71,7 @@ ABLATION_SPECS = {
         },
     },
     "no_guidance": {
-        "run_group": "humanoidmaze-large-cf-ablation-noguidance-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-noguidance-task{task}-1m",
         "reuse_from_2m": False,
         "description": "guidance_coef=0 (no guidance term at train/sample)",
         "flags": {
@@ -80,7 +84,7 @@ ABLATION_SPECS = {
         },
     },
     "lambda02": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-lambda02-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-lambda02-task{task}-1m",
         "reuse_from_2m": False,
         "description": (
             "guidance_coef=0.2 under no-CRF safety-off "
@@ -96,7 +100,7 @@ ABLATION_SPECS = {
         },
     },
     "lambda10": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-lambda10-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-lambda10-task{task}-1m",
         "reuse_from_2m": False,
         "description": (
             "guidance_coef=1.0 under no-CRF safety-off "
@@ -112,7 +116,7 @@ ABLATION_SPECS = {
         },
     },
     "no_conflict": {
-        "run_group": "humanoidmaze-large-cf-ablation-noconflict-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-noconflict-task{task}-1m",
         "reuse_from_2m": False,
         "description": (
             "conflict_power=0 → kill_frac=1-trust^0=0 for all trust "
@@ -128,7 +132,7 @@ ABLATION_SPECS = {
         },
     },
     "no_residual": {
-        "run_group": "humanoidmaze-large-cf-ablation-noresidual-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-noresidual-task{task}-1m",
         "reuse_from_2m": False,
         "description": "residual_coef=0 (disables residual damping when BC aligns)",
         "flags": {
@@ -141,7 +145,7 @@ ABLATION_SPECS = {
         },
     },
     "no_floor": {
-        "run_group": "humanoidmaze-large-cf-ablation-nofloor-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nofloor-task{task}-1m",
         "reuse_from_2m": False,
         "description": (
             "consensus_floor=0 disables the batch-relative scale-free floor "
@@ -158,11 +162,11 @@ ABLATION_SPECS = {
         },
     },
     "no_crf": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-1m",
-        "reuse_from_2m": False,
+        "run_group_template": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task{task}",
+        "reuse_from_2m": True,
         "description": (
             "Combined safety-off ablation: conflict_power=0, residual_coef=0, "
-            "consensus_floor=0 (guidance_coef retained at 0.5)"
+            "consensus_floor=0 (guidance_coef retained at 0.5); reuse OGBench-50 @1M"
         ),
         "flags": {
             "guidance_coef": 0.5,
@@ -174,7 +178,7 @@ ABLATION_SPECS = {
         },
     },
     "nocrf_k2": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-k2-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-k2-task{task}-1m",
         "reuse_from_2m": False,
         "description": "no_crf + ensemble_ct=2 (K=2 under p=β=c=0)",
         "flags": {
@@ -187,7 +191,7 @@ ABLATION_SPECS = {
         },
     },
     "nocrf_k5": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-k5-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-k5-task{task}-1m",
         "reuse_from_2m": False,
         "description": "no_crf + ensemble_ct=5 (K=5 under p=β=c=0)",
         "flags": {
@@ -200,7 +204,7 @@ ABLATION_SPECS = {
         },
     },
     "nocrf_k20": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-k20-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-k20-task{task}-1m",
         "reuse_from_2m": False,
         "description": "no_crf + ensemble_ct=20 (K=20 under p=β=c=0)",
         "flags": {
@@ -213,7 +217,7 @@ ABLATION_SPECS = {
         },
     },
     "single_critic": {
-        "run_group": "humanoidmaze-large-cf-ablation-singlecritic-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-singlecritic-task{task}-1m",
         "reuse_from_2m": False,
         "description": "ensemble_ct=1 (single critic; consensus/trust signals collapse)",
         "flags": {
@@ -619,8 +623,17 @@ def final_checkpoint_from_run(
     rows = parse_eval_csv(eval_path)
     max_step = max((r["step"] for r in rows), default=0)
     by_step = {r["step"]: r["success"] for r in rows}
-    success = float(by_step[report_step]) if report_step in by_step else None
-    mode = "final_checkpoint" if success is not None else "missing_final_checkpoint"
+    success = None
+    mode = "missing_final_checkpoint"
+    # Prefer the exact budget step. Resume-from-checkpoint runs often emit the
+    # first post-restore eval at report_step+1 (e.g. 1_000_001); treat that as
+    # the 1M final checkpoint when the exact step is absent.
+    if report_step in by_step:
+        success = float(by_step[report_step])
+        mode = "final_checkpoint"
+    elif (report_step + 1) in by_step:
+        success = float(by_step[report_step + 1])
+        mode = "final_checkpoint"
     return SeedMetric(
         seed=-1,
         success=success,
@@ -657,8 +670,14 @@ def aggregate_ablations(
     save_dir: Path,
     budget_step: int,
     seeds: tuple[int, ...] = PAPER_SEEDS,
-    env_name: str = "humanoidmaze-large-navigate-singletask-v0",
+    tasks: tuple[int, ...] = ABLATION_TASKS,
 ) -> dict[str, Any]:
+    """Aggregate Table-4 ablations on OGBench HL (5 tasks) at ``budget_step``.
+
+    For each variant/seed, averages success over the five HL tasks, then reports
+    mean±std across seeds (same seed-level std convention as the old single-env
+    table). Pairwise tests remain seed-aligned on those task-averaged scores.
+    """
     rql_root = save_dir / "rql"
     results: dict[str, Any] = {
         "budget_step": budget_step,
@@ -668,78 +687,106 @@ def aggregate_ablations(
             f"{'SHORTER THAN 2M PAPER PROTOCOL' if budget_step < PAPER_REPORT_STEP else 'full 2M paper protocol'})"
         ),
         "seeds": list(seeds),
-        "env_name": env_name,
+        "tasks": list(tasks),
+        "env_template": ABLATION_ENV_TEMPLATE,
         "variants": {},
         "protocol_note": (
-            "Do not compare mismatched budgets as equivalent. "
-            "Ablation suite uses a common budget; full method is reused from "
-            "humanoidmaze-large-dflrql9-2m only when flags exactly match v9 defaults "
-            "and the exact final checkpoint at the ablation budget exists. "
-            "OGBench paper values require exact 2,000,000-step checkpoints; "
-            "the 1M suite is short-budget evidence, not a protocol-equivalent substitute."
+            "Table-4 protocol: OGBench humanoidmaze-large tasks 1–5, seeds 0–2, "
+            f"exact final checkpoint at {budget_step}. Per seed, success is the "
+            "mean over the five tasks; table mean±std is over those seed means. "
+            "full/no_crf reuse existing OGBench-50 run groups at the same step."
         ),
     }
     for name, spec in ABLATION_SPECS.items():
-        root = rql_root / spec["run_group"]
         seed_metrics: list[dict[str, Any]] = []
-        successes: list[float] = []
+        seed_means: list[float] = []
         for seed in seeds:
-            if not root.is_dir():
-                seed_metrics.append(
-                    asdict(
-                        SeedMetric(
-                            seed=seed,
-                            success=None,
-                            mode="missing_run_group",
-                            max_step=0,
-                            run_dir=None,
-                            flags_match=False,
-                        )
+            task_successes: list[float] = []
+            task_rows: list[dict[str, Any]] = []
+            for task in tasks:
+                run_group = spec["run_group_template"].format(task=task)
+                env_name = ABLATION_ENV_TEMPLATE.format(task=task)
+                root = rql_root / run_group
+                if not root.is_dir():
+                    task_rows.append(
+                        {
+                            "task": task,
+                            "run_group": run_group,
+                            "success": None,
+                            "mode": "missing_run_group",
+                            "flags_match": False,
+                        }
                     )
-                )
-                continue
-            run_dir = find_best_run_dir(root, seed, env_name)
-            if run_dir is None:
-                seed_metrics.append(
-                    asdict(
-                        SeedMetric(
-                            seed=seed,
-                            success=None,
-                            mode="missing_run",
-                            max_step=0,
-                            run_dir=None,
-                            flags_match=False,
-                        )
+                    continue
+                run_dir = find_best_run_dir(root, seed, env_name)
+                if run_dir is None:
+                    task_rows.append(
+                        {
+                            "task": task,
+                            "run_group": run_group,
+                            "success": None,
+                            "mode": "missing_run",
+                            "flags_match": False,
+                        }
                     )
+                    continue
+                flags = json.loads((run_dir / "flags.json").read_text())
+                match = flags_match_expected(flags, spec["flags"])
+                metric = final_checkpoint_from_run(run_dir, budget_step)
+                task_rows.append(
+                    {
+                        "task": task,
+                        "run_group": run_group,
+                        "run_dir": str(run_dir),
+                        "success": metric.success,
+                        "mode": metric.mode,
+                        "max_step": metric.max_step,
+                        "flags_match": match,
+                    }
                 )
-                continue
-            flags = json.loads((run_dir / "flags.json").read_text())
-            match = flags_match_expected(flags, spec["flags"])
-            metric = final_checkpoint_from_run(run_dir, budget_step)
-            metric.seed = seed
-            metric.flags_match = match
-            payload = asdict(metric)
-            payload["diagnostics"] = summarize_train_diagnostics(run_dir)
-            payload["offline_steps"] = flags.get("offline_steps")
-            payload["agent_flags"] = {
-                k: (flags.get("agent") or {}).get(k) for k in spec["flags"]
-            }
-            seed_metrics.append(payload)
-            if metric.success is not None and metric.mode == "final_checkpoint" and match:
-                successes.append(float(metric.success))
-        arr = np.array(successes, dtype=float) if successes else np.array([], dtype=float)
+                if (
+                    metric.success is not None
+                    and metric.mode == "final_checkpoint"
+                    and match
+                ):
+                    task_successes.append(float(metric.success))
+            if task_successes and len(task_successes) == len(tasks):
+                seed_mean = float(np.mean(task_successes))
+                seed_means.append(seed_mean)
+                seed_metrics.append(
+                    {
+                        "seed": seed,
+                        "success": seed_mean,
+                        "mode": "final_checkpoint",
+                        "flags_match": True,
+                        "n_tasks": len(task_successes),
+                        "tasks": task_rows,
+                    }
+                )
+            else:
+                seed_metrics.append(
+                    {
+                        "seed": seed,
+                        "success": None,
+                        "mode": "incomplete_tasks",
+                        "flags_match": False,
+                        "n_tasks": len(task_successes),
+                        "tasks": task_rows,
+                    }
+                )
+        arr = np.array(seed_means, dtype=float) if seed_means else np.array([], dtype=float)
         results["variants"][name] = {
-            "run_group": spec["run_group"],
+            "run_group_template": spec["run_group_template"],
+            "run_group": spec["run_group_template"],
             "description": spec["description"],
             "expected_flags": spec["flags"],
             "reuse_from_2m": spec["reuse_from_2m"],
             "seeds": seed_metrics,
-            "n_complete_matched": len(successes),
+            "n_complete_matched": len(seed_means),
             "mean": float(arr.mean()) if arr.size else None,
             "std": float(arr.std(ddof=1)) if arr.size > 1 else (0.0 if arr.size == 1 else None),
             "bootstrap_ci": bootstrap_ci(arr, seed=17) if arr.size else None,
         }
-    # Paired tests vs full (seed-aligned)
     full = results["variants"]["full"]
     full_by_seed = {
         s["seed"]: s["success"]
@@ -767,9 +814,11 @@ def aggregate_ablations(
             )
             if a
             else None,
+            "n_paired_seeds": len(a),
         }
     results["comparisons_vs_full"] = comparisons
     return results
+
 
 
 def write_markdown_summary(payload: dict[str, Any], path: Path) -> None:
@@ -831,9 +880,19 @@ def write_markdown_summary(payload: dict[str, Any], path: Path) -> None:
         for name, var in (ablations.get("variants") or {}).items():
             lines.append(f"#### {name}")
             for s in var["seeds"]:
+                max_step = s.get("max_step")
+                if max_step is None and s.get("tasks"):
+                    steps = [
+                        t.get("max_step")
+                        for t in s["tasks"]
+                        if t.get("max_step") is not None
+                    ]
+                    max_step = min(steps) if steps else None
+                n_tasks = s.get("n_tasks")
                 lines.append(
                     f"- seed {s['seed']}: success={s['success']} mode={s['mode']} "
-                    f"flags_match={s['flags_match']} max_step={s['max_step']}"
+                    f"flags_match={s['flags_match']} n_tasks={n_tasks} "
+                    f"max_step={max_step}"
                 )
             lines.append("")
     path.write_text("\n".join(lines) + "\n")
@@ -955,7 +1014,11 @@ def main() -> None:
         },
         "ablations": ablations,
         "ablation_switch_documentation": {
-            k: {"run_group": v["run_group"], "description": v["description"], "flags": v["flags"]}
+            k: {
+                "run_group": v.get("run_group_template", v.get("run_group")),
+                "description": v["description"],
+                "flags": v["flags"],
+            }
             for k, v in ABLATION_SPECS.items()
         },
     }

@@ -76,19 +76,51 @@ RQL_QFLOW_ACTORFREEZE_PLACEHOLDER = "__rql_qflow_actorfreeze__"
 ONLINE_START_STEP = 2_000_000
 
 DEFAULT_QFLOW_V2_PHASE1_GROUP = "humanoidmaze-large-qflow-rql-warmstart-2m"
-DEFAULT_QFLOW_V2_PHASE2_GROUP = "humanoidmaze-large-qflow-rql-bridge-2p1m"
+DEFAULT_QFLOW_V2_PHASE2_GROUP = "humanoidmaze-large-qflow-rql-online-2m"
+# Legacy three-phase groups (bridge + 2M online) kept for historical helpers/tests.
 DEFAULT_QFLOW_V2_PHASE3_GROUP = "humanoidmaze-large-qflow-rql-online-4p1m"
+DEFAULT_QFLOW_V2_BRIDGE_GROUP = "humanoidmaze-large-qflow-rql-bridge-2p1m"
 QFLOW_RQL_WARMSTART_V2_PLACEHOLDER = "__qflow_rql_warmstart_v2__"
 WARMSTART_END_STEP = 2_000_000
 BRIDGE_END_STEP = 2_100_000
-# Offline core default (scratch actors end at 2M). Online plot uses 4.1M.
+# Offline core and offline→online plots both end at 2M (1M offline + 1M online).
 DEFAULT_PLOT_MAX_STEP = 2_000_000
-DEFAULT_ONLINE_PLOT_MAX_STEP = 4_100_000
+DEFAULT_ONLINE_PLOT_MAX_STEP = 2_000_000
+ONLINE_PHASE_SPLIT_STEP = 1_000_000
 
 DEFAULT_PURE_QFLOW_PHASE1_GROUP = "humanoidmaze-large-qflow-offline-1m"
 DEFAULT_PURE_QFLOW_PHASE2_GROUP = "humanoidmaze-large-qflow-online-2m"
 PURE_QFLOW_PLACEHOLDER = "__pure_qflow__"
-PURE_QFLOW_ONLINE_START_STEP = 1_000_000
+PURE_QFLOW_ONLINE_START_STEP = ONLINE_PHASE_SPLIT_STEP
+
+DEFAULT_RQL_ONLINE_PHASE1_GROUP = "humanoidmaze-large-rql-offline-1m"
+DEFAULT_RQL_ONLINE_PHASE2_GROUP = "humanoidmaze-large-rql-online-2m"
+RQL_ONLINE_PLACEHOLDER = "__rql_online__"
+
+# ConsensusFlow full (dflrql9 defaults: floor/conflict/residual on).
+# Phase 1 reuses the scratch offline run (plot uses ≤1M); phase 2 is online.
+DEFAULT_CF_PHASE1_GROUP = "humanoidmaze-large-dflrql9-scratch-2m"
+DEFAULT_CF_PHASE2_GROUP = "humanoidmaze-large-cf-online-2m"
+CF_PLACEHOLDER = "__cf__"
+
+# ConsensusFlow no-CRF (dflrql9): reuse HL ablation offline-1M as phase 1.
+DEFAULT_CF_NOCRF_PHASE1_GROUP = "humanoidmaze-large-cf-ablation-nocrf-1m"
+DEFAULT_CF_NOCRF_PHASE2_GROUP = "humanoidmaze-large-cf-nocrf-online-2m"
+CF_NOCRF_PLACEHOLDER = "__cf_nocrf__"
+
+# AR-QDFL FastSAC: single run group with absolute plot steps 0..2M.
+# Critic warmup is hidden from eval.csv (see run_ar_qdfl_fast_sac.py).
+DEFAULT_AR_QDFL_FASTSAC_GROUP = "humanoidmaze-large-ar-qdfl-fastsac-2m"
+AR_QDFL_FASTSAC_PLACEHOLDER = "__ar_qdfl_fastsac__"
+AR_QDFL_FASTSAC_WARMUP_UPDATES = 100_000
+AR_QDFL_FASTSAC_WARMUP_POLICY = {
+    "mode": "hidden",
+    "warmup_updates": AR_QDFL_FASTSAC_WARMUP_UPDATES,
+    "included_in_eval_csv": False,
+    "plot_axis": "absolute_0_to_2m",
+    "immediate_eval_at_offline_end": True,
+    "source": "scripts/run_ar_qdfl_fast_sac.py",
+}
 
 CORE_SCRATCH_GROUPS = (
     DEFAULT_DFLRQL9_SCRATCH_GROUP,
@@ -193,13 +225,7 @@ _SERIES_ALL_HEAD = [
         "-",
     ),
     (
-        "RQL→Q-Flow online (phase1+2)",
-        RQL_QFLOW_ONLINE_PLACEHOLDER,
-        "#7C2D12",
-        "-",
-    ),
-    (
-        "Q-Flow RQL warmstart v2 (3-phase)",
+        "Q-Flow RQL warmstart (phase1+2)",
         QFLOW_RQL_WARMSTART_V2_PLACEHOLDER,
         "#134E4A",
         "-",
@@ -280,13 +306,24 @@ def seed_from_run_dir(run_dir: Path) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def merge_seed_curves(
+    curves: list[list[dict[str, float]]],
+) -> list[dict[str, float]]:
+    """Union eval rows across resume dirs; later dirs win on duplicate steps."""
+    by_step: dict[int, dict[str, float]] = {}
+    for rows in curves:
+        for row in rows:
+            by_step[int(row["step"])] = row
+    return [by_step[s] for s in sorted(by_step)]
+
+
 def load_group_by_seed(
     exp_root: Path, run_group: str
 ) -> dict[int, list[dict[str, float]]]:
     group_dir = exp_root / "rql" / run_group
     if not group_dir.is_dir():
         return {}
-    out: dict[int, list[dict[str, float]]] = {}
+    per_seed: dict[int, list[list[dict[str, float]]]] = {}
     for run_dir in sorted(group_dir.iterdir()):
         if not run_dir.is_dir():
             continue
@@ -299,10 +336,8 @@ def load_group_by_seed(
         rows = parse_eval_csv(eval_csv)
         if not rows:
             continue
-        prev = out.get(seed)
-        if prev is None or max(r["step"] for r in rows) >= max(r["step"] for r in prev):
-            out[seed] = rows
-    return out
+        per_seed.setdefault(seed, []).append(rows)
+    return {seed: merge_seed_curves(curves) for seed, curves in per_seed.items()}
 
 
 def load_group(exp_root: Path, run_group: str) -> list[list[dict[str, float]]]:
@@ -507,6 +542,66 @@ def aggregate_two_phase_piecewise(
     std = np.concatenate([p[2] for p in parts])
     n_per = np.concatenate([p[3] for p in parts])
     return steps, mean, std, n_per, n_lo, n_hi
+
+
+def aggregate_single_group(
+    exp_root: Path,
+    metric: str,
+    plot_max_step: int,
+    run_group: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int] | None:
+    """Mean/std over seeds for one run group; no extrapolation past last eval.
+
+    Used by AR-QDFL FastSAC whose eval.csv already spans absolute plot steps
+    0..2M with warmup omitted. Partial runs contribute only through their
+    last available eval step (nan beyond that seed's last row).
+    """
+    curves = load_group(exp_root, run_group)
+    if not curves:
+        return None
+    agg = aggregate(curves, metric)
+    if agg is None:
+        return None
+    steps, mean, std, n_per = agg
+    mask = steps <= plot_max_step
+    if not np.any(mask):
+        return None
+    return steps[mask], mean[mask], std[mask], n_per[mask], len(curves)
+
+
+def per_seed_endpoints(
+    exp_root: Path,
+    run_group: str,
+    plot_max_step: int,
+) -> dict[str, dict[str, float | int]]:
+    """Last observed eval ≤ plot_max_step per seed; omit seeds with no rows."""
+    by_seed = load_group_by_seed(exp_root, run_group)
+    out: dict[str, dict[str, float | int]] = {}
+    for seed in sorted(by_seed):
+        rows = [r for r in by_seed[seed] if int(r["step"]) <= plot_max_step]
+        if not rows:
+            continue
+        last = rows[-1]
+        out[str(seed)] = {
+            "step": int(last["step"]),
+            "success": float(last["success"]),
+            "return": float(last["return"]),
+        }
+    return out
+
+
+def curve_arrays_to_lists(
+    steps: np.ndarray,
+    mean: np.ndarray,
+    std: np.ndarray,
+    n_per: np.ndarray,
+) -> dict[str, list[float]]:
+    return {
+        "steps": [float(x) for x in steps],
+        "mean": [float(x) for x in mean],
+        "std": [float(x) for x in std],
+        "n": [float(x) for x in n_per],
+    }
 
 
 def aggregate_three_phase_piecewise(
@@ -771,38 +866,36 @@ def main() -> None:
             args.rql_qflow_phase2_run_group,
             ONLINE_START_STEP,
         ),
+        QFLOW_RQL_WARMSTART_V2_PLACEHOLDER: (
+            args.qflow_v2_phase1_run_group,
+            args.qflow_v2_phase2_run_group,
+            ONLINE_PHASE_SPLIT_STEP,
+        ),
         PURE_QFLOW_PLACEHOLDER: (
             args.pure_qflow_phase1_run_group,
             args.pure_qflow_phase2_run_group,
             PURE_QFLOW_ONLINE_START_STEP,
         ),
     }
-    qflow_v2_groups = (
-        args.qflow_v2_phase1_run_group,
-        args.qflow_v2_phase2_run_group,
-        args.qflow_v2_phase3_run_group,
-    )
     series_groups = {run_group for _, run_group, _, _ in series}
     draw_teacher_freeze = bool(
         series_groups & {"__ar_qdfl_distill__", "__dd_qdfl_distill__"}
     )
     draw_online_start = RQL_QFLOW_ONLINE_PLACEHOLDER in series_groups
-    draw_qflow_v2_markers = QFLOW_RQL_WARMSTART_V2_PLACEHOLDER in series_groups
-    draw_pure_qflow_marker = PURE_QFLOW_PLACEHOLDER in series_groups
+    draw_phase_split = bool(
+        series_groups
+        & {QFLOW_RQL_WARMSTART_V2_PLACEHOLDER, PURE_QFLOW_PLACEHOLDER}
+    )
     draw_v7_split = "__v7__" in series_groups
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5), constrained_layout=True)
     plotted = 0
     has_2m_baseline = bool(load_group(args.save_dir, "humanoidmaze-large-rql-tuned-2m"))
     freeze_marker_drawn = False
     online_marker_drawn = False
-    bridge_marker_drawn = False
-    v2_online_marker_drawn = False
-    pure_qflow_marker_drawn = False
+    phase_marker_drawn = False
 
     def draw_markers(ax: plt.Axes) -> None:
-        nonlocal freeze_marker_drawn, online_marker_drawn
-        nonlocal bridge_marker_drawn, v2_online_marker_drawn
-        nonlocal pure_qflow_marker_drawn
+        nonlocal freeze_marker_drawn, online_marker_drawn, phase_marker_drawn
         if draw_v7_split and args.max_step > V7_SPLIT_STEP:
             ax.axvline(V7_SPLIT_STEP, color="#bbbbbb", linestyle=":", linewidth=1)
         if draw_teacher_freeze and args.max_step >= TEACHER_FREEZE_STEP:
@@ -814,15 +907,15 @@ def main() -> None:
                 label="teacher freeze @2M" if not freeze_marker_drawn else None,
             )
             freeze_marker_drawn = True
-        if draw_pure_qflow_marker and args.max_step >= PURE_QFLOW_ONLINE_START_STEP:
+        if draw_phase_split and args.max_step >= ONLINE_PHASE_SPLIT_STEP:
             ax.axvline(
-                PURE_QFLOW_ONLINE_START_STEP,
-                color="#BE123C",
+                ONLINE_PHASE_SPLIT_STEP,
+                color="#444444",
                 linestyle=":",
                 linewidth=1.2,
-                label="pure Q-Flow online @1M" if not pure_qflow_marker_drawn else None,
+                label="online @1M" if not phase_marker_drawn else None,
             )
-            pure_qflow_marker_drawn = True
+            phase_marker_drawn = True
         if draw_online_start and args.max_step >= ONLINE_START_STEP:
             ax.axvline(
                 ONLINE_START_STEP,
@@ -832,24 +925,6 @@ def main() -> None:
                 label="online start @2M" if not online_marker_drawn else None,
             )
             online_marker_drawn = True
-        if draw_qflow_v2_markers and args.max_step >= WARMSTART_END_STEP:
-            ax.axvline(
-                WARMSTART_END_STEP,
-                color="#134E4A",
-                linestyle="--",
-                linewidth=1.2,
-                label="v2 bridge @2M" if not bridge_marker_drawn else None,
-            )
-            bridge_marker_drawn = True
-        if draw_qflow_v2_markers and args.max_step >= BRIDGE_END_STEP:
-            ax.axvline(
-                BRIDGE_END_STEP,
-                color="#134E4A",
-                linestyle="-.",
-                linewidth=1.2,
-                label="v2 online @2.1M" if not v2_online_marker_drawn else None,
-            )
-            v2_online_marker_drawn = True
 
     for label, run_group, color, ls in series:
         if label == "RQL baseline (1M)" and has_2m_baseline:
@@ -950,80 +1025,6 @@ def main() -> None:
                 f"={mean_s[idx_split]:.3f}±{std_s[idx_split]:.3f}"
             )
             if n_hi and float(steps_s[-1]) > QUANTIZED_V9_SPLIT_STEP:
-                print(
-                    f"{label}: n={int(n_per_s[-1])}/{n_hi} success@{int(steps_s[-1])}"
-                    f"={mean_s[-1]:.3f}±{std_s[-1]:.3f}"
-                )
-            continue
-
-        if run_group == QFLOW_RQL_WARMSTART_V2_PLACEHOLDER:
-            p1_g, p2_g, p3_g = qflow_v2_groups
-            succ_agg = aggregate_three_phase_piecewise(
-                args.save_dir,
-                "success",
-                args.max_step,
-                p1_g,
-                p2_g,
-                p3_g,
-                WARMSTART_END_STEP,
-                BRIDGE_END_STEP,
-            )
-            if succ_agg is None:
-                print(f"skip {label}: no runs in {p1_g} / {p2_g} / {p3_g}")
-                continue
-            steps_s, mean_s, std_s, n_per_s, n_lo, n_mid, n_hi = succ_agg
-            legend = (
-                f"{label} (n={n_lo}@≤2M, n={n_mid}@≤2.1M"
-                f"{f', n={n_hi}@>2.1M' if n_hi else ''})"
-            )
-            for metric, ax, ylabel in [
-                ("success", axes[0], "Eval success"),
-                ("return", axes[1], "Eval return"),
-            ]:
-                agg = (
-                    succ_agg
-                    if metric == "success"
-                    else aggregate_three_phase_piecewise(
-                        args.save_dir,
-                        metric,
-                        args.max_step,
-                        p1_g,
-                        p2_g,
-                        p3_g,
-                        WARMSTART_END_STEP,
-                        BRIDGE_END_STEP,
-                    )
-                )
-                if agg is None:
-                    continue
-                steps, mean, std, n_per, _, _, _ = agg
-                ax.plot(
-                    steps,
-                    mean,
-                    color=color,
-                    linestyle=ls,
-                    label=legend if metric == "success" else None,
-                )
-                ax.fill_between(steps, mean - std, mean + std, color=color, alpha=0.15)
-                ax.set_xlabel("Training steps")
-                ax.set_ylabel(ylabel)
-                ax.grid(True, alpha=0.3)
-                draw_markers(ax)
-            plotted += 1
-            idx_ws = int(np.argmin(np.abs(steps_s - WARMSTART_END_STEP)))
-            print(
-                f"{label}: n={int(n_per_s[idx_ws])}/{n_lo} "
-                f"success@{int(steps_s[idx_ws])}"
-                f"={mean_s[idx_ws]:.3f}±{std_s[idx_ws]:.3f}"
-            )
-            if n_mid and float(steps_s[-1]) > WARMSTART_END_STEP:
-                idx_br = int(np.argmin(np.abs(steps_s - BRIDGE_END_STEP)))
-                print(
-                    f"{label}: n={int(n_per_s[idx_br])}/{n_mid} "
-                    f"success@{int(steps_s[idx_br])}"
-                    f"={mean_s[idx_br]:.3f}±{std_s[idx_br]:.3f}"
-                )
-            if n_hi and float(steps_s[-1]) > BRIDGE_END_STEP:
                 print(
                     f"{label}: n={int(n_per_s[-1])}/{n_hi} success@{int(steps_s[-1])}"
                     f"={mean_s[-1]:.3f}±{std_s[-1]:.3f}"

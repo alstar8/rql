@@ -904,9 +904,9 @@ def test_plot_build_series_dari_wiring():
     assert all_groups["Quantized DFL-RQL v9 (400k restore)"] == "__quantized_v9__"
     assert all_groups["AR QDFL student (phase1+2)"] == "__ar_qdfl_distill__"
     assert all_groups["DD QDFL student (phase1+2)"] == "__dd_qdfl_distill__"
-    assert all_groups["RQL→Q-Flow online (phase1+2)"] == RQL_QFLOW_ONLINE_PLACEHOLDER
+    assert "RQL→Q-Flow online (phase1+2)" not in all_groups
     assert (
-        all_groups["Q-Flow RQL warmstart v2 (3-phase)"]
+        all_groups["Q-Flow RQL warmstart (phase1+2)"]
         == QFLOW_RQL_WARMSTART_V2_PLACEHOLDER
     )
     assert all_groups["Pure Q-Flow (phase1+2)"] == PURE_QFLOW_PLACEHOLDER

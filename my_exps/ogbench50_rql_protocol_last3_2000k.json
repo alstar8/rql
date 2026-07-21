@@ -1,0 +1,139 @@
+{
+  "protocol": "rql_validation_last3",
+  "protocol_definition": {
+    "source": "benchmarks/ogbench50_tasks.json eval_protocol",
+    "metric": "mean evaluation/success over last three 100k-spaced checkpoints",
+    "checkpoints": [
+      1800000,
+      1900000,
+      2000000
+    ],
+    "checkpoint_label": "1800k/1900k/2000k",
+    "eval_episodes": 50,
+    "n_tasks": 50,
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "aggregation": "per (task, seed) last3 mean \u2192 mean over seeds \u2192 mean over 50 tasks; headline seed_std is std of per-seed 50-task means",
+    "note": "RQL paper reports 4 seeds; local CF / CF-noCRF currently have seeds {0,1,2}. Matched comparison uses the shared seed set."
+  },
+  "report_step": 2000000,
+  "methods": {
+    "RQL": {
+      "label": "RQL baseline",
+      "csv_key": "baseline",
+      "grand_mean": 0.5628888888888889,
+      "seed_std": 0.02026500967885163,
+      "per_seed_50task_means": [
+        0.5357333333333333,
+        0.5843999999999999,
+        0.5685333333333333
+      ],
+      "coverage": {
+        "tasks_with_any_seed": 50,
+        "tasks_with_all_seeds": 50,
+        "n_seeds_requested": 3
+      },
+      "domain_means": {
+        "antmaze-giant": 0.36000000000000004,
+        "antmaze-large": 0.7248888888888888,
+        "cube-double": 0.07955555555555556,
+        "cube-quadruple": 0.52,
+        "cube-triple": 0.03422222222222221,
+        "humanoidmaze-large": 0.4533333333333333,
+        "humanoidmaze-medium": 0.9928888888888888,
+        "puzzle-3x3": 1.0,
+        "puzzle-4x4": 0.6911111111111111,
+        "scene": 0.772888888888889
+      }
+    },
+    "CF": {
+      "label": "ConsensusFlow (dflrql9)",
+      "csv_key": "v9",
+      "grand_mean": 0.5925777777777778,
+      "seed_std": 0.00969724410386152,
+      "per_seed_50task_means": [
+        0.5941333333333333,
+        0.6036,
+        0.58
+      ],
+      "coverage": {
+        "tasks_with_any_seed": 50,
+        "tasks_with_all_seeds": 50,
+        "n_seeds_requested": 3
+      },
+      "domain_means": {
+        "antmaze-giant": 0.3204444444444444,
+        "antmaze-large": 0.8235555555555555,
+        "cube-double": 0.19422222222222224,
+        "cube-quadruple": 0.5813333333333334,
+        "cube-triple": 0.02488888888888889,
+        "humanoidmaze-large": 0.5626666666666666,
+        "humanoidmaze-medium": 0.9902222222222223,
+        "puzzle-3x3": 1.0,
+        "puzzle-4x4": 0.48177777777777775,
+        "scene": 0.9466666666666665
+      }
+    },
+    "CF_noCRF": {
+      "label": "ConsensusFlow no-CRF",
+      "csv_key": "v9_nocrf",
+      "grand_mean": 0.5908,
+      "seed_std": 0.020479872684789426,
+      "per_seed_50task_means": [
+        0.6103999999999999,
+        0.5625333333333333,
+        0.5994666666666666
+      ],
+      "coverage": {
+        "tasks_with_any_seed": 50,
+        "tasks_with_all_seeds": 50,
+        "n_seeds_requested": 3
+      },
+      "domain_means": {
+        "antmaze-giant": 0.34755555555555556,
+        "antmaze-large": 0.8342222222222222,
+        "cube-double": 0.20533333333333337,
+        "cube-quadruple": 0.4684444444444445,
+        "cube-triple": 0.03333333333333333,
+        "humanoidmaze-large": 0.5391111111111112,
+        "humanoidmaze-medium": 0.9897777777777778,
+        "puzzle-3x3": 1.0,
+        "puzzle-4x4": 0.5351111111111111,
+        "scene": 0.9551111111111112
+      }
+    }
+  },
+  "comparisons": {
+    "CF_minus_RQL": {
+      "n": 50,
+      "mean_delta": 0.029688888888888876,
+      "win_loss_tie": {
+        "win": 28,
+        "loss": 15,
+        "tie": 7
+      }
+    },
+    "CF_noCRF_minus_RQL": {
+      "n": 50,
+      "mean_delta": 0.027911111111111105,
+      "win_loss_tie": {
+        "win": 25,
+        "loss": 17,
+        "tie": 8
+      }
+    },
+    "CF_minus_CF_noCRF": {
+      "n": 50,
+      "mean_delta": 0.0017777777777777692,
+      "win_loss_tie": {
+        "win": 17,
+        "loss": 25,
+        "tie": 8
+      }
+    }
+  },
+  "generated_utc": "2026-07-21T08:30:26Z"
+}

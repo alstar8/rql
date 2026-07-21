@@ -293,8 +293,11 @@ def main(_):
             tb_logger.log(train_metrics, step=i)
             train_logger.log(train_metrics, step=i)
 
-        # Evaluate agent.
-        if FLAGS.eval_interval != 0 and (i == 1 or i % FLAGS.eval_interval == 0):
+        # Evaluate agent. Also evaluate on the first resumed step so
+        # offline→online joins get an immediate eval.csv point near restore.
+        if FLAGS.eval_interval != 0 and (
+            i == 1 or i == start_step or i % FLAGS.eval_interval == 0
+        ):
             renders = []
             eval_metrics = {}
             eval_info, trajs, cur_renders = evaluate(

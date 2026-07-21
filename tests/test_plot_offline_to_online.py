@@ -9,11 +9,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from plot_dflrql_vs_baseline import (  # noqa: E402
+    AR_QDFL_FASTSAC_PLACEHOLDER,
+    CF_NOCRF_PLACEHOLDER,
+    CF_PLACEHOLDER,
     CORE_SCRATCH_GROUPS,
+    DEFAULT_AR_QDFL_FASTSAC_GROUP,
     DEFAULT_ONLINE_PLOT_MAX_STEP,
     DEFAULT_PLOT_MAX_STEP,
+    ONLINE_PHASE_SPLIT_STEP,
     PURE_QFLOW_PLACEHOLDER,
     QFLOW_RQL_WARMSTART_V2_PLACEHOLDER,
+    RQL_ONLINE_PLACEHOLDER,
     RQL_QFLOW_ACTORFREEZE_PLACEHOLDER,
     RQL_QFLOW_ONLINE_PLACEHOLDER,
     build_series,
@@ -40,28 +46,40 @@ def test_offline_core_excludes_qflow_online_arms():
         RQL_QFLOW_ACTORFREEZE_PLACEHOLDER,
         QFLOW_RQL_WARMSTART_V2_PLACEHOLDER,
         PURE_QFLOW_PLACEHOLDER,
+        AR_QDFL_FASTSAC_PLACEHOLDER,
     ):
         assert placeholder not in groups
     assert DEFAULT_PLOT_MAX_STEP == 2_000_000
 
 
-def test_online_series_includes_legacy_freeze_v2_pure():
+def test_online_series_is_1m_plus_1m_only():
     online = build_online_series()
     by_label = {s[0]: s[1] for s in online}
-    assert by_label["RQL→Q-Flow online"] == RQL_QFLOW_ONLINE_PLACEHOLDER
-    assert by_label["RQL→Q-Flow actor-freeze"] == RQL_QFLOW_ACTORFREEZE_PLACEHOLDER
-    assert by_label["Q-Flow RQL warmstart v2"] == QFLOW_RQL_WARMSTART_V2_PLACEHOLDER
+    assert "RQL→Q-Flow online" not in by_label
+    assert "RQL→Q-Flow actor-freeze" not in by_label
+    assert RQL_QFLOW_ONLINE_PLACEHOLDER not in by_label.values()
+    assert RQL_QFLOW_ACTORFREEZE_PLACEHOLDER not in by_label.values()
+    assert by_label["RQL"] == RQL_ONLINE_PLACEHOLDER
+    assert by_label["CF"] == CF_PLACEHOLDER
+    assert by_label["CF no-CRF"] == CF_NOCRF_PLACEHOLDER
+    assert by_label["Q-Flow RQL warmstart"] == QFLOW_RQL_WARMSTART_V2_PLACEHOLDER
     assert by_label["Pure Q-Flow"] == PURE_QFLOW_PLACEHOLDER
+    assert by_label["AR-QDFL + FastSAC"] == AR_QDFL_FASTSAC_PLACEHOLDER
     assert online == list(ONLINE_SERIES)
-    assert DEFAULT_ONLINE_PLOT_MAX_STEP == 4_100_000
+    assert len(online) == 6
+    assert DEFAULT_ONLINE_PLOT_MAX_STEP == 2_000_000
+    assert ONLINE_PHASE_SPLIT_STEP == 1_000_000
+    assert DEFAULT_AR_QDFL_FASTSAC_GROUP == "humanoidmaze-large-ar-qdfl-fastsac-2m"
 
 
-def test_all_methods_keeps_qflow_placeholders():
+def test_all_methods_keeps_1m_qflow_placeholders():
     all_m = build_series("clf-group", all_methods=True)
     all_groups = {s[0]: s[1] for s in all_m}
-    assert all_groups["RQL→Q-Flow online (phase1+2)"] == RQL_QFLOW_ONLINE_PLACEHOLDER
+    assert "RQL→Q-Flow online (phase1+2)" not in all_groups
     assert (
-        all_groups["Q-Flow RQL warmstart v2 (3-phase)"]
+        all_groups["Q-Flow RQL warmstart (phase1+2)"]
         == QFLOW_RQL_WARMSTART_V2_PLACEHOLDER
     )
     assert all_groups["Pure Q-Flow (phase1+2)"] == PURE_QFLOW_PLACEHOLDER
+    # FastSAC is offline→online only; not injected into offline all-methods.
+    assert AR_QDFL_FASTSAC_PLACEHOLDER not in all_groups.values()

@@ -1,0 +1,157 @@
+{
+  "generated_utc": "2026-07-21T08:30:26Z",
+  "protocol": "rql_validation_last3",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "budgets": {
+    "1000k": {
+      "report_step": 1000000,
+      "checkpoint_label": "800k/900k/1000k",
+      "methods": {
+        "RQL": {
+          "grand_mean": 0.552,
+          "seed_std": 0.018106188833492076,
+          "coverage": {
+            "tasks_with_any_seed": 50,
+            "tasks_with_all_seeds": 50,
+            "n_seeds_requested": 3
+          }
+        },
+        "CF": {
+          "grand_mean": 0.5660000000000001,
+          "seed_std": 0.007563655788630854,
+          "coverage": {
+            "tasks_with_any_seed": 50,
+            "tasks_with_all_seeds": 50,
+            "n_seeds_requested": 3
+          }
+        },
+        "CF_noCRF": {
+          "grand_mean": 0.5702666666666666,
+          "seed_std": 0.004945929864264381,
+          "coverage": {
+            "tasks_with_any_seed": 50,
+            "tasks_with_all_seeds": 50,
+            "n_seeds_requested": 3
+          }
+        }
+      },
+      "comparisons": {
+        "CF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.013999999999999999,
+          "win_loss_tie": {
+            "win": 30,
+            "loss": 14,
+            "tie": 6
+          }
+        },
+        "CF_noCRF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.018266666666666657,
+          "win_loss_tie": {
+            "win": 25,
+            "loss": 18,
+            "tie": 7
+          }
+        },
+        "CF_minus_CF_noCRF": {
+          "n": 50,
+          "mean_delta": -0.004266666666666666,
+          "win_loss_tie": {
+            "win": 20,
+            "loss": 23,
+            "tie": 7
+          }
+        }
+      },
+      "csv": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/my_exps/ogbench50_rql_protocol_last3_1000k.csv",
+      "json": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/my_exps/ogbench50_rql_protocol_last3_1000k.json",
+      "md": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/my_exps/ogbench50_rql_protocol_last3_1000k.md"
+    },
+    "2000k": {
+      "report_step": 2000000,
+      "checkpoint_label": "1800k/1900k/2000k",
+      "methods": {
+        "RQL": {
+          "grand_mean": 0.5628888888888889,
+          "seed_std": 0.02026500967885163,
+          "coverage": {
+            "tasks_with_any_seed": 50,
+            "tasks_with_all_seeds": 50,
+            "n_seeds_requested": 3
+          }
+        },
+        "CF": {
+          "grand_mean": 0.5925777777777778,
+          "seed_std": 0.00969724410386152,
+          "coverage": {
+            "tasks_with_any_seed": 50,
+            "tasks_with_all_seeds": 50,
+            "n_seeds_requested": 3
+          }
+        },
+        "CF_noCRF": {
+          "grand_mean": 0.5908,
+          "seed_std": 0.020479872684789426,
+          "coverage": {
+            "tasks_with_any_seed": 50,
+            "tasks_with_all_seeds": 50,
+            "n_seeds_requested": 3
+          }
+        }
+      },
+      "comparisons": {
+        "CF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.029688888888888876,
+          "win_loss_tie": {
+            "win": 28,
+            "loss": 15,
+            "tie": 7
+          }
+        },
+        "CF_noCRF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.027911111111111105,
+          "win_loss_tie": {
+            "win": 25,
+            "loss": 17,
+            "tie": 8
+          }
+        },
+        "CF_minus_CF_noCRF": {
+          "n": 50,
+          "mean_delta": 0.0017777777777777692,
+          "win_loss_tie": {
+            "win": 17,
+            "loss": 25,
+            "tie": 8
+          }
+        }
+      },
+      "csv": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/my_exps/ogbench50_rql_protocol_last3_2000k.csv",
+      "json": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/my_exps/ogbench50_rql_protocol_last3_2000k.json",
+      "md": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/my_exps/ogbench50_rql_protocol_last3_2000k.md"
+    }
+  },
+  "rql_only_4seed_2000k": {
+    "seeds": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "grand_mean": 0.546,
+    "seed_std": 0.03411314507146276,
+    "coverage": {
+      "tasks_with_any_seed": 50,
+      "tasks_with_all_seeds": 50,
+      "n_seeds_requested": 4
+    },
+    "note": "RQL paper seed count; CF/CF-noCRF lack seed 3 so this is RQL-only reference, not a matched three-way compare."
+  }
+}

@@ -1,6 +1,6 @@
 {
   "title": "ConsensusFlow empirical aggregation (authoritative)",
-  "generated_utc": "2026-07-19T08:12:32Z",
+  "generated_utc": "2026-07-21T08:11:37Z",
   "paper_seed_protocol": {
     "seeds": [
       0,
@@ -16,7 +16,7 @@
   },
   "ogbench": {
     "source_csv": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/my_exps/ogbench50_all50_metrics_2m.csv",
-    "source_csv_sha256": "94ae51cf886a627cc3c8996cf4d8d00001372f821b68c2ada5ef35047b471194",
+    "source_csv_sha256": "c94b13292b42d6edea8390310121cd71b873756179a33e4612dfdf95f554dda3",
     "source_protocol": "final_checkpoint_at_2m",
     "legacy_paper_last3_csv": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/my_exps/ogbench50_all50_metrics_2m_paper_last3_legacy.csv",
     "legacy_paper_last3_csv_sha256": "dd33b3de578012bd27549fabd86ff48f25dd84a3dd7ccae8ca9b9ccb84766fa8",
@@ -25,20 +25,20 @@
     "report_checkpoint": 2000000,
     "from_csv": {
       "baseline": {
-        "grand_mean": 0.5386666666666666,
+        "grand_mean": 0.5506666666666666,
         "n_tasks": 50,
         "incomplete_tasks": [],
         "domain_means": {
           "antmaze-giant": 0.33599999999999997,
           "antmaze-large": 0.6986666666666667,
-          "cube-double": 0.072,
+          "cube-double": 0.076,
           "cube-quadruple": 0.524,
           "cube-triple": 0.031999999999999994,
           "humanoidmaze-large": 0.42666666666666664,
           "humanoidmaze-medium": 0.9906666666666666,
           "puzzle-3x3": 1.0,
-          "puzzle-4x4": 0.624,
-          "scene": 0.6826666666666666
+          "puzzle-4x4": 0.6906666666666667,
+          "scene": 0.732
         }
       },
       "v6": {
@@ -118,13 +118,13 @@
         }
       },
       "v9": {
-        "grand_mean": 0.5937333333333332,
+        "grand_mean": 0.5933333333333333,
         "n_tasks": 50,
         "incomplete_tasks": [],
         "domain_means": {
           "antmaze-giant": 0.30533333333333335,
-          "antmaze-large": 0.7786666666666667,
-          "cube-double": 0.17733333333333332,
+          "antmaze-large": 0.776,
+          "cube-double": 0.176,
           "cube-quadruple": 0.592,
           "cube-triple": 0.02533333333333333,
           "humanoidmaze-large": 0.544,
@@ -3432,7 +3432,7 @@
         }
       },
       "v9": {
-        "grand_mean": 0.5937333333333332,
+        "grand_mean": 0.5933333333333333,
         "n_tasks": 50,
         "incomplete_tasks": [],
         "domain_means": {
@@ -3445,7 +3445,7 @@
           "humanoidmaze-medium": 0.9933333333333334,
           "puzzle-3x3": 1.0,
           "puzzle-4x4": 0.5813333333333334,
-          "scene": 0.944
+          "scene": 0.9399999999999998
         },
         "per_task": {
           "scene-task1": {
@@ -3483,12 +3483,12 @@
           "scene-task3": {
             "domain_id": "scene",
             "env_name": "scene-play-singletask-task3-v0",
-            "mean": 0.9533333333333333,
+            "mean": 0.9333333333333332,
             "n": 3,
             "seed_values": [
               0.94,
               0.96,
-              0.96
+              0.9
             ],
             "seeds_present": [
               0,
@@ -4254,43 +4254,12 @@
     "csv_vs_raw": {
       "methods": {
         "baseline": {
-          "csv_grand_mean": 0.5386666666666666,
+          "csv_grand_mean": 0.5506666666666666,
           "raw_grand_mean": 0.5506666666666666,
-          "abs_delta": 0.01200000000000001,
-          "match": false,
-          "n_task_mismatches": 5,
-          "task_mismatches_head": [
-            {
-              "task_id": "cube-double-task1",
-              "csv": 0.26,
-              "raw": 0.26666666666666666,
-              "abs_delta": 0.006666666666666654
-            },
-            {
-              "task_id": "cube-double-task2",
-              "csv": 0.03333333333333333,
-              "raw": 0.04666666666666667,
-              "abs_delta": 0.013333333333333336
-            },
-            {
-              "task_id": "puzzle-4x4-task4",
-              "csv": 0.3333333333333333,
-              "raw": 0.6666666666666666,
-              "abs_delta": 0.3333333333333333
-            },
-            {
-              "task_id": "scene-task1",
-              "csv": 0.8933333333333332,
-              "raw": 0.9333333333333332,
-              "abs_delta": 0.040000000000000036
-            },
-            {
-              "task_id": "scene-task4",
-              "csv": 0.7799999999999999,
-              "raw": 0.9866666666666667,
-              "abs_delta": 0.20666666666666678
-            }
-          ]
+          "abs_delta": 0.0,
+          "match": true,
+          "n_task_mismatches": 0,
+          "task_mismatches_head": []
         },
         "v6": {
           "csv_grand_mean": 0.586,
@@ -4317,34 +4286,15 @@
           "task_mismatches_head": []
         },
         "v9": {
-          "csv_grand_mean": 0.5937333333333332,
-          "raw_grand_mean": 0.5937333333333332,
+          "csv_grand_mean": 0.5933333333333333,
+          "raw_grand_mean": 0.5933333333333333,
           "abs_delta": 0.0,
-          "match": false,
-          "n_task_mismatches": 3,
-          "task_mismatches_head": [
-            {
-              "task_id": "antmaze-large-task3",
-              "csv": 0.96,
-              "raw": 0.9466666666666667,
-              "abs_delta": 0.013333333333333308
-            },
-            {
-              "task_id": "cube-double-task1",
-              "csv": 0.4533333333333333,
-              "raw": 0.4466666666666666,
-              "abs_delta": 0.00666666666666671
-            },
-            {
-              "task_id": "scene-task3",
-              "csv": 0.9333333333333332,
-              "raw": 0.9533333333333333,
-              "abs_delta": 0.020000000000000018
-            }
-          ]
+          "match": true,
+          "n_task_mismatches": 0,
+          "task_mismatches_head": []
         }
       },
-      "all_match": false
+      "all_match": true
     },
     "legacy_paper_last3_vs_final_checkpoint": {
       "methods": {
@@ -4626,8 +4576,8 @@
         },
         "v9": {
           "csv_grand_mean": 0.5916,
-          "raw_grand_mean": 0.5937333333333332,
-          "abs_delta": 0.0021333333333332094,
+          "raw_grand_mean": 0.5933333333333333,
+          "abs_delta": 0.0017333333333332535,
           "match": false,
           "n_task_mismatches": 38,
           "task_mismatches_head": [
@@ -4962,9 +4912,9 @@
       "v9": {
         "n_shared_tasks": 50,
         "method_bootstrap_ci": {
-          "mean": 0.5937333333333333,
-          "ci_low": 0.48693,
-          "ci_high": 0.6964033333333333,
+          "mean": 0.5933333333333333,
+          "ci_low": 0.48679333333333324,
+          "ci_high": 0.6961366666666665,
           "n": 50,
           "n_boot": 10000,
           "alpha": 0.05
@@ -4978,20 +4928,20 @@
           "alpha": 0.05
         },
         "paired_delta_bootstrap_ci": {
-          "mean_delta": 0.04306666666666667,
-          "ci_low": -0.0035999999999999934,
-          "ci_high": 0.09026666666666668,
+          "mean_delta": 0.04266666666666666,
+          "ci_low": -0.003870000000000015,
+          "ci_high": 0.0896033333333333,
           "n": 50,
           "n_boot": 10000,
           "alpha": 0.05
         },
         "paired_tests": {
           "n_paired": 50,
-          "mean_delta": 0.04306666666666667,
-          "std_delta": 0.174767535915505,
+          "mean_delta": 0.04266666666666666,
+          "std_delta": 0.17453274192693802,
           "paired_t": {
-            "statistic": 1.7424707560003396,
-            "pvalue": 0.0876997506793281
+            "statistic": 1.7286091421892391,
+            "pvalue": 0.09017624565194245
           },
           "wilcoxon": {
             "statistic": 250.5,
@@ -5013,10 +4963,10 @@
           "humanoidmaze-medium": 0.9933333333333334,
           "puzzle-3x3": 1.0,
           "puzzle-4x4": 0.5813333333333334,
-          "scene": 0.944
+          "scene": 0.9399999999999998
         },
         "incomplete_tasks": [],
-        "grand_mean": 0.5937333333333332
+        "grand_mean": 0.5933333333333333
       }
     }
   },
@@ -5028,11 +4978,19 @@
       1,
       2
     ],
-    "env_name": "humanoidmaze-large-navigate-singletask-v0",
+    "tasks": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "env_template": "humanoidmaze-large-navigate-singletask-task{task}-v0",
     "variants": {
       "full": {
-        "run_group": "humanoidmaze-large-dflrql9-2m",
-        "description": "Full ConsensusFlow/v9 defaults (reused from matched 2M runs)",
+        "run_group_template": "ogbench50-dflrql9-humanoidmaze_large_task{task}",
+        "run_group": "ogbench50-dflrql9-humanoidmaze_large_task{task}",
+        "description": "Full ConsensusFlow/v9 defaults (OGBench HL tasks; reuse @1M)",
         "expected_flags": {
           "guidance_coef": 0.5,
           "distill_coef": 1.0,
@@ -5045,100 +5003,182 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.78,
+            "success": 0.40800000000000003,
             "mode": "final_checkpoint",
-            "max_step": 2000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-dflrql9-2m/sd000_20260712_125945",
             "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.59607066,
-              "conflict_kill_frac_last_mean": 0.618710834,
-              "residual_damp_last_mean": 0.9807523545000001,
-              "guidance_retained_last_mean": 0.9711719504999998,
-              "behavior_conflict_fraction_last_mean": 0.4306640625,
-              "safe_w_norm_last_mean": 0.5783030125,
-              "w_norm_last_mean": 0.596073735,
-              "consensus_target_norm_last_mean": 0.9745868689999998
-            },
-            "offline_steps": 2000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "n_tasks": 5,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task1",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task1/sd000_20260712_130504",
+                "success": 0.86,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task2",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task2/sd000_20260712_130503",
+                "success": 0.14,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task3",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task3/sd000_20260712_130503",
+                "success": 0.22,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task4",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task4/sd000_20260712_130507",
+                "success": 0.16,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task5",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task5/sd000_20260712_130507",
+                "success": 0.66,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.8,
+            "success": 0.476,
             "mode": "final_checkpoint",
-            "max_step": 2000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-dflrql9-2m/sd001_20260712_125945",
             "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.5873651040000001,
-              "conflict_kill_frac_last_mean": 0.6296251015000001,
-              "residual_damp_last_mean": 0.9809217924999999,
-              "guidance_retained_last_mean": 0.9709200125,
-              "behavior_conflict_fraction_last_mean": 0.4287109375,
-              "safe_w_norm_last_mean": 0.5697033810000001,
-              "w_norm_last_mean": 0.5873651045000001,
-              "consensus_target_norm_last_mean": 0.9751488665
-            },
-            "offline_steps": 2000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "n_tasks": 5,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task1",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task1/sd001_20260712_130614",
+                "success": 0.84,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task2",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task2/sd001_20260712_130614",
+                "success": 0.08,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task3",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task3/sd001_20260712_130615",
+                "success": 0.2,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task4",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task4/sd001_20260712_130550",
+                "success": 0.54,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task5",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task5/sd001_20260712_130548",
+                "success": 0.72,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.74,
+            "success": 0.37200000000000005,
             "mode": "final_checkpoint",
-            "max_step": 2000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-dflrql9-2m/sd002_20260712_125946",
             "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.591706018,
-              "conflict_kill_frac_last_mean": 0.6242972680000001,
-              "residual_damp_last_mean": 0.9812326405,
-              "guidance_retained_last_mean": 0.971765786,
-              "behavior_conflict_fraction_last_mean": 0.42265625,
-              "safe_w_norm_last_mean": 0.574464344,
-              "w_norm_last_mean": 0.5917132724999999,
-              "consensus_target_norm_last_mean": 0.975224727
-            },
-            "offline_steps": 2000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "n_tasks": 5,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task1",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task1/sd002_20260712_130618",
+                "success": 0.78,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task2",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task2/sd002_20260712_130618",
+                "success": 0.12,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task3",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task3/sd002_20260712_130618",
+                "success": 0.2,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task4",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task4/sd002_20260712_130618",
+                "success": 0.14,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench50-dflrql9-humanoidmaze_large_task5",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-humanoidmaze_large_task5/sd002_20260712_130618",
+                "success": 0.62,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              }
+            ]
           }
         ],
         "n_complete_matched": 3,
-        "mean": 0.7733333333333334,
-        "std": 0.03055050463303896,
+        "mean": 0.4186666666666667,
+        "std": 0.052814139520902255,
         "bootstrap_ci": {
-          "mean": 0.7733333333333334,
-          "ci_low": 0.7399999999999999,
-          "ci_high": 0.8000000000000002,
+          "mean": 0.4186666666666667,
+          "ci_low": 0.37200000000000005,
+          "ci_high": 0.476,
           "n": 3,
           "n_boot": 10000,
           "alpha": 0.05
         }
       },
       "no_guidance": {
-        "run_group": "humanoidmaze-large-cf-ablation-noguidance-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-noguidance-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-noguidance-task{task}-1m",
         "description": "guidance_coef=0 (no guidance term at train/sample)",
         "expected_flags": {
           "guidance_coef": 0.0,
@@ -5152,100 +5192,145 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.68,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-noguidance-1m/sd000_20260716_144227",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6485744710000001,
-              "conflict_kill_frac_last_mean": 0.5567750704999999,
-              "residual_damp_last_mean": 0.9750907530000003,
-              "guidance_retained_last_mean": 0.9676369964999999,
-              "behavior_conflict_fraction_last_mean": 0.3775390625,
-              "safe_w_norm_last_mean": 0.6268905425000001,
-              "w_norm_last_mean": 0.6485864415000001,
-              "consensus_target_norm_last_mean": 0.9778093100000002
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.0,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task1-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task2-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task3-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task4-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task5-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.72,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-noguidance-1m/sd001_20260716_144224",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6184175365000001,
-              "conflict_kill_frac_last_mean": 0.5927302935000001,
-              "residual_damp_last_mean": 0.9777282224999999,
-              "guidance_retained_last_mean": 0.9689514220000002,
-              "behavior_conflict_fraction_last_mean": 0.3943359375,
-              "safe_w_norm_last_mean": 0.5985466485,
-              "w_norm_last_mean": 0.6184175365000001,
-              "consensus_target_norm_last_mean": 0.9715104605
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.0,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task1-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task2-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task3-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task4-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task5-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.72,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-noguidance-1m/sd002_20260716_144227",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.652685162,
-              "conflict_kill_frac_last_mean": 0.5512814285000001,
-              "residual_damp_last_mean": 0.9746540250000001,
-              "guidance_retained_last_mean": 0.967957191,
-              "behavior_conflict_fraction_last_mean": 0.358203125,
-              "safe_w_norm_last_mean": 0.6312934814999999,
-              "w_norm_last_mean": 0.6526933319999999,
-              "consensus_target_norm_last_mean": 0.9777718910000001
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.0,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task1-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task2-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task3-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task4-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-noguidance-task5-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.7066666666666667,
-        "std": 0.023094010767584987,
-        "bootstrap_ci": {
-          "mean": 0.7066666666666667,
-          "ci_low": 0.68,
-          "ci_high": 0.7200000000000001,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       },
       "lambda02": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-lambda02-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-lambda02-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task{task}-1m",
         "description": "guidance_coef=0.2 under no-CRF safety-off (conflict_power=0, residual_coef=0, consensus_floor=0)",
         "expected_flags": {
           "guidance_coef": 0.2,
@@ -5259,100 +5344,145 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.78,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-lambda02-1m/sd000_20260718_203640",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.658224374,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983630000001,
-              "behavior_conflict_fraction_last_mean": 0.3923828125,
-              "safe_w_norm_last_mean": 0.6582243845000001,
-              "w_norm_last_mean": 0.6582527695,
-              "consensus_target_norm_last_mean": 0.999988939
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.2,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task1-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task2-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task3-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.76,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-lambda02-1m/sd001_20260718_203640",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6459281554999999,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983265000001,
-              "behavior_conflict_fraction_last_mean": 0.3951171875,
-              "safe_w_norm_last_mean": 0.6459281590000001,
-              "w_norm_last_mean": 0.6459524215,
-              "consensus_target_norm_last_mean": 0.9999874974999999
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.2,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task1-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task2-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task3-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.78,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-lambda02-1m/sd002_20260718_203640",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6540484755,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983535,
-              "behavior_conflict_fraction_last_mean": 0.365234375,
-              "safe_w_norm_last_mean": 0.6540484689999999,
-              "w_norm_last_mean": 0.6540555409999999,
-              "consensus_target_norm_last_mean": 0.999989344
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.2,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task1-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task2-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task3-1m",
+                "success": null,
+                "mode": "missing_run",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.7733333333333334,
-        "std": 0.011547005383792525,
-        "bootstrap_ci": {
-          "mean": 0.7733333333333334,
-          "ci_low": 0.7600000000000001,
-          "ci_high": 0.7799999999999999,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       },
       "lambda10": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-lambda10-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-lambda10-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task{task}-1m",
         "description": "guidance_coef=1.0 under no-CRF safety-off (conflict_power=0, residual_coef=0, consensus_floor=0)",
         "expected_flags": {
           "guidance_coef": 1.0,
@@ -5366,100 +5496,145 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.82,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-lambda10-1m/sd000_20260718_203641",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6535594745000001,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983739999999,
-              "behavior_conflict_fraction_last_mean": 0.4033203125,
-              "safe_w_norm_last_mean": 0.6535594735,
-              "w_norm_last_mean": 0.6535873895000001,
-              "consensus_target_norm_last_mean": 0.999990203
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 1.0,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.78,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-lambda10-1m/sd001_20260718_203641",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6537093374999999,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983520000001,
-              "behavior_conflict_fraction_last_mean": 0.3955078125,
-              "safe_w_norm_last_mean": 0.6537093304999999,
-              "w_norm_last_mean": 0.653719977,
-              "consensus_target_norm_last_mean": 0.9999908129999998
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 1.0,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.8,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-lambda10-1m/sd002_20260718_203641",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6485505844999999,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983425,
-              "behavior_conflict_fraction_last_mean": 0.3796875,
-              "safe_w_norm_last_mean": 0.648550593,
-              "w_norm_last_mean": 0.648565014,
-              "consensus_target_norm_last_mean": 0.9999907225000001
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 1.0,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.8000000000000002,
-        "std": 0.019999999999999962,
-        "bootstrap_ci": {
-          "mean": 0.8000000000000002,
-          "ci_low": 0.7799999999999999,
-          "ci_high": 0.82,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       },
       "no_conflict": {
-        "run_group": "humanoidmaze-large-cf-ablation-noconflict-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-noconflict-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-noconflict-task{task}-1m",
         "description": "conflict_power=0 \u2192 kill_frac=1-trust^0=0 for all trust (disables trust-weighted BC-conflict projection; residual damping remains)",
         "expected_flags": {
           "guidance_coef": 0.5,
@@ -5473,100 +5648,145 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.78,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-noconflict-1m/sd000_20260716_144223",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6451168289999999,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 0.9765932075,
-              "guidance_retained_last_mean": 0.976591604,
-              "behavior_conflict_fraction_last_mean": 0.3849609375,
-              "safe_w_norm_last_mean": 0.6298083925,
-              "w_norm_last_mean": 0.645129509,
-              "consensus_target_norm_last_mean": 0.9803073255000001
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 0.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.86,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-noconflict-1m/sd001_20260716_144226",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6450681015,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 0.9773181559999999,
-              "guidance_retained_last_mean": 0.9773165105000002,
-              "behavior_conflict_fraction_last_mean": 0.3982421875,
-              "safe_w_norm_last_mean": 0.630285258,
-              "w_norm_last_mean": 0.645083312,
-              "consensus_target_norm_last_mean": 0.9806406584999999
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 0.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.8,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-noconflict-1m/sd002_20260716_144227",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6421492905,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 0.9767749084999998,
-              "guidance_retained_last_mean": 0.9767732810000002,
-              "behavior_conflict_fraction_last_mean": 0.382421875,
-              "safe_w_norm_last_mean": 0.6270788694999999,
-              "w_norm_last_mean": 0.642160089,
-              "consensus_target_norm_last_mean": 0.9805653704999997
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 0.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-noconflict-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.8133333333333335,
-        "std": 0.041633319989322626,
-        "bootstrap_ci": {
-          "mean": 0.8133333333333335,
-          "ci_low": 0.7799999999999999,
-          "ci_high": 0.86,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       },
       "no_residual": {
-        "run_group": "humanoidmaze-large-cf-ablation-noresidual-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-noresidual-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-noresidual-task{task}-1m",
         "description": "residual_coef=0 (disables residual damping when BC aligns)",
         "expected_flags": {
           "guidance_coef": 0.5,
@@ -5580,100 +5800,145 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.92,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-noresidual-1m/sd000_20260716_144227",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6415307134999999,
-              "conflict_kill_frac_last_mean": 0.567772737,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9918116845000002,
-              "behavior_conflict_fraction_last_mean": 0.3890625,
-              "safe_w_norm_last_mean": 0.6360616885000001,
-              "w_norm_last_mean": 0.6415429555,
-              "consensus_target_norm_last_mean": 0.9800227465000001
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.72,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-noresidual-1m/sd001_20260716_144227",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6385991185000001,
-              "conflict_kill_frac_last_mean": 0.570699504,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9919799499999998,
-              "behavior_conflict_fraction_last_mean": 0.3953125,
-              "safe_w_norm_last_mean": 0.6332756724999999,
-              "w_norm_last_mean": 0.6386032150000001,
-              "consensus_target_norm_last_mean": 0.979873437
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.82,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-noresidual-1m/sd002_20260716_171515",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6402720785,
-              "conflict_kill_frac_last_mean": 0.5695054340000001,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9927509835,
-              "behavior_conflict_fraction_last_mean": 0.375,
-              "safe_w_norm_last_mean": 0.6354262945000001,
-              "w_norm_last_mean": 0.6402720785,
-              "consensus_target_norm_last_mean": 0.9806259340000001
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-noresidual-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.82,
-        "std": 0.10000000000000003,
-        "bootstrap_ci": {
-          "mean": 0.82,
-          "ci_low": 0.7200000000000001,
-          "ci_high": 0.92,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       },
       "no_floor": {
-        "run_group": "humanoidmaze-large-cf-ablation-nofloor-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nofloor-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-nofloor-task{task}-1m",
         "description": "consensus_floor=0 disables the batch-relative scale-free floor (closest controlled switch). Distill target remains q_grad/(||q_grad||+1e-6) unit normalization; not a raw-gradient ablation.",
         "expected_flags": {
           "guidance_coef": 0.5,
@@ -5687,101 +5952,146 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.66,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nofloor-1m/sd000_20260716_182545",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.659659994,
-              "conflict_kill_frac_last_mean": 0.5434382135,
-              "residual_damp_last_mean": 0.9761042125000003,
-              "guidance_retained_last_mean": 0.968449115,
-              "behavior_conflict_fraction_last_mean": 0.3859375,
-              "safe_w_norm_last_mean": 0.6385434245,
-              "w_norm_last_mean": 0.659664082,
-              "consensus_target_norm_last_mean": 0.9999896940000002
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.86,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nofloor-1m/sd001_20260716_183416",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6556859309999999,
-              "conflict_kill_frac_last_mean": 0.548532618,
-              "residual_damp_last_mean": 0.9766014665,
-              "guidance_retained_last_mean": 0.969351037,
-              "behavior_conflict_fraction_last_mean": 0.3845703125,
-              "safe_w_norm_last_mean": 0.6352878529999999,
-              "w_norm_last_mean": 0.6556958325,
-              "consensus_target_norm_last_mean": 0.9999896095
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.88,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nofloor-1m/sd002_20260716_183416",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6574761035,
-              "conflict_kill_frac_last_mean": 0.5463928185,
-              "residual_damp_last_mean": 0.9762886680000001,
-              "guidance_retained_last_mean": 0.9692534580000001,
-              "behavior_conflict_fraction_last_mean": 0.3751953125,
-              "safe_w_norm_last_mean": 0.637026195,
-              "w_norm_last_mean": 0.6574780865000001,
-              "consensus_target_norm_last_mean": 0.9999899324999999
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 10
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nofloor-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.7999999999999999,
-        "std": 0.12165525060596437,
-        "bootstrap_ci": {
-          "mean": 0.7999999999999999,
-          "ci_low": 0.66,
-          "ci_high": 0.88,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       },
       "no_crf": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-1m",
-        "description": "Combined safety-off ablation: conflict_power=0, residual_coef=0, consensus_floor=0 (guidance_coef retained at 0.5)",
+        "run_group_template": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task{task}",
+        "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task{task}",
+        "description": "Combined safety-off ablation: conflict_power=0, residual_coef=0, consensus_floor=0 (guidance_coef retained at 0.5); reuse OGBench-50 @1M",
         "expected_flags": {
           "guidance_coef": 0.5,
           "distill_coef": 1.0,
@@ -5790,104 +6100,186 @@
           "residual_coef": 0.0,
           "ensemble_ct": 10
         },
-        "reuse_from_2m": false,
+        "reuse_from_2m": true,
         "seeds": [
           {
             "seed": 0,
-            "success": 0.84,
+            "success": 0.368,
             "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-1m/sd000_20260718_072824",
             "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6581976280000001,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983680000002,
-              "behavior_conflict_fraction_last_mean": 0.3908203125,
-              "safe_w_norm_last_mean": 0.6581976355000001,
-              "w_norm_last_mean": 0.658206346,
-              "consensus_target_norm_last_mean": 0.9999892564999999
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "n_tasks": 5,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task1",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task1/sd000_20260720_161509",
+                "success": 0.86,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task2",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task2/sd000_20260720_161744",
+                "success": 0.14,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task3",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task3/sd000_20260720_161843",
+                "success": 0.04,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task4",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task4/sd000_20260720_161858",
+                "success": 0.1,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task5",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task5/sd000_20260720_162253",
+                "success": 0.7,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.88,
+            "success": 0.43200000000000005,
             "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-1m/sd001_20260718_072824",
             "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6555162834999999,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.999998362,
-              "behavior_conflict_fraction_last_mean": 0.40390625,
-              "safe_w_norm_last_mean": 0.655516274,
-              "w_norm_last_mean": 0.6555209774999999,
-              "consensus_target_norm_last_mean": 0.9999898645000002
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "n_tasks": 5,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task1",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task1/sd001_20260720_203959",
+                "success": 0.88,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task2",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task2/sd001_20260720_205948",
+                "success": 0.08,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task3",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task3/sd001_20260720_211124",
+                "success": 0.3,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task4",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task4/sd001_20260720_211324",
+                "success": 0.2,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task5",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task5/sd001_20260720_211333",
+                "success": 0.7,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.84,
+            "success": 0.476,
             "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-1m/sd002_20260718_072824",
             "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6568900424999999,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983734999999,
-              "behavior_conflict_fraction_last_mean": 0.3796875,
-              "safe_w_norm_last_mean": 0.6568900304999999,
-              "w_norm_last_mean": 0.6569025204999999,
-              "consensus_target_norm_last_mean": 0.9999901650000002
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 10
-            }
+            "n_tasks": 5,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task1",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task1/sd002_20260721_011637",
+                "success": 0.94,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task2",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task2/sd002_20260721_013047",
+                "success": 0.14,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task3",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task3/sd002_20260721_013445",
+                "success": 0.22,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task4",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task4/sd002_20260721_014109",
+                "success": 0.54,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task5",
+                "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/ogbench50-dflrql9-nocrf-humanoidmaze_large_task5/sd002_20260721_014549",
+                "success": 0.54,
+                "mode": "final_checkpoint",
+                "max_step": 2000000,
+                "flags_match": true
+              }
+            ]
           }
         ],
         "n_complete_matched": 3,
-        "mean": 0.8533333333333334,
-        "std": 0.02309401076758505,
+        "mean": 0.42533333333333334,
+        "std": 0.05430776494511013,
         "bootstrap_ci": {
-          "mean": 0.8533333333333334,
-          "ci_low": 0.84,
-          "ci_high": 0.88,
+          "mean": 0.42533333333333334,
+          "ci_low": 0.36800000000000005,
+          "ci_high": 0.476,
           "n": 3,
           "n_boot": 10000,
           "alpha": 0.05
         }
       },
       "nocrf_k2": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-k2-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-k2-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task{task}-1m",
         "description": "no_crf + ensemble_ct=2 (K=2 under p=\u03b2=c=0)",
         "expected_flags": {
           "guidance_coef": 0.5,
@@ -5901,100 +6293,145 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.76,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-k2-1m/sd000_20260718_204801",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.7264592870000001,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999985499999999,
-              "behavior_conflict_fraction_last_mean": 0.386328125,
-              "safe_w_norm_last_mean": 0.726459283,
-              "w_norm_last_mean": 0.726713425,
-              "consensus_target_norm_last_mean": 0.9999919505000001
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 2
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.62,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-k2-1m/sd001_20260718_204802",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.728546822,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999985644999999,
-              "behavior_conflict_fraction_last_mean": 0.3953125,
-              "safe_w_norm_last_mean": 0.72854682,
-              "w_norm_last_mean": 0.7286697639999999,
-              "consensus_target_norm_last_mean": 0.9999922864999998
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 2
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.5,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-k2-1m/sd002_20260718_204802",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.7338179085,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999985604999999,
-              "behavior_conflict_fraction_last_mean": 0.3650390625,
-              "safe_w_norm_last_mean": 0.733817908,
-              "w_norm_last_mean": 0.7340327830000002,
-              "consensus_target_norm_last_mean": 0.9999922189999999
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 2
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.6266666666666666,
-        "std": 0.13012814197295425,
-        "bootstrap_ci": {
-          "mean": 0.6266666666666666,
-          "ci_low": 0.5,
-          "ci_high": 0.7600000000000001,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       },
       "nocrf_k5": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-k5-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-k5-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task{task}-1m",
         "description": "no_crf + ensemble_ct=5 (K=5 under p=\u03b2=c=0)",
         "expected_flags": {
           "guidance_coef": 0.5,
@@ -6008,100 +6445,145 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.9,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-k5-1m/sd000_20260718_204800",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6719878015,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999984255,
-              "behavior_conflict_fraction_last_mean": 0.384375,
-              "safe_w_norm_last_mean": 0.671987801,
-              "w_norm_last_mean": 0.6720004289999999,
-              "consensus_target_norm_last_mean": 0.9999899204999998
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 5
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.84,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-k5-1m/sd001_20260718_204800",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.669285256,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999984049999998,
-              "behavior_conflict_fraction_last_mean": 0.3939453125,
-              "safe_w_norm_last_mean": 0.669285259,
-              "w_norm_last_mean": 0.6693146345,
-              "consensus_target_norm_last_mean": 0.9999905029999999
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 5
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.78,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-k5-1m/sd002_20260718_204759",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6771723719999999,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999984255,
-              "behavior_conflict_fraction_last_mean": 0.3849609375,
-              "safe_w_norm_last_mean": 0.6771723780000001,
-              "w_norm_last_mean": 0.6771769544999999,
-              "consensus_target_norm_last_mean": 0.9999909309999999
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 5
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.84,
-        "std": 0.06,
-        "bootstrap_ci": {
-          "mean": 0.84,
-          "ci_low": 0.7799999999999999,
-          "ci_high": 0.9,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       },
       "nocrf_k20": {
-        "run_group": "humanoidmaze-large-cf-ablation-nocrf-k20-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-nocrf-k20-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task{task}-1m",
         "description": "no_crf + ensemble_ct=20 (K=20 under p=\u03b2=c=0)",
         "expected_flags": {
           "guidance_coef": 0.5,
@@ -6115,100 +6597,145 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.94,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-k20-1m/sd000_20260718_204802",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6395876654999999,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983240000001,
-              "behavior_conflict_fraction_last_mean": 0.4017578125,
-              "safe_w_norm_last_mean": 0.639587679,
-              "w_norm_last_mean": 0.6396015955,
-              "consensus_target_norm_last_mean": 0.9999882374999999
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 20
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.84,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-k20-1m/sd001_20260718_204802",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6448939205,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.9999983225000001,
-              "behavior_conflict_fraction_last_mean": 0.3880859375,
-              "safe_w_norm_last_mean": 0.6448939155000001,
-              "w_norm_last_mean": 0.644910774,
-              "consensus_target_norm_last_mean": 0.9999897005000001
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 20
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.78,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-nocrf-k20-1m/sd002_20260718_204802",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6412268269999999,
-              "conflict_kill_frac_last_mean": 0.0,
-              "residual_damp_last_mean": 1.0,
-              "guidance_retained_last_mean": 0.999998322,
-              "behavior_conflict_fraction_last_mean": 0.3876953125,
-              "safe_w_norm_last_mean": 0.6412268329999999,
-              "w_norm_last_mean": 0.6412299515,
-              "consensus_target_norm_last_mean": 0.9999892709999999
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.0,
-              "conflict_power": 0.0,
-              "residual_coef": 0.0,
-              "ensemble_ct": 20
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.8533333333333332,
-        "std": 0.08082903768654756,
-        "bootstrap_ci": {
-          "mean": 0.8533333333333332,
-          "ci_low": 0.7799999999999999,
-          "ci_high": 0.94,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       },
       "single_critic": {
-        "run_group": "humanoidmaze-large-cf-ablation-singlecritic-1m",
+        "run_group_template": "ogbench-hl5-cf-ablation-singlecritic-task{task}-1m",
+        "run_group": "ogbench-hl5-cf-ablation-singlecritic-task{task}-1m",
         "description": "ensemble_ct=1 (single critic; consensus/trust signals collapse)",
         "expected_flags": {
           "guidance_coef": 0.5,
@@ -6222,415 +6749,260 @@
         "seeds": [
           {
             "seed": 0,
-            "success": 0.0,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-singlecritic-1m/sd000_20260716_190215",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6648429305,
-              "conflict_kill_frac_last_mean": 0.5284606074999999,
-              "residual_damp_last_mean": 0.9853000405000001,
-              "guidance_retained_last_mean": 0.9766134369999999,
-              "behavior_conflict_fraction_last_mean": 0.4939453125,
-              "safe_w_norm_last_mean": 0.6491361975000001,
-              "w_norm_last_mean": 0.6661269914999999,
-              "consensus_target_norm_last_mean": 0.9560905975
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 1
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 1,
-            "success": 0.0,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-singlecritic-1m/sd001_20260716_190415",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6825058055000001,
-              "conflict_kill_frac_last_mean": 0.5018158770000001,
-              "residual_damp_last_mean": 0.9850853325000003,
-              "guidance_retained_last_mean": 0.9767891250000001,
-              "behavior_conflict_fraction_last_mean": 0.5064453125,
-              "safe_w_norm_last_mean": 0.666475103,
-              "w_norm_last_mean": 0.6840764965,
-              "consensus_target_norm_last_mean": 0.9427570405000001
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 1
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           },
           {
             "seed": 2,
-            "success": 0.0,
-            "mode": "final_checkpoint",
-            "max_step": 1000000,
-            "run_dir": "/workspace-SR008.nfs2/users/staroverov/B1K/B1K_AIRI/submodules/rql/exp/rql/humanoidmaze-large-cf-ablation-singlecritic-1m/sd002_20260716_192515",
-            "flags_match": true,
-            "diagnostics": {
-              "trust_last_mean": 0.6932949115,
-              "conflict_kill_frac_last_mean": 0.4930387815,
-              "residual_damp_last_mean": 0.9856287974999999,
-              "guidance_retained_last_mean": 0.9763994469999998,
-              "behavior_conflict_fraction_last_mean": 0.5189453125,
-              "safe_w_norm_last_mean": 0.6768144475000001,
-              "w_norm_last_mean": 0.6947176655,
-              "consensus_target_norm_last_mean": 0.9361659635
-            },
-            "offline_steps": 1000000,
-            "agent_flags": {
-              "guidance_coef": 0.5,
-              "distill_coef": 1.0,
-              "consensus_floor": 0.01,
-              "conflict_power": 2.0,
-              "residual_coef": 0.25,
-              "ensemble_ct": 1
-            }
+            "success": null,
+            "mode": "incomplete_tasks",
+            "flags_match": false,
+            "n_tasks": 0,
+            "tasks": [
+              {
+                "task": 1,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task1-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 2,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task2-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 3,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task3-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 4,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task4-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              },
+              {
+                "task": 5,
+                "run_group": "ogbench-hl5-cf-ablation-singlecritic-task5-1m",
+                "success": null,
+                "mode": "missing_run_group",
+                "flags_match": false
+              }
+            ]
           }
         ],
-        "n_complete_matched": 3,
-        "mean": 0.0,
-        "std": 0.0,
-        "bootstrap_ci": {
-          "mean": 0.0,
-          "ci_low": 0.0,
-          "ci_high": 0.0,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "n_complete_matched": 0,
+        "mean": null,
+        "std": null,
+        "bootstrap_ci": null
       }
     },
-    "protocol_note": "Do not compare mismatched budgets as equivalent. Ablation suite uses a common budget; full method is reused from humanoidmaze-large-dflrql9-2m only when flags exactly match v9 defaults and the exact final checkpoint at the ablation budget exists. OGBench paper values require exact 2,000,000-step checkpoints; the 1M suite is short-budget evidence, not a protocol-equivalent substitute.",
+    "protocol_note": "Table-4 protocol: OGBench humanoidmaze-large tasks 1\u20135, seeds 0\u20132, exact final checkpoint at 1000000. Per seed, success is the mean over the five tasks; table mean\u00b1std is over those seed means. full/no_crf reuse existing OGBench-50 run groups at the same step.",
     "comparisons_vs_full": {
       "no_guidance": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": 0.0666666666666667,
-          "std_delta": 0.04163331998932265,
-          "paired_t": {
-            "statistic": 2.7735009811261473,
-            "pvalue": 0.10912919362525195
-          },
-          "wilcoxon": {
-            "statistic": 0.0,
-            "pvalue": 0.25
-          },
-          "win_loss_tie": {
-            "win": 3,
-            "loss": 0,
-            "tie": 0
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": 0.0666666666666667,
-          "ci_low": 0.020000000000000018,
-          "ci_high": 0.09999999999999998,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       },
       "lambda02": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": 0.0,
-          "std_delta": 0.040000000000000036,
-          "paired_t": {
-            "statistic": 0.0,
-            "pvalue": 1.0
-          },
-          "wilcoxon": {
-            "statistic": 1.5,
-            "pvalue": 1.0
-          },
-          "win_loss_tie": {
-            "win": 1,
-            "loss": 1,
-            "tie": 1
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": 0.0,
-          "ci_low": -0.040000000000000036,
-          "ci_high": 0.040000000000000036,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       },
       "lambda10": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": -0.026666666666666655,
-          "std_delta": 0.041633319989322674,
-          "paired_t": {
-            "statistic": -1.1094003924504572,
-            "pvalue": 0.38278660015163274
-          },
-          "wilcoxon": {
-            "statistic": 1.0,
-            "pvalue": 0.5
-          },
-          "win_loss_tie": {
-            "win": 1,
-            "loss": 2,
-            "tie": 0
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": -0.026666666666666655,
-          "ci_low": -0.06000000000000005,
-          "ci_high": 0.020000000000000018,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       },
       "no_conflict": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": -0.04,
-          "std_delta": 0.034641016151377546,
-          "paired_t": {
-            "statistic": -2.0,
-            "pvalue": 0.18350341907227397
-          },
-          "wilcoxon": {
-            "statistic": 0.0,
-            "pvalue": 0.5
-          },
-          "win_loss_tie": {
-            "win": 0,
-            "loss": 2,
-            "tie": 1
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": -0.04,
-          "ci_low": -0.06000000000000005,
-          "ci_high": 0.0,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       },
       "no_residual": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": -0.046666666666666634,
-          "std_delta": 0.11372481406154658,
-          "paired_t": {
-            "statistic": -0.7107423155935325,
-            "pvalue": 0.5509497906302915
-          },
-          "wilcoxon": {
-            "statistic": 2.0,
-            "pvalue": 0.75
-          },
-          "win_loss_tie": {
-            "win": 1,
-            "loss": 2,
-            "tie": 0
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": -0.046666666666666634,
-          "ci_low": -0.14,
-          "ci_high": 0.08000000000000007,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       },
       "no_floor": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": -0.026666666666666655,
-          "std_delta": 0.13316656236958785,
-          "paired_t": {
-            "statistic": -0.34684398780964787,
-            "pvalue": 0.7618034663298346
-          },
-          "wilcoxon": {
-            "statistic": 2.0,
-            "pvalue": 0.75
-          },
-          "win_loss_tie": {
-            "win": 1,
-            "loss": 2,
-            "tie": 0
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": -0.026666666666666655,
-          "ci_low": -0.14,
-          "ci_high": 0.12,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       },
       "no_crf": {
         "full_minus_ablation_paired_tests": {
           "n_paired": 3,
-          "mean_delta": -0.07999999999999996,
-          "std_delta": 0.020000000000000018,
+          "mean_delta": -0.006666666666666654,
+          "std_delta": 0.08431686268673262,
           "paired_t": {
-            "statistic": -6.928203230275499,
-            "pvalue": 0.02020410288672882
+            "statistic": -0.136947758916194,
+            "pvalue": 0.9036141780056267
           },
           "wilcoxon": {
-            "statistic": 0.0,
-            "pvalue": 0.25
+            "statistic": 3.0,
+            "pvalue": 1.0
           },
           "win_loss_tie": {
-            "win": 0,
-            "loss": 3,
+            "win": 2,
+            "loss": 1,
             "tie": 0
           }
         },
         "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": -0.07999999999999996,
-          "ci_low": -0.09999999999999998,
-          "ci_high": -0.05999999999999994,
+          "mean_delta": -0.006666666666666654,
+          "ci_low": -0.10399999999999993,
+          "ci_high": 0.04399999999999993,
           "n": 3,
           "n_boot": 10000,
           "alpha": 0.05
-        }
+        },
+        "n_paired_seeds": 3
       },
       "nocrf_k2": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": 0.1466666666666667,
-          "std_delta": 0.11372481406154653,
-          "paired_t": {
-            "statistic": 2.2337615632939625,
-            "pvalue": 0.15509509009317451
-          },
-          "wilcoxon": {
-            "statistic": 0.0,
-            "pvalue": 0.25
-          },
-          "win_loss_tie": {
-            "win": 3,
-            "loss": 0,
-            "tie": 0
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": 0.1466666666666667,
-          "ci_low": 0.020000000000000018,
-          "ci_high": 0.24,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       },
       "nocrf_k5": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": -0.06666666666666665,
-          "std_delta": 0.04618802153517007,
-          "paired_t": {
-            "statistic": -2.499999999999999,
-            "pvalue": 0.12961172022151088
-          },
-          "wilcoxon": {
-            "statistic": 0.0,
-            "pvalue": 0.25
-          },
-          "win_loss_tie": {
-            "win": 0,
-            "loss": 3,
-            "tie": 0
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": -0.06666666666666665,
-          "ci_low": -0.12,
-          "ci_high": -0.039999999999999925,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       },
       "nocrf_k20": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": -0.07999999999999996,
-          "std_delta": 0.06928203230275505,
-          "paired_t": {
-            "statistic": -2.0,
-            "pvalue": 0.18350341907227397
-          },
-          "wilcoxon": {
-            "statistic": 0.0,
-            "pvalue": 0.25
-          },
-          "win_loss_tie": {
-            "win": 0,
-            "loss": 3,
-            "tie": 0
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": -0.07999999999999996,
-          "ci_low": -0.15999999999999992,
-          "ci_high": -0.039999999999999925,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       },
       "single_critic": {
         "full_minus_ablation_paired_tests": {
-          "n_paired": 3,
-          "mean_delta": 0.7733333333333334,
-          "std_delta": 0.03055050463303896,
-          "paired_t": {
-            "statistic": 43.84387886907032,
-            "pvalue": 0.0005198084485927583
-          },
-          "wilcoxon": {
-            "statistic": 0.0,
-            "pvalue": 0.25
-          },
-          "win_loss_tie": {
-            "win": 3,
-            "loss": 0,
-            "tie": 0
-          }
+          "n_paired": 0,
+          "note": "insufficient paired samples"
         },
-        "full_minus_ablation_bootstrap_ci": {
-          "mean_delta": 0.7733333333333334,
-          "ci_low": 0.7399999999999999,
-          "ci_high": 0.8000000000000002,
-          "n": 3,
-          "n_boot": 10000,
-          "alpha": 0.05
-        }
+        "full_minus_ablation_bootstrap_ci": null,
+        "n_paired_seeds": 0
       }
     }
   },
   "ablation_switch_documentation": {
     "full": {
-      "run_group": "humanoidmaze-large-dflrql9-2m",
-      "description": "Full ConsensusFlow/v9 defaults (reused from matched 2M runs)",
+      "run_group": "ogbench50-dflrql9-humanoidmaze_large_task{task}",
+      "description": "Full ConsensusFlow/v9 defaults (OGBench HL tasks; reuse @1M)",
       "flags": {
         "guidance_coef": 0.5,
         "distill_coef": 1.0,
@@ -6641,7 +7013,7 @@
       }
     },
     "no_guidance": {
-      "run_group": "humanoidmaze-large-cf-ablation-noguidance-1m",
+      "run_group": "ogbench-hl5-cf-ablation-noguidance-task{task}-1m",
       "description": "guidance_coef=0 (no guidance term at train/sample)",
       "flags": {
         "guidance_coef": 0.0,
@@ -6653,7 +7025,7 @@
       }
     },
     "lambda02": {
-      "run_group": "humanoidmaze-large-cf-ablation-nocrf-lambda02-1m",
+      "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda02-task{task}-1m",
       "description": "guidance_coef=0.2 under no-CRF safety-off (conflict_power=0, residual_coef=0, consensus_floor=0)",
       "flags": {
         "guidance_coef": 0.2,
@@ -6665,7 +7037,7 @@
       }
     },
     "lambda10": {
-      "run_group": "humanoidmaze-large-cf-ablation-nocrf-lambda10-1m",
+      "run_group": "ogbench-hl5-cf-ablation-nocrf-lambda10-task{task}-1m",
       "description": "guidance_coef=1.0 under no-CRF safety-off (conflict_power=0, residual_coef=0, consensus_floor=0)",
       "flags": {
         "guidance_coef": 1.0,
@@ -6677,7 +7049,7 @@
       }
     },
     "no_conflict": {
-      "run_group": "humanoidmaze-large-cf-ablation-noconflict-1m",
+      "run_group": "ogbench-hl5-cf-ablation-noconflict-task{task}-1m",
       "description": "conflict_power=0 \u2192 kill_frac=1-trust^0=0 for all trust (disables trust-weighted BC-conflict projection; residual damping remains)",
       "flags": {
         "guidance_coef": 0.5,
@@ -6689,7 +7061,7 @@
       }
     },
     "no_residual": {
-      "run_group": "humanoidmaze-large-cf-ablation-noresidual-1m",
+      "run_group": "ogbench-hl5-cf-ablation-noresidual-task{task}-1m",
       "description": "residual_coef=0 (disables residual damping when BC aligns)",
       "flags": {
         "guidance_coef": 0.5,
@@ -6701,7 +7073,7 @@
       }
     },
     "no_floor": {
-      "run_group": "humanoidmaze-large-cf-ablation-nofloor-1m",
+      "run_group": "ogbench-hl5-cf-ablation-nofloor-task{task}-1m",
       "description": "consensus_floor=0 disables the batch-relative scale-free floor (closest controlled switch). Distill target remains q_grad/(||q_grad||+1e-6) unit normalization; not a raw-gradient ablation.",
       "flags": {
         "guidance_coef": 0.5,
@@ -6713,8 +7085,8 @@
       }
     },
     "no_crf": {
-      "run_group": "humanoidmaze-large-cf-ablation-nocrf-1m",
-      "description": "Combined safety-off ablation: conflict_power=0, residual_coef=0, consensus_floor=0 (guidance_coef retained at 0.5)",
+      "run_group": "ogbench50-dflrql9-nocrf-humanoidmaze_large_task{task}",
+      "description": "Combined safety-off ablation: conflict_power=0, residual_coef=0, consensus_floor=0 (guidance_coef retained at 0.5); reuse OGBench-50 @1M",
       "flags": {
         "guidance_coef": 0.5,
         "distill_coef": 1.0,
@@ -6725,7 +7097,7 @@
       }
     },
     "nocrf_k2": {
-      "run_group": "humanoidmaze-large-cf-ablation-nocrf-k2-1m",
+      "run_group": "ogbench-hl5-cf-ablation-nocrf-k2-task{task}-1m",
       "description": "no_crf + ensemble_ct=2 (K=2 under p=\u03b2=c=0)",
       "flags": {
         "guidance_coef": 0.5,
@@ -6737,7 +7109,7 @@
       }
     },
     "nocrf_k5": {
-      "run_group": "humanoidmaze-large-cf-ablation-nocrf-k5-1m",
+      "run_group": "ogbench-hl5-cf-ablation-nocrf-k5-task{task}-1m",
       "description": "no_crf + ensemble_ct=5 (K=5 under p=\u03b2=c=0)",
       "flags": {
         "guidance_coef": 0.5,
@@ -6749,7 +7121,7 @@
       }
     },
     "nocrf_k20": {
-      "run_group": "humanoidmaze-large-cf-ablation-nocrf-k20-1m",
+      "run_group": "ogbench-hl5-cf-ablation-nocrf-k20-task{task}-1m",
       "description": "no_crf + ensemble_ct=20 (K=20 under p=\u03b2=c=0)",
       "flags": {
         "guidance_coef": 0.5,
@@ -6761,7 +7133,7 @@
       }
     },
     "single_critic": {
-      "run_group": "humanoidmaze-large-cf-ablation-singlecritic-1m",
+      "run_group": "ogbench-hl5-cf-ablation-singlecritic-task{task}-1m",
       "description": "ensemble_ct=1 (single critic; consensus/trust signals collapse)",
       "flags": {
         "guidance_coef": 0.5,

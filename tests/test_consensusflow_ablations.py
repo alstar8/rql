@@ -118,6 +118,35 @@ def test_final_checkpoint_from_run_uses_only_exact_step(tmp_path):
     missing = mod.final_checkpoint_from_run(tmp_path, 2_000_000)
     assert missing.mode == "missing_final_checkpoint"
     assert missing.success is None
+
+    # Resume-from-checkpoint artifact: first eval at budget+1.
+    with eval_csv.open("w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "step",
+                "evaluation/success",
+                "evaluation/episode.return",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(
+            [
+                {
+                    "step": 1_000_001,
+                    "evaluation/success": 0.55,
+                    "evaluation/episode.return": 5.5,
+                },
+                {
+                    "step": 1_100_000,
+                    "evaluation/success": 0.6,
+                    "evaluation/episode.return": 6.0,
+                },
+            ]
+        )
+    resumed = mod.final_checkpoint_from_run(tmp_path, 1_000_000)
+    assert resumed.mode == "final_checkpoint"
+    assert resumed.success == pytest.approx(0.55)
     assert missing.max_step == 1_000_000
 
 
@@ -171,6 +200,10 @@ def test_ablation_specs_document_switches():
         assert mod.ABLATION_SPECS[name]["flags"]["consensus_floor"] == 0.0
     assert mod.ABLATION_SPECS["single_critic"]["flags"]["ensemble_ct"] == 1
     assert mod.ABLATION_SPECS["full"]["reuse_from_2m"] is True
+    assert "run_group_template" in mod.ABLATION_SPECS["full"]
+    assert "{task}" in mod.ABLATION_SPECS["full"]["run_group_template"]
+    assert mod.ABLATION_TASKS == (1, 2, 3, 4, 5)
+    assert "task{task}" in mod.ABLATION_ENV_TEMPLATE
 
 
 def test_flags_match_expected():
@@ -197,5 +230,5 @@ def test_final_checkpoint_csv_loader_if_present():
         pytest.skip("source CSV missing")
     agg = mod.load_source_csv_task_means(csv_path)
     assert agg["baseline"]["n_tasks"] == 50
-    assert abs(agg["baseline"]["grand_mean"] - 0.5386666666666666) < 1e-6
-    assert abs(agg["v9"]["grand_mean"] - 0.5937333333333332) < 1e-6
+    assert abs(agg["baseline"]["grand_mean"] - 0.5506666666666666) < 1e-6
+    assert abs(agg["v9"]["grand_mean"] - 0.5933333333333334) < 1e-6

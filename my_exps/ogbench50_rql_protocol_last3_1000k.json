@@ -1,0 +1,139 @@
+{
+  "protocol": "rql_validation_last3",
+  "protocol_definition": {
+    "source": "benchmarks/ogbench50_tasks.json eval_protocol",
+    "metric": "mean evaluation/success over last three 100k-spaced checkpoints",
+    "checkpoints": [
+      800000,
+      900000,
+      1000000
+    ],
+    "checkpoint_label": "800k/900k/1000k",
+    "eval_episodes": 50,
+    "n_tasks": 50,
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "aggregation": "per (task, seed) last3 mean \u2192 mean over seeds \u2192 mean over 50 tasks; headline seed_std is std of per-seed 50-task means",
+    "note": "RQL paper reports 4 seeds; local CF / CF-noCRF currently have seeds {0,1,2}. Matched comparison uses the shared seed set."
+  },
+  "report_step": 1000000,
+  "methods": {
+    "RQL": {
+      "label": "RQL baseline",
+      "csv_key": "baseline",
+      "grand_mean": 0.552,
+      "seed_std": 0.018106188833492076,
+      "per_seed_50task_means": [
+        0.5354666666666666,
+        0.5771999999999999,
+        0.5433333333333333
+      ],
+      "coverage": {
+        "tasks_with_any_seed": 50,
+        "tasks_with_all_seeds": 50,
+        "n_seeds_requested": 3
+      },
+      "domain_means": {
+        "antmaze-giant": 0.37244444444444447,
+        "antmaze-large": 0.8235555555555555,
+        "cube-double": 0.21066666666666664,
+        "cube-quadruple": 0.5115555555555555,
+        "cube-triple": 0.04533333333333333,
+        "humanoidmaze-large": 0.3808888888888889,
+        "humanoidmaze-medium": 0.9119999999999999,
+        "puzzle-3x3": 1.0,
+        "puzzle-4x4": 0.39066666666666666,
+        "scene": 0.8728888888888889
+      }
+    },
+    "CF": {
+      "label": "ConsensusFlow (dflrql9)",
+      "csv_key": "v9",
+      "grand_mean": 0.5660000000000001,
+      "seed_std": 0.007563655788630854,
+      "per_seed_50task_means": [
+        0.5634666666666667,
+        0.5762666666666667,
+        0.5582666666666667
+      ],
+      "coverage": {
+        "tasks_with_any_seed": 50,
+        "tasks_with_all_seeds": 50,
+        "n_seeds_requested": 3
+      },
+      "domain_means": {
+        "antmaze-giant": 0.26888888888888884,
+        "antmaze-large": 0.8693333333333333,
+        "cube-double": 0.3702222222222223,
+        "cube-quadruple": 0.5328888888888889,
+        "cube-triple": 0.042222222222222223,
+        "humanoidmaze-large": 0.36533333333333334,
+        "humanoidmaze-medium": 0.924,
+        "puzzle-3x3": 1.0,
+        "puzzle-4x4": 0.32,
+        "scene": 0.9671111111111111
+      }
+    },
+    "CF_noCRF": {
+      "label": "ConsensusFlow no-CRF",
+      "csv_key": "v9_nocrf",
+      "grand_mean": 0.5702666666666666,
+      "seed_std": 0.004945929864264381,
+      "per_seed_50task_means": [
+        0.5633333333333334,
+        0.5745333333333333,
+        0.5729333333333334
+      ],
+      "coverage": {
+        "tasks_with_any_seed": 50,
+        "tasks_with_all_seeds": 50,
+        "n_seeds_requested": 3
+      },
+      "domain_means": {
+        "antmaze-giant": 0.2226666666666667,
+        "antmaze-large": 0.8853333333333333,
+        "cube-double": 0.40088888888888885,
+        "cube-quadruple": 0.5382222222222222,
+        "cube-triple": 0.041333333333333326,
+        "humanoidmaze-large": 0.3773333333333333,
+        "humanoidmaze-medium": 0.9480000000000001,
+        "puzzle-3x3": 1.0,
+        "puzzle-4x4": 0.31555555555555553,
+        "scene": 0.9733333333333334
+      }
+    }
+  },
+  "comparisons": {
+    "CF_minus_RQL": {
+      "n": 50,
+      "mean_delta": 0.013999999999999999,
+      "win_loss_tie": {
+        "win": 30,
+        "loss": 14,
+        "tie": 6
+      }
+    },
+    "CF_noCRF_minus_RQL": {
+      "n": 50,
+      "mean_delta": 0.018266666666666657,
+      "win_loss_tie": {
+        "win": 25,
+        "loss": 18,
+        "tie": 7
+      }
+    },
+    "CF_minus_CF_noCRF": {
+      "n": 50,
+      "mean_delta": -0.004266666666666666,
+      "win_loss_tie": {
+        "win": 20,
+        "loss": 23,
+        "tie": 7
+      }
+    }
+  },
+  "generated_utc": "2026-07-21T08:30:26Z"
+}

@@ -56,7 +56,7 @@ def test_pure_qflow_series_separation_and_defaults():
     assert DEFAULT_PURE_QFLOW_PHASE2_GROUP.endswith("qflow-online-2m")
     assert PURE_QFLOW_ONLINE_START_STEP == 1_000_000
     assert DEFAULT_PLOT_MAX_STEP == 2_000_000
-    assert DEFAULT_ONLINE_PLOT_MAX_STEP == 4_100_000
+    assert DEFAULT_ONLINE_PLOT_MAX_STEP == 2_000_000
 
 
 def test_pure_qflow_piecewise_join_at_1m(tmp_path: Path):
