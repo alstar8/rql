@@ -157,6 +157,24 @@ def test_actor_update_changes_actor_not_critic_or_teacher():
     )
     assert float(info["actor_entropy_per_register"]) >= 0.0
     assert float(info["actor_reference_kl"]) >= -1e-5
+    # Advantage normalization keeps the SAC loss O(1), not O(|v_min|).
+    assert abs(float(info["actor_sac_loss"])) < 20.0
+    assert abs(float(info["actor_advantage_mean"])) < 1e-5
+
+
+def test_actor_loss_not_dominated_by_raw_q_scale():
+    """KL/entropy must remain visible against large negative C51 values."""
+    agent = _create_agent(v_min=-200.0, v_max=0.0, num_atoms=21, offline_kl_coef=1.0)
+    agent = agent.with_offline_reference()
+    batch = _batch()
+    # Warm a critic so Q is nonzero, then check loss scale.
+    for _ in range(5):
+        agent, _ = agent.critic_update(batch)
+    _, info = agent.actor_update(batch)
+    assert finite_info(info)
+    assert abs(float(info["actor_sac_loss"])) < 20.0
+    # Without normalization, loss ≈ -Q ≈ 100+; with it, KL can move the loss.
+    assert float(info["actor_reference_kl"]) >= -1e-5
 
 
 def test_st_forward_codes_are_exact_codebook_entries():

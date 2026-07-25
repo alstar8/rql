@@ -145,7 +145,11 @@ def _restore_prng_key(values, *, fallback_seed: int):
 
 
 class AppendCsvLogger(CsvLogger):
-    """CsvLogger that appends on resume instead of truncating."""
+    """CsvLogger that appends on resume instead of truncating.
+
+    Opens the path for each write (no long-lived fd) so NFS replace/rsync of
+    ``eval.csv`` cannot leave the logger writing into a deleted ``.nfs*`` orphan.
+    """
 
     def log(self, row, step):
         row = dict(row)
@@ -153,23 +157,28 @@ class AppendCsvLogger(CsvLogger):
         filtered_row = {
             k: v for k, v in row.items() if self._is_row_scalar(v)
         }
-        if self.file is None:
-            path_exists = os.path.isfile(self.path) and os.path.getsize(self.path) > 0
-            if path_exists:
+        path_exists = os.path.isfile(self.path) and os.path.getsize(self.path) > 0
+        if path_exists:
+            if self.header is None:
                 with open(self.path, "r") as existing:
                     header_line = existing.readline().strip()
-                self.header = header_line.split(",") if header_line else list(
-                    filtered_row.keys()
+                self.header = (
+                    header_line.split(",") if header_line else list(filtered_row.keys())
                 )
-                self.file = open(self.path, "a")
-            else:
-                self.file = open(self.path, "w")
-                self.header = list(filtered_row.keys())
-                self.file.write(",".join(self.header) + "\n")
-        self.file.write(
-            ",".join(str(filtered_row.get(k, "")) for k in self.header) + "\n"
-        )
-        self.file.flush()
+            with open(self.path, "a") as handle:
+                handle.write(
+                    ",".join(str(filtered_row.get(k, "")) for k in self.header) + "\n"
+                )
+                handle.flush()
+        else:
+            self.header = list(filtered_row.keys())
+            with open(self.path, "w") as handle:
+                handle.write(",".join(self.header) + "\n")
+                handle.write(
+                    ",".join(str(filtered_row.get(k, "")) for k in self.header) + "\n"
+                )
+                handle.flush()
+        self.file = None
 
     @staticmethod
     def _is_row_scalar(value):
@@ -398,9 +407,32 @@ def main(_):
                 blobs["online_rng_key"],
                 fallback_seed=FLAGS.seed + online_env_step + 1,
             )
+        # Checkpoints freeze agent.config; allow online knobs to be retuned
+        # without redoing the 1M offline phase (e.g. KL coef after a collapse).
+        live_config = dict(agent.config)
+        for key in (
+            "offline_kl_coef",
+            "st_temperature",
+            "target_entropy_per_register",
+            "alpha_init",
+            "alpha_min",
+            "alpha_max",
+            "alpha_lr",
+            "policy_frequency",
+            "utd",
+            "actor_ema",
+            "online_replay_fraction_max",
+            "online_replay_ramp_steps",
+            "critic_lr",
+            "critic_tau",
+        ):
+            if key in config:
+                live_config[key] = config[key]
+        agent = agent.replace(config=type(agent.config)(**live_config))
         print(
             f"Restored phase={phase} offline={offline_update_count} "
-            f"warmup={warmup_update_count} online_env={online_env_step}",
+            f"warmup={warmup_update_count} online_env={online_env_step} "
+            f"offline_kl_coef={live_config.get('offline_kl_coef')}",
             flush=True,
         )
 

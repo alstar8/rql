@@ -152,13 +152,38 @@ def train_one(
     seed: int,
     max_chunks: int,
     force: bool,
+    num_registers: int | None = None,
+    emb_dim: int | None = None,
 ):
     did = domain_id(dataset_name)
     hp = domain_hparams(did, sample_dim, base_steps)
-    out_path = save_dir / f"{did}_h{horizon}_d{sample_dim}.pkl"
-    if out_path.is_file() and not force:
-        print(f"[skip] {out_path} already exists (pass --force to overwrite)")
-        return out_path
+    if num_registers is not None:
+        if int(num_registers) < 1:
+            raise ValueError(f"num_registers must be >= 1, got {num_registers}")
+        hp["num_registers"] = int(num_registers)
+    if emb_dim is not None:
+        if int(emb_dim) < 1:
+            raise ValueError(f"emb_dim must be >= 1, got {emb_dim}")
+        hp["emb_dim"] = int(emb_dim)
+    # Include K in the filename so ablations can share a save root safely.
+    out_path = (
+        save_dir / f"{did}_h{horizon}_d{sample_dim}_K{hp['num_registers']}.pkl"
+    )
+    # Backward-compatible alias used by existing RL launchers (no K suffix).
+    legacy_path = save_dir / f"{did}_h{horizon}_d{sample_dim}.pkl"
+    if not force:
+        if out_path.is_file():
+            print(f"[skip] {out_path} already exists (pass --force to overwrite)")
+            return out_path
+        # Production checkpoints predate the _K suffix; don't silently retrain.
+        default_k = int(domain_hparams(did, sample_dim, base_steps)["num_registers"])
+        if (
+            num_registers is None
+            and int(hp["num_registers"]) == default_k
+            and legacy_path.is_file()
+        ):
+            print(f"[skip] {legacy_path} already exists (pass --force to overwrite)")
+            return legacy_path
 
     npz_path = resolve_dataset_path(data_dir, dataset_name)
     print(
@@ -269,6 +294,11 @@ def train_one(
     }
     save_dir.mkdir(parents=True, exist_ok=True)
     save_tokenizer(str(out_path), best_params, meta)
+    # Keep legacy filename only when training the domain-default K, so existing
+    # RL launchers keep working when save-dir is the production ogbench_oattok.
+    default_k = int(domain_hparams(did, sample_dim, base_steps)["num_registers"])
+    if int(hp["num_registers"]) == default_k:
+        save_tokenizer(str(legacy_path), best_params, meta)
     print(
         f"saved {out_path} best_step={best_step} "
         f"val_rmse={val_rmse:.4f} train_probe_rmse={train_rmse:.4f}"
@@ -291,6 +321,18 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-chunks", type=int, default=500000)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--num-registers",
+        type=int,
+        default=None,
+        help="Override discrete token count K (num_registers). Default: domain table.",
+    )
+    parser.add_argument(
+        "--emb-dim",
+        type=int,
+        default=None,
+        help="Override embedding width. Default: domain table.",
+    )
     parser.add_argument(
         "--domains",
         nargs="*",
@@ -324,6 +366,8 @@ def main():
             seed=args.seed,
             max_chunks=args.max_chunks,
             force=args.force,
+            num_registers=args.num_registers,
+            emb_dim=args.emb_dim,
         )
 
 

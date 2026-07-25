@@ -356,13 +356,32 @@ def load_group_by_seed(
         seed = seed_from_run_dir(run_dir)
         if seed is None:
             continue
+        # Prefer the eval curve with the most steps. Live FastSAC writers can
+        # keep appending into an NFS ``.nfs*`` orphan after rsync replaces
+        # ``eval.csv`` while the file is open.
+        candidates = []
         eval_csv = run_dir / "eval.csv"
-        if not eval_csv.is_file():
+        if eval_csv.is_file():
+            candidates.append(eval_csv)
+        for orphan in run_dir.glob(".nfs*"):
+            try:
+                head = orphan.read_text(errors="ignore")[:120]
+            except OSError:
+                continue
+            if "evaluation/success" in head or head.startswith("evaluation/"):
+                candidates.append(orphan)
+        best_rows: list[dict[str, float]] = []
+        for path in candidates:
+            rows = parse_eval_csv(path)
+            if not rows:
+                continue
+            if not best_rows or max(int(r["step"]) for r in rows) > max(
+                int(r["step"]) for r in best_rows
+            ):
+                best_rows = rows
+        if not best_rows:
             continue
-        rows = parse_eval_csv(eval_csv)
-        if not rows:
-            continue
-        per_seed.setdefault(seed, []).append(rows)
+        per_seed.setdefault(seed, []).append(best_rows)
     return {seed: merge_seed_curves(curves) for seed, curves in per_seed.items()}
 
 

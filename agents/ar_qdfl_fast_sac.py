@@ -374,10 +374,19 @@ class ARQDFLFastSACAgent(DiscreteARQdflDistillAgent):
         kl = sample["kl"].mean(axis=-1)
         alpha = jax.lax.stop_gradient(jnp.exp(self.log_alpha))
         kl_coef = jnp.asarray(self.config["offline_kl_coef"], jnp.float32)
-        loss = (-q_values - alpha * entropy + kl_coef * kl).mean()
+        # Humanoidmaze C51 values live near -200..0. Raw -Q drowns the
+        # offline KL / entropy terms (coef·KL ~ 0.05 vs |Q| ~ 100), which
+        # collapses the distilled AR policy within the first 100k online
+        # steps. Centered, unit-scale advantages keep the trust region live.
+        q_center = jax.lax.stop_gradient(q_values.mean())
+        q_scale = jax.lax.stop_gradient(jnp.maximum(q_values.std(), 1.0))
+        advantages = (q_values - q_center) / q_scale
+        loss = (-advantages - alpha * entropy + kl_coef * kl).mean()
         return loss, {
             "actor_sac_loss": loss,
             "actor_q_mean": q_values.mean(),
+            "actor_advantage_mean": advantages.mean(),
+            "actor_advantage_std": advantages.std(),
             "actor_entropy_per_register": entropy.mean(),
             "actor_reference_kl": kl.mean(),
             "actor_action_abs_mean": jnp.abs(actions).mean(),
@@ -548,7 +557,8 @@ def get_config():
             "target_entropy_per_register": 1.0,
             # Stable discrete pathwise gradient / offline trust region.
             "st_temperature": 1.0,
-            "offline_kl_coef": 0.1,
+            # With advantage normalization, O(1) KL weight is meaningful.
+            "offline_kl_coef": 1.0,
             "actor_ema": 0.999,
             # Replay schedule consumed by the dedicated runner.
             "critic_warmup_updates": 100_000,
