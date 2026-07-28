@@ -1,0 +1,86 @@
+{
+  "note": "Exact evaluation/success at step; search all seed run dirs (not only newest)",
+  "methods": {
+    "RQL": {
+      "1M offline": {
+        "n": 150,
+        "n_tasks_complete": 50,
+        "mean_task_equal": 0.5766666666666665,
+        "std_task_means": 0.3626256104211799,
+        "seed_aggs": [
+          0.5551999999999999,
+          0.6028,
+          0.5720000000000001
+        ],
+        "mean_seed_agg": 0.5766666666666667,
+        "std_seed_agg": 0.024140698691904817
+      },
+      "1M offline + 1M online": {
+        "n": 150,
+        "n_tasks_complete": 50,
+        "mean_task_equal": 0.8214666666666668,
+        "std_task_means": 0.30010158280155735,
+        "seed_aggs": [
+          0.8256000000000001,
+          0.8320000000000001,
+          0.8067999999999997
+        ],
+        "mean_seed_agg": 0.8214666666666667,
+        "std_seed_agg": 0.013098600434143274
+      },
+      "2M offline": {
+        "n": 139,
+        "n_tasks_complete": 39,
+        "mean_task_equal": 0.5516000000000001,
+        "std_task_means": 0.37664143868317695,
+        "seed_aggs": [
+          0.5668,
+          0.5732
+        ],
+        "mean_seed_agg": 0.5700000000000001,
+        "std_seed_agg": 0.004525483399593955
+      }
+    },
+    "ConsensusFlow": {
+      "1M offline": {
+        "n": 150,
+        "n_tasks_complete": 50,
+        "mean_task_equal": 0.5834666666666667,
+        "std_task_means": 0.3820883900065242,
+        "seed_aggs": [
+          0.5732,
+          0.5912,
+          0.586
+        ],
+        "mean_seed_agg": 0.5834666666666667,
+        "std_seed_agg": 0.009263548636096882
+      },
+      "1M offline + 1M online": {
+        "n": 150,
+        "n_tasks_complete": 50,
+        "mean_task_equal": 0.8591999999999999,
+        "std_task_means": 0.27499216958548717,
+        "seed_aggs": [
+          0.8656,
+          0.8508000000000001,
+          0.8611999999999999
+        ],
+        "mean_seed_agg": 0.8592,
+        "std_seed_agg": 0.007599999999999934
+      },
+      "2M offline": {
+        "n": 150,
+        "n_tasks_complete": 50,
+        "mean_task_equal": 0.5949333333333332,
+        "std_task_means": 0.3766060364182532,
+        "seed_aggs": [
+          0.5888,
+          0.6044,
+          0.5916
+        ],
+        "mean_seed_agg": 0.5949333333333334,
+        "std_seed_agg": 0.00831705075933373
+      }
+    }
+  }
+}

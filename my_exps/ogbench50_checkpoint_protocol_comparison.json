@@ -1,0 +1,962 @@
+{
+  "generated_utc": "2026-07-25T21:55:10Z",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "n_tasks": 50,
+  "definitions": {
+    "final_checkpoint": "evaluation/success at exactly report_step; mean over seeds 0-2; mean over tasks with all seeds",
+    "rql_validation_last3": "mean evaluation/success over last three 100k-spaced checkpoints ending at report_step (offsets (200000, 100000, 0)); then mean over seeds; then mean over full-seed tasks",
+    "CF_noCRF_note": "CF-noCRF uses ogbench50-dflrql9-nocrf-* offline groups. No matched *-o2o1m suite exists for CF-noCRF (o2o rows are n/a)."
+  },
+  "budgets": {
+    "offline_1m_final": {
+      "config": {
+        "key": "offline_1m_final",
+        "label": "1M offline (final checkpoint)",
+        "source": "offline",
+        "report_step": 1000000,
+        "mode": "final",
+        "protocol": "final_checkpoint"
+      },
+      "methods": {
+        "baseline": {
+          "grand_mean": 0.5695999999999999,
+          "grand_std_across_tasks": 0.3649880606875305,
+          "per_seed_50task_means": [
+            0.5588,
+            0.5784,
+            0.5716
+          ],
+          "seed_std_of_50task_means": 0.008125679458769406,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.332,
+            "antmaze-large": 0.8320000000000001,
+            "cube-double": 0.2013333333333333,
+            "cube-quadruple": 0.512,
+            "cube-triple": 0.052000000000000005,
+            "humanoidmaze-large": 0.4133333333333334,
+            "humanoidmaze-medium": 0.9880000000000001,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.5053333333333333,
+            "scene": 0.86
+          },
+          "label": "RQL",
+          "csv_key": "baseline",
+          "missing_examples": []
+        },
+        "dflrql9": {
+          "grand_mean": 0.5837333333333333,
+          "grand_std_across_tasks": 0.38231147278393596,
+          "per_seed_50task_means": [
+            0.5740000000000001,
+            0.5912,
+            0.586
+          ],
+          "seed_std_of_50task_means": 0.007202468712570352,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.24,
+            "antmaze-large": 0.8733333333333334,
+            "cube-double": 0.3666666666666667,
+            "cube-quadruple": 0.5426666666666666,
+            "cube-triple": 0.03866666666666667,
+            "humanoidmaze-large": 0.41866666666666663,
+            "humanoidmaze-medium": 0.9693333333333332,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.4133333333333333,
+            "scene": 0.9746666666666666
+          },
+          "label": "ConsensusFlow",
+          "csv_key": "dflrql9",
+          "missing_examples": []
+        },
+        "dflrql9_nocrf": {
+          "grand_mean": 0.5950666666666666,
+          "grand_std_across_tasks": 0.3759144347085148,
+          "per_seed_50task_means": [
+            0.6027999999999999,
+            0.5848,
+            0.5975999999999999
+          ],
+          "seed_std_of_50task_means": 0.007563655788630804,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.2693333333333333,
+            "antmaze-large": 0.8813333333333334,
+            "cube-double": 0.3946666666666666,
+            "cube-quadruple": 0.5880000000000001,
+            "cube-triple": 0.04533333333333333,
+            "humanoidmaze-large": 0.4213333333333333,
+            "humanoidmaze-medium": 0.9853333333333334,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.396,
+            "scene": 0.9693333333333332
+          },
+          "label": "CF-noCRF",
+          "csv_key": "dflrql9_nocrf",
+          "missing_examples": []
+        }
+      },
+      "comparisons": {
+        "CF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.014133333333333326,
+          "win": 28,
+          "loss": 14,
+          "tie": 8
+        },
+        "CFnoCRF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.02546666666666667,
+          "win": 24,
+          "loss": 16,
+          "tie": 10
+        },
+        "CF_minus_CFnoCRF": {
+          "n": 50,
+          "mean_delta": -0.011333333333333345,
+          "win": 18,
+          "loss": 25,
+          "tie": 7
+        }
+      }
+    },
+    "offline_1m_last3": {
+      "config": {
+        "key": "offline_1m_last3",
+        "label": "1M offline (RQL last3: 800k/900k/1M)",
+        "source": "offline",
+        "report_step": 1000000,
+        "mode": "last3",
+        "protocol": "rql_validation_last3"
+      },
+      "methods": {
+        "baseline": {
+          "grand_mean": 0.5564444444444444,
+          "grand_std_across_tasks": 0.3610656381625485,
+          "per_seed_50task_means": [
+            0.5425333333333334,
+            0.5646666666666667,
+            0.5621333333333333
+          ],
+          "seed_std_of_50task_means": 0.009890861226529667,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.34800000000000003,
+            "antmaze-large": 0.8284444444444444,
+            "cube-double": 0.2217777777777778,
+            "cube-quadruple": 0.4746666666666667,
+            "cube-triple": 0.042666666666666665,
+            "humanoidmaze-large": 0.37777777777777777,
+            "humanoidmaze-medium": 0.9537777777777776,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.4493333333333333,
+            "scene": 0.868
+          },
+          "label": "RQL",
+          "csv_key": "baseline",
+          "missing_examples": []
+        },
+        "dflrql9": {
+          "grand_mean": 0.5695111111111111,
+          "grand_std_across_tasks": 0.38025333725534505,
+          "per_seed_50task_means": [
+            0.56,
+            0.5736,
+            0.5749333333333334
+          ],
+          "seed_std_of_50task_means": 0.006747363453990517,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.24177777777777779,
+            "antmaze-large": 0.8777777777777777,
+            "cube-double": 0.3693333333333334,
+            "cube-quadruple": 0.5364444444444444,
+            "cube-triple": 0.048,
+            "humanoidmaze-large": 0.36533333333333334,
+            "humanoidmaze-medium": 0.9111111111111111,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.37333333333333335,
+            "scene": 0.9720000000000001
+          },
+          "label": "ConsensusFlow",
+          "csv_key": "dflrql9",
+          "missing_examples": []
+        },
+        "dflrql9_nocrf": {
+          "grand_mean": 0.5702666666666668,
+          "grand_std_across_tasks": 0.38037535457804095,
+          "per_seed_50task_means": [
+            0.5633333333333334,
+            0.5745333333333333,
+            0.5729333333333334
+          ],
+          "seed_std_of_50task_means": 0.004945929864264381,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.2226666666666667,
+            "antmaze-large": 0.8853333333333333,
+            "cube-double": 0.40088888888888885,
+            "cube-quadruple": 0.5382222222222222,
+            "cube-triple": 0.041333333333333326,
+            "humanoidmaze-large": 0.3773333333333333,
+            "humanoidmaze-medium": 0.9480000000000001,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.31555555555555553,
+            "scene": 0.9733333333333334
+          },
+          "label": "CF-noCRF",
+          "csv_key": "dflrql9_nocrf",
+          "missing_examples": []
+        }
+      },
+      "comparisons": {
+        "CF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.013066666666666655,
+          "win": 30,
+          "loss": 12,
+          "tie": 8
+        },
+        "CFnoCRF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.013822222222222218,
+          "win": 24,
+          "loss": 17,
+          "tie": 9
+        },
+        "CF_minus_CFnoCRF": {
+          "n": 50,
+          "mean_delta": -0.000755555555555561,
+          "win": 23,
+          "loss": 21,
+          "tie": 6
+        }
+      }
+    },
+    "o2o_2m_final": {
+      "config": {
+        "key": "o2o_2m_final",
+        "label": "1M offline + 1M online (final checkpoint @2M)",
+        "source": "o2o",
+        "report_step": 2000000,
+        "mode": "final",
+        "protocol": "final_checkpoint"
+      },
+      "methods": {
+        "baseline": {
+          "grand_mean": 0.8214666666666668,
+          "grand_std_across_tasks": 0.30010158280155735,
+          "per_seed_50task_means": [
+            0.8256000000000001,
+            0.8320000000000001,
+            0.8067999999999997
+          ],
+          "seed_std_of_50task_means": 0.01069496246941641,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.6013333333333334,
+            "antmaze-large": 0.9120000000000001,
+            "cube-double": 0.9506666666666665,
+            "cube-quadruple": 0.7986666666666666,
+            "cube-triple": 0.4493333333333333,
+            "humanoidmaze-large": 0.52,
+            "humanoidmaze-medium": 0.9906666666666666,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 1.0,
+            "scene": 0.992
+          },
+          "label": "RQL",
+          "csv_key": "baseline",
+          "missing_examples": []
+        },
+        "dflrql9": {
+          "grand_mean": 0.8591999999999999,
+          "grand_std_across_tasks": 0.27499216958548717,
+          "per_seed_50task_means": [
+            0.8656,
+            0.8508000000000001,
+            0.8611999999999999
+          ],
+          "seed_std_of_50task_means": 0.006205374015050664,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.6986666666666668,
+            "antmaze-large": 0.984,
+            "cube-double": 0.9626666666666667,
+            "cube-quadruple": 0.8066666666666666,
+            "cube-triple": 0.504,
+            "humanoidmaze-large": 0.6653333333333334,
+            "humanoidmaze-medium": 0.9893333333333333,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 1.0,
+            "scene": 0.9813333333333333
+          },
+          "label": "ConsensusFlow",
+          "csv_key": "dflrql9",
+          "missing_examples": []
+        },
+        "dflrql9_nocrf": {
+          "grand_mean": null,
+          "grand_std_across_tasks": null,
+          "per_seed_50task_means": [
+            NaN,
+            NaN,
+            NaN
+          ],
+          "seed_std_of_50task_means": null,
+          "coverage": {
+            "tasks_with_all_seeds": 0,
+            "tasks_with_any_seed": 0,
+            "missing_count": 150
+          },
+          "domain_means": {},
+          "label": "CF-noCRF",
+          "csv_key": "dflrql9_nocrf",
+          "missing_examples": [
+            [
+              "scene-task1",
+              0,
+              "no_run"
+            ],
+            [
+              "scene-task1",
+              1,
+              "no_run"
+            ],
+            [
+              "scene-task1",
+              2,
+              "no_run"
+            ],
+            [
+              "scene-task2",
+              0,
+              "no_run"
+            ],
+            [
+              "scene-task2",
+              1,
+              "no_run"
+            ],
+            [
+              "scene-task2",
+              2,
+              "no_run"
+            ],
+            [
+              "scene-task3",
+              0,
+              "no_run"
+            ],
+            [
+              "scene-task3",
+              1,
+              "no_run"
+            ],
+            [
+              "scene-task3",
+              2,
+              "no_run"
+            ],
+            [
+              "scene-task4",
+              0,
+              "no_run"
+            ],
+            [
+              "scene-task4",
+              1,
+              "no_run"
+            ],
+            [
+              "scene-task4",
+              2,
+              "no_run"
+            ]
+          ]
+        }
+      },
+      "comparisons": {
+        "CF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.037733333333333334,
+          "win": 19,
+          "loss": 11,
+          "tie": 20
+        },
+        "CFnoCRF_minus_RQL": {
+          "n": 0
+        },
+        "CF_minus_CFnoCRF": {
+          "n": 0
+        }
+      }
+    },
+    "o2o_2m_last3": {
+      "config": {
+        "key": "o2o_2m_last3",
+        "label": "1M offline + 1M online (RQL last3: 1.8M/1.9M/2.0M)",
+        "source": "o2o",
+        "report_step": 2000000,
+        "mode": "last3",
+        "protocol": "rql_validation_last3"
+      },
+      "methods": {
+        "baseline": {
+          "grand_mean": 0.8214222222222225,
+          "grand_std_across_tasks": 0.2988325465276457,
+          "per_seed_50task_means": [
+            0.8250666666666666,
+            0.8275999999999999,
+            0.8116000000000001
+          ],
+          "seed_std_of_50task_means": 0.007021940922635738,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.5946666666666667,
+            "antmaze-large": 0.9226666666666666,
+            "cube-double": 0.9422222222222223,
+            "cube-quadruple": 0.7995555555555556,
+            "cube-triple": 0.4573333333333334,
+            "humanoidmaze-large": 0.5235555555555556,
+            "humanoidmaze-medium": 0.9924444444444445,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 1.0,
+            "scene": 0.9817777777777777
+          },
+          "label": "RQL",
+          "csv_key": "baseline",
+          "missing_examples": []
+        },
+        "dflrql9": {
+          "grand_mean": 0.8538666666666667,
+          "grand_std_across_tasks": 0.28063545528929895,
+          "per_seed_50task_means": [
+            0.8588,
+            0.8467999999999999,
+            0.856
+          ],
+          "seed_std_of_50task_means": 0.005125968743131009,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.6844444444444444,
+            "antmaze-large": 0.9786666666666667,
+            "cube-double": 0.963111111111111,
+            "cube-quadruple": 0.804888888888889,
+            "cube-triple": 0.47644444444444434,
+            "humanoidmaze-large": 0.6684444444444444,
+            "humanoidmaze-medium": 0.9871111111111113,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.9995555555555555,
+            "scene": 0.976
+          },
+          "label": "ConsensusFlow",
+          "csv_key": "dflrql9",
+          "missing_examples": []
+        },
+        "dflrql9_nocrf": {
+          "grand_mean": null,
+          "grand_std_across_tasks": null,
+          "per_seed_50task_means": [
+            NaN,
+            NaN,
+            NaN
+          ],
+          "seed_std_of_50task_means": null,
+          "coverage": {
+            "tasks_with_all_seeds": 0,
+            "tasks_with_any_seed": 0,
+            "missing_count": 150
+          },
+          "domain_means": {},
+          "label": "CF-noCRF",
+          "csv_key": "dflrql9_nocrf",
+          "missing_examples": [
+            [
+              "scene-task1",
+              0,
+              "no_run"
+            ],
+            [
+              "scene-task1",
+              1,
+              "no_run"
+            ],
+            [
+              "scene-task1",
+              2,
+              "no_run"
+            ],
+            [
+              "scene-task2",
+              0,
+              "no_run"
+            ],
+            [
+              "scene-task2",
+              1,
+              "no_run"
+            ],
+            [
+              "scene-task2",
+              2,
+              "no_run"
+            ],
+            [
+              "scene-task3",
+              0,
+              "no_run"
+            ],
+            [
+              "scene-task3",
+              1,
+              "no_run"
+            ],
+            [
+              "scene-task3",
+              2,
+              "no_run"
+            ],
+            [
+              "scene-task4",
+              0,
+              "no_run"
+            ],
+            [
+              "scene-task4",
+              1,
+              "no_run"
+            ],
+            [
+              "scene-task4",
+              2,
+              "no_run"
+            ]
+          ]
+        }
+      },
+      "comparisons": {
+        "CF_minus_RQL": {
+          "n": 50,
+          "mean_delta": 0.032444444444444435,
+          "win": 22,
+          "loss": 11,
+          "tie": 17
+        },
+        "CFnoCRF_minus_RQL": {
+          "n": 0
+        },
+        "CF_minus_CFnoCRF": {
+          "n": 0
+        }
+      }
+    },
+    "offline_2m_final": {
+      "config": {
+        "key": "offline_2m_final",
+        "label": "2M offline (final checkpoint)",
+        "source": "offline",
+        "report_step": 2000000,
+        "mode": "final",
+        "protocol": "final_checkpoint"
+      },
+      "methods": {
+        "baseline": {
+          "grand_mean": 0.5671794871794872,
+          "grand_std_across_tasks": 0.36106643126210497,
+          "per_seed_50task_means": [
+            NaN,
+            0.5459999999999999,
+            0.5711999999999999
+          ],
+          "seed_std_of_50task_means": 0.0126,
+          "coverage": {
+            "tasks_with_all_seeds": 39,
+            "tasks_with_any_seed": 50,
+            "missing_count": 11
+          },
+          "domain_means": {
+            "antmaze-giant": 0.3983333333333333,
+            "antmaze-large": 0.6266666666666667,
+            "cube-double": 0.14333333333333334,
+            "cube-quadruple": 0.508,
+            "cube-triple": 0.04333333333333333,
+            "humanoidmaze-large": 0.44333333333333336,
+            "humanoidmaze-medium": 0.9833333333333334,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.6453333333333333,
+            "scene": 0.736
+          },
+          "label": "RQL",
+          "csv_key": "baseline",
+          "missing_examples": [
+            [
+              "cube-double-task3",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "cube-double-task4",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "cube-double-task5",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "cube-triple-task5",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "antmaze-large-task4",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "antmaze-large-task5",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "antmaze-giant-task1",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "humanoidmaze-medium-task1",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "humanoidmaze-medium-task2",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "humanoidmaze-medium-task3",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "humanoidmaze-large-task5",
+              0,
+              "missing_ckpt"
+            ]
+          ]
+        },
+        "dflrql9": {
+          "grand_mean": 0.5955999999999999,
+          "grand_std_across_tasks": 0.37708262578202495,
+          "per_seed_50task_means": [
+            0.5907999999999999,
+            0.6044,
+            0.5916
+          ],
+          "seed_std_of_50task_means": 0.006231104770958943,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.30533333333333335,
+            "antmaze-large": 0.7746666666666667,
+            "cube-double": 0.1693333333333333,
+            "cube-quadruple": 0.5773333333333334,
+            "cube-triple": 0.025333333333333336,
+            "humanoidmaze-large": 0.544,
+            "humanoidmaze-medium": 0.9986666666666666,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.6146666666666667,
+            "scene": 0.9466666666666667
+          },
+          "label": "ConsensusFlow",
+          "csv_key": "dflrql9",
+          "missing_examples": []
+        },
+        "dflrql9_nocrf": {
+          "grand_mean": 0.5885333333333334,
+          "grand_std_across_tasks": 0.3711939654681902,
+          "per_seed_50task_means": [
+            0.6088,
+            0.5623999999999999,
+            0.5944
+          ],
+          "seed_std_of_50task_means": 0.01939163622687775,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.3626666666666667,
+            "antmaze-large": 0.7973333333333333,
+            "cube-double": 0.20800000000000002,
+            "cube-quadruple": 0.45999999999999996,
+            "cube-triple": 0.037333333333333336,
+            "humanoidmaze-large": 0.5546666666666668,
+            "humanoidmaze-medium": 0.9866666666666667,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.5213333333333333,
+            "scene": 0.9573333333333333
+          },
+          "label": "CF-noCRF",
+          "csv_key": "dflrql9_nocrf",
+          "missing_examples": []
+        }
+      },
+      "comparisons": {
+        "CF_minus_RQL": {
+          "n": 39,
+          "mean_delta": 0.04837606837606837,
+          "win": 19,
+          "loss": 9,
+          "tie": 11
+        },
+        "CFnoCRF_minus_RQL": {
+          "n": 39,
+          "mean_delta": 0.03538461538461538,
+          "win": 17,
+          "loss": 12,
+          "tie": 10
+        },
+        "CF_minus_CFnoCRF": {
+          "n": 50,
+          "mean_delta": 0.007066666666666662,
+          "win": 18,
+          "loss": 18,
+          "tie": 14
+        }
+      }
+    },
+    "offline_2m_last3": {
+      "config": {
+        "key": "offline_2m_last3",
+        "label": "2M offline (RQL last3: 1.8M/1.9M/2.0M)",
+        "source": "offline",
+        "report_step": 2000000,
+        "mode": "last3",
+        "protocol": "rql_validation_last3"
+      },
+      "methods": {
+        "baseline": {
+          "grand_mean": 0.5795441595441596,
+          "grand_std_across_tasks": 0.35555633172535633,
+          "per_seed_50task_means": [
+            NaN,
+            0.5658666666666667,
+            0.5757333333333333
+          ],
+          "seed_std_of_50task_means": 0.00493333333333329,
+          "coverage": {
+            "tasks_with_all_seeds": 39,
+            "tasks_with_any_seed": 50,
+            "missing_count": 11
+          },
+          "domain_means": {
+            "antmaze-giant": 0.41944444444444445,
+            "antmaze-large": 0.6607407407407407,
+            "cube-double": 0.14444444444444446,
+            "cube-quadruple": 0.49911111111111117,
+            "cube-triple": 0.04333333333333332,
+            "humanoidmaze-large": 0.4488888888888889,
+            "humanoidmaze-medium": 0.9922222222222221,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.6564444444444446,
+            "scene": 0.7844444444444444
+          },
+          "label": "RQL",
+          "csv_key": "baseline",
+          "missing_examples": [
+            [
+              "cube-double-task3",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "cube-double-task4",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "cube-double-task5",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "cube-triple-task5",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "antmaze-large-task4",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "antmaze-large-task5",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "antmaze-giant-task1",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "humanoidmaze-medium-task1",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "humanoidmaze-medium-task2",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "humanoidmaze-medium-task3",
+              0,
+              "missing_ckpt"
+            ],
+            [
+              "humanoidmaze-large-task5",
+              0,
+              "missing_ckpt"
+            ]
+          ]
+        },
+        "dflrql9": {
+          "grand_mean": 0.5946222222222222,
+          "grand_std_across_tasks": 0.37426394330640406,
+          "per_seed_50task_means": [
+            0.5934666666666666,
+            0.6,
+            0.5903999999999999
+          ],
+          "seed_std_of_50task_means": 0.004003455297738174,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.32177777777777783,
+            "antmaze-large": 0.8257777777777779,
+            "cube-double": 0.19288888888888892,
+            "cube-quadruple": 0.5848888888888889,
+            "cube-triple": 0.02622222222222222,
+            "humanoidmaze-large": 0.5626666666666666,
+            "humanoidmaze-medium": 0.9951111111111111,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.4884444444444444,
+            "scene": 0.9484444444444444
+          },
+          "label": "ConsensusFlow",
+          "csv_key": "dflrql9",
+          "missing_examples": []
+        },
+        "dflrql9_nocrf": {
+          "grand_mean": 0.5908,
+          "grand_std_across_tasks": 0.3686293625222769,
+          "per_seed_50task_means": [
+            0.6103999999999999,
+            0.5625333333333333,
+            0.5994666666666666
+          ],
+          "seed_std_of_50task_means": 0.020479872684789426,
+          "coverage": {
+            "tasks_with_all_seeds": 50,
+            "tasks_with_any_seed": 50,
+            "missing_count": 0
+          },
+          "domain_means": {
+            "antmaze-giant": 0.34755555555555556,
+            "antmaze-large": 0.8342222222222222,
+            "cube-double": 0.20533333333333337,
+            "cube-quadruple": 0.4684444444444445,
+            "cube-triple": 0.03333333333333333,
+            "humanoidmaze-large": 0.5391111111111112,
+            "humanoidmaze-medium": 0.9897777777777778,
+            "puzzle-3x3": 1.0,
+            "puzzle-4x4": 0.5351111111111111,
+            "scene": 0.9551111111111112
+          },
+          "label": "CF-noCRF",
+          "csv_key": "dflrql9_nocrf",
+          "missing_examples": []
+        }
+      },
+      "comparisons": {
+        "CF_minus_RQL": {
+          "n": 39,
+          "mean_delta": 0.031851851851851846,
+          "win": 20,
+          "loss": 12,
+          "tie": 7
+        },
+        "CFnoCRF_minus_RQL": {
+          "n": 39,
+          "mean_delta": 0.025014245014245,
+          "win": 19,
+          "loss": 13,
+          "tie": 7
+        },
+        "CF_minus_CFnoCRF": {
+          "n": 50,
+          "mean_delta": 0.0038222222222222247,
+          "win": 18,
+          "loss": 23,
+          "tie": 9
+        }
+      }
+    }
+  }
+}

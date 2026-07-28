@@ -12,6 +12,41 @@ import jax
 import random
 from utils.datasets import Dataset
 
+class ObsPadWrapper(gymnasium.ObservationWrapper):
+    """Pad flat observations with trailing zeros.
+
+    Used as a workaround for an XLA compile failure in DFL-RQL guidance
+    ``jax.grad`` when both observation and action dimensions are even
+    (e.g. antsoccer 42×8). Padding obs by 1 makes the obs dim odd and
+    restores successful compilation without changing semantics.
+    """
+
+    def __init__(self, env, pad: int = 1):
+        super().__init__(env)
+        if pad < 0:
+            raise ValueError(f"pad must be >= 0, got {pad}")
+        self.pad = int(pad)
+        if self.pad == 0:
+            return
+        if not isinstance(env.observation_space, Box) or env.observation_space.shape is None:
+            raise TypeError("ObsPadWrapper requires a flat Box observation space")
+        low = np.concatenate(
+            [env.observation_space.low, np.full((self.pad,), -np.inf, dtype=np.float32)]
+        )
+        high = np.concatenate(
+            [env.observation_space.high, np.full((self.pad,), np.inf, dtype=np.float32)]
+        )
+        self.observation_space = Box(low=low, high=high, dtype=np.float32)
+
+    def observation(self, observation):
+        if self.pad == 0:
+            return observation
+        return np.concatenate(
+            [np.asarray(observation, dtype=np.float32), np.zeros(self.pad, dtype=np.float32)],
+            axis=-1,
+        )
+
+
 class EpisodeMonitor(gymnasium.Wrapper):
     """Environment wrapper to monitor episode statistics."""
 

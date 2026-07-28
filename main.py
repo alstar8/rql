@@ -14,7 +14,7 @@ from ml_collections import config_flags
 from collections import defaultdict
 
 from agents import agents
-from envs.env_utils import make_env_and_datasets
+from envs.env_utils import ObsPadWrapper, make_env_and_datasets
 from envs.ogbench_utils import make_ogbench_env_and_datasets
 
 from utils.datasets import (
@@ -113,6 +113,37 @@ def main(_):
             agent_config=config,
             dataset_dir=FLAGS.ogbench_data_dir,
         )
+
+    # DFL-RQL guidance jax.grad hits an XLA reshape failure when both the
+    # observation and action dimensions are even (e.g. antsoccer 42×8). Pad
+    # observations by 1 so the obs dim is odd; RQL and odd×even domains are
+    # unchanged.
+    agent_name = str(config.get("agent_name", ""))
+    obs_dim = int(np.asarray(train_dataset["observations"]).shape[-1])
+    act_dim = int(np.asarray(train_dataset["actions"]).shape[-1])
+    obs_pad = 1 if (agent_name.startswith("dflrql") and obs_dim % 2 == 0 and act_dim % 2 == 0) else 0
+    if obs_pad:
+        print(
+            f"ObsPadWrapper(pad={obs_pad}): agent={agent_name} "
+            f"obs_dim={obs_dim} act_dim={act_dim} (even×even XLA workaround)",
+            flush=True,
+        )
+        env = ObsPadWrapper(env, pad=obs_pad)
+        eval_env = ObsPadWrapper(eval_env, pad=obs_pad)
+
+        def _pad_obs_dataset(ds):
+            d = {k: v for k, v in ds.items()}
+            zeros = np.zeros((d["observations"].shape[0], obs_pad), dtype=np.float32)
+            d["observations"] = np.concatenate(
+                [np.asarray(d["observations"], dtype=np.float32), zeros], axis=-1
+            )
+            d["next_observations"] = np.concatenate(
+                [np.asarray(d["next_observations"], dtype=np.float32), zeros], axis=-1
+            )
+            return d
+
+        train_dataset = _pad_obs_dataset(train_dataset)
+        val_dataset = _pad_obs_dataset(val_dataset)
 
     def process_train_dataset(ds):
         ds = Dataset.create(**ds)
