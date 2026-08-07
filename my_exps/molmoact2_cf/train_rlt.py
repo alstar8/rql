@@ -342,8 +342,11 @@ def predicted_deploy_advantage(
             deterministic=True,
             apply_guide=model.guide is not None,
         )
-        q_act = model.q_min_chunk(state, act)
-        q_ref = model.q_min_chunk(state, ref)
+        t = None
+        if model.is_flow:
+            t = torch.ones(ref.shape[0], 1, device=ref.device, dtype=ref.dtype)
+        q_act = model.q_min_chunk(state, act, t=t)
+        q_ref = model.q_min_chunk(state, ref, t=t)
         return float((q_act - q_ref).mean().detach())
 
 
@@ -358,8 +361,11 @@ def action_sensitivity(
     with torch.no_grad():
         state = _batch_state(model, batch, detach_token=True, use_target=False)
         a = model.normalize_action(batch["executed_actions"])
-        q0 = model.q_min_chunk(state, a)
-        q1 = model.q_min_chunk(state, a + float(noise) * torch.randn_like(a))
+        t = None
+        if model.is_flow:
+            t = torch.ones(a.shape[0], 1, device=a.device, dtype=a.dtype)
+        q0 = model.q_min_chunk(state, a, t=t)
+        q1 = model.q_min_chunk(state, a + float(noise) * torch.randn_like(a), t=t)
         return float((q0 - q1).abs().mean().detach())
 
 
@@ -475,8 +481,10 @@ def flow_critic_td_step(
         )
         if target_noise > 0.0:
             next_act = (next_act + target_noise * torch.randn_like(next_act)).clamp(-2.0, 2.0)
-        t0 = torch.zeros(b, 1, device=next_state.device, dtype=next_state.dtype)
-        q_next = model.q_min_chunk(next_state, next_act, target=True, t=t0)
+        # Endpoint action-values live at t=1. Bootstrapping at t=0 (noise time)
+        # evaluates Q(s', a', 0) which collapses to ~0 and starves TD targets.
+        t1 = torch.ones(b, 1, device=next_state.device, dtype=next_state.dtype)
+        q_next = model.q_min_chunk(next_state, next_act, target=True, t=t1)
         boot = bootstrap_scale(gamma, model.chunk_size, batch["action_mask"], batch["terminal"])
         r_sum = chunk_return(batch["rewards"], gamma, batch["action_mask"])
         y_td = (r_sum + boot * q_next).clamp(0.0, 1.0)
@@ -485,7 +493,11 @@ def flow_critic_td_step(
 
     qs = model.q_chunk(state, x_t, t=t)  # (E,B)
     td = ((qs - y_td.unsqueeze(0)) ** 2).mean()
-    mc = ((qs - y_mc.unsqueeze(0)) ** 2).mean()
+    # Also fit endpoint action-values at t=1 (deploy / gate / ∇Q near actions).
+    t_end = torch.ones(a.shape[0], 1, device=a.device, dtype=a.dtype)
+    qs_end = model.q_chunk(state, a, t=t_end)
+    td = td + ((qs_end - y_td.unsqueeze(0)) ** 2).mean()
+    mc = ((qs - y_mc.unsqueeze(0)) ** 2).mean() + ((qs_end - y_mc.unsqueeze(0)) ** 2).mean()
     flat_x = x_t.reshape(x_t.shape[0], -1)
     cql, cql_info = model.critic.cql_penalty(
         state.detach() if detach_token else state,
@@ -499,23 +511,25 @@ def flow_critic_td_step(
     rank = a.new_zeros(())
     q_gap = a.new_zeros(())
     w = y_mc.detach().clamp(0.0, 1.0)
-    q_pos = model.q_min_chunk(state, x_t, t=t)
+    # Rank primarily on endpoint actions at t=1 (where deploy decisions live).
+    q_pos = model.q_min_chunk(state, a, t=t_end)
+    rank_base = a
     if rank_coef > 0.0 and rank_noise > 0.0:
-        a_neg = x_t.detach() + float(rank_noise) * torch.randn_like(x_t)
-        q_neg = model.q_min_chunk(state, a_neg, t=t)
+        a_neg = rank_base.detach() + float(rank_noise) * torch.randn_like(rank_base)
+        q_neg = model.q_min_chunk(state, a_neg, t=t_end)
         rank = rank + float(rank_coef) * (F.relu(q_neg - q_pos + float(rank_margin)) * w).mean()
         q_gap = q_gap + (q_pos - q_neg).detach().mean()
     if far_rank_coef > 0.0 and far_rank_noise > 0.0:
-        a_far = x_t.detach() + float(far_rank_noise) * torch.randn_like(x_t)
-        q_far = model.q_min_chunk(state, a_far, t=t)
+        a_far = rank_base.detach() + float(far_rank_noise) * torch.randn_like(rank_base)
+        q_far = model.q_min_chunk(state, a_far, t=t_end)
         rank = rank + float(far_rank_coef) * (
             F.relu(q_far - q_pos + float(rank_margin)) * w
         ).mean()
         q_gap = q_gap + (q_pos - q_far).detach().mean()
-    if shuffle_rank_coef > 0.0 and x_t.shape[0] > 1:
-        perm = torch.randperm(x_t.shape[0], device=x_t.device)
-        a_shuf = x_t.detach()[perm]
-        q_shuf = model.q_min_chunk(state, a_shuf, t=t)
+    if shuffle_rank_coef > 0.0 and a.shape[0] > 1:
+        perm = torch.randperm(a.shape[0], device=a.device)
+        a_shuf = rank_base.detach()[perm]
+        q_shuf = model.q_min_chunk(state, a_shuf, t=t_end)
         rank = rank + float(shuffle_rank_coef) * (
             F.relu(q_shuf - q_pos + float(rank_margin)) * w
         ).mean()
@@ -535,8 +549,8 @@ def flow_critic_td_step(
         "cql_loss": float(cql_info["cql_loss"]),
         "q_rank_loss": float(rank.detach()),
         "q_rank_gap": float(q_gap.detach()),
-        "q_mean": float(qs.mean().detach()),
-        "q_std": float(qs.std(unbiased=False).detach()),
+        "q_mean": float(qs_end.mean().detach()),
+        "q_std": float(qs_end.std(unbiased=False).detach()),
         "q_target": float(y_td.mean().detach()),
         "flow_t_mean": float(t.mean().detach()),
     }
@@ -588,12 +602,13 @@ def flow_actor_step(
         torch.full_like(t, 1.0 / float(model.flow_steps)),
         1.0 - t,
     )
+    # Advantage vs BC velocity (not vs stopgrad(v), which makes adv≈0 by construction).
     x_plus = x_t + (v + g) * dt.view(b, 1, 1)
     t_plus = (t + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
     q = model.q_min_chunk(state, x_plus, t=t_plus)
     with torch.no_grad():
-        x_base = x_t + v.detach() * dt.view(b, 1, 1)
-        base_q = model.q_min_chunk(state, x_base, t=t_plus)
+        x_bc = x_t + target_v * dt.view(b, 1, 1)
+        base_q = model.q_min_chunk(state, x_bc, t=t_plus)
     adv = q - base_q
     # Keep flow endpoint near VLA reference.
     endpoint, _ = model.flow_sample(state, ref_in, apply_guide=False)
@@ -624,7 +639,7 @@ def flow_guide_step(
     opt: torch.optim.Optimizer,
     batch: dict[str, torch.Tensor],
     *,
-    beta: float = 1.0,
+    beta: float = 0.1,
     distill_coef: float = 1.0,
 ) -> dict[str, float]:
     """Distill common-scale-normalized ∇_x Q into W_φ at flow BC points."""
@@ -638,7 +653,8 @@ def flow_guide_step(
         a1 = model.normalize_action(batch["reference_actions"])
     b = a1.shape[0]
     x0 = torch.randn_like(a1)
-    t = torch.rand(b, 1, device=a1.device, dtype=a1.dtype)
+    # Bias BC times toward the endpoint where the fixed critic is informative.
+    t = 0.5 + 0.5 * torch.rand(b, 1, device=a1.device, dtype=a1.dtype)
     x_t = ((1.0 - t.view(b, 1, 1)) * x0 + t.view(b, 1, 1) * a1).detach().requires_grad_(True)
     # Sample one target critic member per batch element.
     member = torch.randint(0, model.n_critics, (b,), device=a1.device)
