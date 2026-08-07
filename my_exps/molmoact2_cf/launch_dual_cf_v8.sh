@@ -58,12 +58,13 @@ launch_side() {
   local log_dir="$8"
   local num_gpus
   num_gpus="$(awk -F',' '{print NF}' <<<"${gpus}")"
-  # Prefer ~2 concurrent rollouts per GPU; allow override via RLT_EGL_MAX_CONCURRENT.
-  local side_concurrent="${RLT_EGL_MAX_CONCURRENT:-$(( num_gpus * 2 ))}"
+  # Prefer ~2 concurrent rollouts per GPU; allow override via RLT_EGL_*.
+  local per_gpu="${RLT_EGL_PER_GPU:-2}"
+  local side_concurrent="${RLT_EGL_MAX_CONCURRENT:-$(( num_gpus * per_gpu ))}"
   local egl_lock_dir="${RLT_EGL_LOCK_DIR:-${B1K_TMP}/rlt_egl_locks_${cf_mode}}"
   mkdir -p "${log_dir}" "${egl_lock_dir}"
 
-  echo "[dual] launching ${name}: GPUs=${gpus} run=${run_dir} mode=${cf_mode} ckpt=${ckpt} NO_SCREEN=${NO_SCREEN} egl_concurrent=${side_concurrent}"
+  echo "[dual] launching ${name}: GPUs=${gpus} run=${run_dir} mode=${cf_mode} ckpt=${ckpt} NO_SCREEN=${NO_SCREEN} egl_concurrent=${side_concurrent} per_gpu=${per_gpu}"
   if [[ "${NO_SCREEN}" == "1" ]]; then
     nohup env \
       NO_SCREEN=1 \
@@ -82,6 +83,8 @@ launch_side() {
       B1K_TMP="${B1K_TMP}" \
       RLT_EGL_LOCK_DIR="${egl_lock_dir}" \
       RLT_EGL_MAX_CONCURRENT="${side_concurrent}" \
+      RLT_EGL_PER_GPU="${per_gpu}" \
+      RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-0.5}" \
       TMP_ROLLOUT_DIR="${TMP_ROLLOUT_DIR:-${B1K_TMP}/molmoact2_rlt_rollouts}" \
       bash "${ROOT}/launch_rlt_v8_side.sh" \
       > "${log_dir}/nohup_launcher.out" 2>&1 &
@@ -102,6 +105,8 @@ launch_side() {
     B1K_TMP="${B1K_TMP}" \
     RLT_EGL_LOCK_DIR="${egl_lock_dir}" \
     RLT_EGL_MAX_CONCURRENT="${side_concurrent}" \
+    RLT_EGL_PER_GPU="${per_gpu}" \
+    RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-0.5}" \
     TMP_ROLLOUT_DIR="${TMP_ROLLOUT_DIR:-${B1K_TMP}/molmoact2_rlt_rollouts}" \
     bash "${ROOT}/launch_rlt_v8_side.sh"
   fi
@@ -109,16 +114,18 @@ launch_side() {
 
 if [[ "${FLOW_ONLY}" != "1" ]]; then
   launch_side residual "0,1,2,3" "${RESIDUAL_RUN_DIR}" "${RESIDUAL_CKPT}" \
-    "${BASE_PORT_RESIDUAL}" residual rlt_cf_v8_residual "${B1K_TMP}/rlt_cf_v8_residual_logs"
+    "${BASE_PORT_RESIDUAL}" residual rlt_cf_v9_residual \
+    "${B1K_TMP}/$(basename "${RESIDUAL_RUN_DIR}")_logs"
 fi
 if [[ "${RESIDUAL_ONLY}" != "1" ]]; then
   # Stagger so both sides don't hammer NFS/assets at once.
   sleep 15
   launch_side flow "4,5,6,7" "${FLOW_RUN_DIR}" "${FLOW_CKPT}" \
-    "${BASE_PORT_FLOW}" flow rlt_cf_v8_flow "${B1K_TMP}/rlt_cf_v8_flow_logs"
+    "${BASE_PORT_FLOW}" flow rlt_cf_v9_flow \
+    "${B1K_TMP}/$(basename "${FLOW_RUN_DIR}")_logs"
 fi
 
 echo "[dual] both sides requested"
-echo "[dual] residual: screen -r rlt_cf_v8_residual   stop: ${ROOT}/stop_run.sh ${RESIDUAL_RUN_DIR}"
-echo "[dual] flow:     screen -r rlt_cf_v8_flow       stop: ${ROOT}/stop_run.sh ${FLOW_RUN_DIR}"
+echo "[dual] residual: stop: ${ROOT}/stop_run.sh ${RESIDUAL_RUN_DIR}"
+echo "[dual] flow:     stop: ${ROOT}/stop_run.sh ${FLOW_RUN_DIR}"
 echo "[dual] logs/tmp: ${B1K_TMP}"

@@ -35,9 +35,11 @@ FLOW_STEPS="${FLOW_STEPS:-10}"
 GUIDANCE_COEF="${GUIDANCE_COEF:-0.5}"
 # Isolate EGL locks per experiment side so dual runs do not starve each other.
 RLT_EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR:-${B1K_TMP}/rlt_egl_locks_${CF_MODE}}"
-# Cap concurrent MuJoCo EGL rollouts *within this side* (not machine-wide).
-# Default ~2 rollouts/GPU: NUM_GPUS alone starves 3–4 workers/GPU (50+ min idle).
-RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT:-$(( NUM_GPUS * 2 ))}"
+# Concurrent MuJoCo EGL rollouts per physical GPU (exclusive lock was 1 and
+# queued 3/4 workers for tens of minutes).  Global cap = GPUs * per-GPU.
+RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU:-2}"
+RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT:-$(( NUM_GPUS * RLT_EGL_PER_GPU ))}"
+RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-0.5}"
 TMP_ROLLOUT_DIR="${TMP_ROLLOUT_DIR:-${B1K_TMP}/molmoact2_rlt_rollouts}"
 mkdir -p "${LOCAL_LOG_DIR}" "${RLT_EGL_LOCK_DIR}" "${TMP_ROLLOUT_DIR}"
 MOLMOACT2="${ROOT}/../../../molmoact2"
@@ -134,6 +136,7 @@ if [[ "${RLT_V4_IN_SCREEN:-0}" != "1" && "${NO_SCREEN:-0}" != "1" ]]; then
       LOCAL_LOG_DIR="${LOCAL_LOG_DIR}" FLOW_STEPS="${FLOW_STEPS}" \
       GUIDANCE_COEF="${GUIDANCE_COEF}" GPU_IDS="${GPU_IDS:-${CUDA_VISIBLE_DEVICES:-}}" \
       RLT_EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR}" RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT}" \
+      RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU}" RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC}" \
       DETACH_AFTER_START="${DETACH_AFTER_START:-1}" \
       bash "${ROOT}/launch_rlt_v8_side.sh"
   echo "[launch] started screen session ${SCREEN_NAME}"
@@ -283,6 +286,7 @@ start_trainer() {
     --g_min_advantage 0.005
     --g_min_action_sensitivity 0.003
     --gate_sensitivity_noise 0.08
+    --guide_beta 0.1
     --cql_n_actions 8
     --tmp_rollout_dir "${TMP_ROLLOUT_DIR}"
   )
@@ -335,8 +339,9 @@ start_trainer() {
   setsid env \
     RLT_CF_V4_RUN_DIR="${RUN_DIR}" \
     RLT_EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR}" \
-    RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-1.5}" \
+    RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-0.5}" \
     RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT}" \
+    RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU:-2}" \
     MLSPACES_ASSETS_DIR="${MLSPACES_ASSETS_DIR:-$HOME/.cache/molmospaces/assets}" \
     MUJOCO_GL=egl \
     PYOPENGL_PLATFORM=egl \
@@ -376,6 +381,8 @@ start_watchdogs() {
     GUIDANCE_COEF="${GUIDANCE_COEF}"
     RLT_EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR}"
     RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT}"
+    RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU:-2}"
+    RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-0.5}"
     TMP_ROLLOUT_DIR="${TMP_ROLLOUT_DIR}"
     HUNG_LOG_SEC="${HUNG_LOG_SEC:-1200}"
   )

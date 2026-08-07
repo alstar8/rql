@@ -851,10 +851,15 @@ class MolmoAct2RLTCF(nn.Module):
             s, reference_n, reference_present=reference_present, deterministic=deterministic
         )
         info: dict[str, torch.Tensor] = {"actor_mean": mean, "actor_delta": mean - reference_n.detach()}
+        # Paper CF_VLA deploy: a = ã + Δ_π (+ Δ_g). Guide is additive on the
+        # actor residual, not a replacement of the actor output.
         out = sample
         if apply_guide and self.guide is not None:
-            guided, g_delta = self.guide.guide(s, reference_n, actor_delta=info["actor_delta"])
-            out = guided
+            _guided_ref, g_delta = self.guide.guide(
+                s, reference_n, actor_delta=info["actor_delta"]
+            )
+            base = mean if deterministic else sample
+            out = base + g_delta
             info["guide_delta"] = g_delta
         return out, info
 

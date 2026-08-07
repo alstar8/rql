@@ -242,7 +242,8 @@ def guide_step(
     opt: torch.optim.Optimizer,
     batch: dict[str, torch.Tensor],
     *,
-    beta: float = 1.0,
+    beta: float = 0.1,
+    target_delta_frac: float = 0.5,
 ) -> dict[str, float]:
     if model.guide is None:
         return {"guide_loss": 0.0, "guide_adv": 0.0}
@@ -262,20 +263,28 @@ def guide_step(
         grads.append(g.detach())
     target = normalized_grad_target(grads)
 
-    guided, g_delta = model.guide.guide(state.detach(), ref, actor_delta=ainfo["actor_delta"])
-    # Match guide direction to consensus gradient via cosine/MSE on deltas.
-    # Scale target to guide magnitude budget.
+    _guided_ref, g_delta = model.guide.guide(
+        state.detach(), ref, actor_delta=ainfo["actor_delta"]
+    )
+    # Additive composition: guide rides on top of the actor residual.
+    composed = actor_mean.detach() + g_delta
+    # Distill direction *and* magnitude into a fraction of the residual ball.
+    # Pure cosine is scale-invariant and left G near zero-init in v8.
     t_flat = target.reshape(target.shape[0], -1)
     t_unit = t_flat / t_flat.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-    pred = g_delta.reshape(g_delta.shape[0], -1)
-    # Encourage guide delta to align with unit consensus grad, with small magnitude.
-    align = 1.0 - F.cosine_similarity(pred, t_unit, dim=-1).mean()
-    q = model.q_min_chunk(state.detach(), guided)
+    max_delta = float(getattr(model.guide, "max_delta", model.max_delta))
+    target_rms = float(target_delta_frac) * max_delta
+    target_delta = (t_unit * target_rms).reshape_as(g_delta)
+    distill = F.mse_loss(g_delta, target_delta)
+    align = 1.0 - F.cosine_similarity(
+        g_delta.reshape(g_delta.shape[0], -1), t_unit, dim=-1
+    ).mean()
+    q = model.q_min_chunk(state.detach(), composed)
     with torch.no_grad():
-        base_q = model.q_min_chunk(state.detach(), ref)
+        base_q = model.q_min_chunk(state.detach(), actor_mean.detach())
     adv = q - base_q
     mag = (g_delta**2).mean()
-    loss = -adv.mean() + align + float(beta) * mag
+    loss = distill - adv.mean() + float(beta) * mag
     opt.zero_grad(set_to_none=True)
     loss.backward()
     nn.utils.clip_grad_norm_(model.guide.parameters(), 1.0)
@@ -284,7 +293,9 @@ def guide_step(
         "guide_loss": float(loss.detach()),
         "guide_adv": float(adv.mean().detach()),
         "guide_align": float(align.detach()),
+        "guide_distill": float(distill.detach()),
         "guide_mse": float(mag.detach()),
+        "guide_delta_rms": float(mag.detach().sqrt()),
     }
 
 
@@ -292,7 +303,7 @@ def predicted_lcb_advantage(
     model: MolmoAct2RLTCF,
     batch: dict[str, torch.Tensor],
 ) -> float:
-    """Ensemble lower-confidence-bound advantage of guided/actor chunk vs reference."""
+    """Pessimistic ensemble LCB advantage (logging / diagnostics)."""
     model.eval()
     with torch.no_grad():
         state = _batch_state(model, batch, detach_token=True, use_target=False)
@@ -305,12 +316,35 @@ def predicted_lcb_advantage(
         )
         qs_act = model.q_chunk(state, act)  # (E,B)
         qs_ref = model.q_chunk(state, ref)
-        # LCB ≈ mean - std across ensemble
         adv = qs_act - qs_ref
         mu = adv.mean(dim=0)
         std = adv.std(dim=0, unbiased=False)
         lcb = mu - std
         return float(lcb.mean().detach())
+
+
+def predicted_deploy_advantage(
+    model: MolmoAct2RLTCF,
+    batch: dict[str, torch.Tensor],
+) -> float:
+    """q_min advantage of deploy action vs reference (matches actor/guide training).
+
+    v8 gated on ensemble LCB (= mean-std), which stayed ≪ τ even when q_min
+    actor advantage already cleared the threshold.
+    """
+    model.eval()
+    with torch.no_grad():
+        state = _batch_state(model, batch, detach_token=True, use_target=False)
+        ref = model.normalize_action(batch["reference_actions"])
+        act, _ = model.actor_chunk(
+            state,
+            ref,
+            deterministic=True,
+            apply_guide=model.guide is not None,
+        )
+        q_act = model.q_min_chunk(state, act)
+        q_ref = model.q_min_chunk(state, ref)
+        return float((q_act - q_ref).mean().detach())
 
 
 def action_sensitivity(

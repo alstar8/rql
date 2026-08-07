@@ -175,8 +175,9 @@ start_trainer() {
     exec setsid env \
       RLT_CF_V4_RUN_DIR="$RUN" \
       RLT_EGL_LOCK_DIR="$EGL_LOCK_DIR" \
-      RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-1.5}" \
-      RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT:-4}" \
+      RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-0.5}" \
+      RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT:-8}" \
+      RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU:-2}" \
       MLSPACES_ASSETS_DIR="${MLSPACES_ASSETS_DIR:-$HOME/.cache/molmospaces/assets}" \
       MUJOCO_GL=egl \
       PYOPENGL_PLATFORM=egl \
@@ -199,6 +200,7 @@ start_trainer() {
       --shuffle_rank_coef 0.5 --target_noise 0.02 \
       --g_start_episodes 40 --g_min_advantage 0.005 \
       --g_min_action_sensitivity 0.003 --gate_sensitivity_noise 0.08 \
+      --guide_beta 0.1 \
       --cql_n_actions 8 --rlt_ckpt "$RLT_CKPT" \
       --tmp_rollout_dir "$TMP_ROLLOUT_DIR" \
       "${extra[@]}"

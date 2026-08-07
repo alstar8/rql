@@ -57,6 +57,7 @@ from train_rlt import (  # noqa: E402
     flow_critic_td_step,
     flow_guide_step,
     guide_step,
+    predicted_deploy_advantage,
     predicted_lcb_advantage,
     token_step,
 )
@@ -290,54 +291,70 @@ def _egl_concurrency_slot() -> Iterator[int]:
 
 @contextmanager
 def _egl_gpu_lock() -> Iterator[None]:
-    """Serialize classic/EGL MuJoCo (+ post-rollout CUDA train) per GPU.
+    """Bound concurrent classic/EGL MuJoCo rollouts per physical GPU.
 
-    Concurrent MjOpenGLRenderer contexts on the same device abort with SIGABRT.
-    Holding an exclusive flock for the rollout *and* the subsequent critic/actor
-    update keeps EGL rendering from overlapping another trainer's CUDA kernels
-    on the same device.  Checkpoint / metrics I/O must happen *outside* this
-    lock (see the train loop) so NFS stalls cannot pin the GPU.  A machine-wide
-    concurrency cap further reduces cross-GPU EGL SIGABRTs seen during
-    24-worker starts.  A short cooldown after unlock lets GL teardown finish.
+    Concurrent MjOpenGLRenderer contexts on one device can SIGABRT, so we keep
+    a small per-GPU slot pool (``RLT_EGL_PER_GPU``, default 2) rather than a
+    single exclusive lock.  With 4 trainers/GPU the old exclusive lock left
+    75% of workers idle for tens of minutes.
 
-    Important: take the per-GPU lock *before* a global concurrency slot.  The
-    reverse order lets N workers on one GPU consume all slots while blocked on
-    that GPU's lock, starving other GPUs for tens of minutes.
+    Only the MuJoCo rollout should hold this lock; CUDA critic/actor updates
+    run *after* release so training does not extend the EGL queue.  A short
+    cooldown after unlock lets GL teardown finish.  Take a per-GPU slot
+    *before* the global concurrency slot so one busy GPU cannot consume every
+    machine-wide slot while blocked.
     """
     device = _egl_device_id()
     lock_dir = _egl_lock_dir()
     lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = lock_dir / f"gpu_{device}.lock"
-    cooldown = float(os.environ.get("RLT_EGL_COOLDOWN_SEC", "1.5"))
-    handle = open(lock_path, "a+", encoding="utf-8")
+    per_gpu = max(1, int(os.environ.get("RLT_EGL_PER_GPU", "2")))
+    cooldown = float(os.environ.get("RLT_EGL_COOLDOWN_SEC", "0.5"))
+    handles: list[Any] = []
+    slot = -1
+    waited_rounds = 0
     try:
-        log.info("Waiting for EGL lock on GPU %s (%s)", device, lock_path)
-        waited_rounds = 0
-        while True:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                waited_rounds += 1
-                if waited_rounds == 1 or waited_rounds % 20 == 0:
-                    log.info(
-                        "Still waiting for EGL lock on GPU %s (waited ~%.0fs)",
-                        device,
-                        waited_rounds * 0.5,
-                    )
-                time.sleep(0.5)
-                if _STOP_REQUESTED:
-                    raise RuntimeError(
-                        f"Stop requested while waiting for EGL lock on GPU {device}"
-                    ) from None
-        handle.seek(0)
-        handle.truncate()
-        handle.write(f"pid={os.getpid()} device={device}\n")
-        handle.flush()
-        log.info("Acquired EGL lock on GPU %s", device)
-        # Only after we own this GPU, consume a machine-wide rollout slot.
-        with _egl_concurrency_slot():
-            yield
+        log.info(
+            "Waiting for EGL lock on GPU %s (%d slots under %s)",
+            device,
+            per_gpu,
+            lock_dir,
+        )
+        while not _STOP_REQUESTED:
+            for idx in range(per_gpu):
+                path = lock_dir / f"gpu_{device}_s{idx}.lock"
+                handle = open(path, "a+", encoding="utf-8")
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    handle.close()
+                    continue
+                handle.seek(0)
+                handle.truncate()
+                handle.write(f"pid={os.getpid()} device={device} slot={idx}\n")
+                handle.flush()
+                handles.append(handle)
+                slot = idx
+                log.info(
+                    "Acquired EGL lock on GPU %s slot %d/%d",
+                    device,
+                    idx + 1,
+                    per_gpu,
+                )
+                with _egl_concurrency_slot():
+                    yield
+                return
+            waited_rounds += 1
+            if waited_rounds == 1 or waited_rounds % 20 == 0:
+                log.info(
+                    "Still waiting for EGL lock on GPU %s (waited ~%.0fs, per_gpu=%d)",
+                    device,
+                    waited_rounds * 0.5,
+                    per_gpu,
+                )
+            time.sleep(0.5)
+        raise RuntimeError(
+            f"Stop requested while waiting for EGL lock on GPU {device}"
+        )
     finally:
         try:
             gc.collect()
@@ -345,10 +362,14 @@ def _egl_gpu_lock() -> Iterator[None]:
                 torch.cuda.synchronize()
             if cooldown > 0.0:
                 time.sleep(cooldown)
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
-            handle.close()
-
+            for handle in handles:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    handle.close()
+            if slot >= 0:
+                log.info("Released EGL lock on GPU %s slot %d", device, slot)
 
 class RLTOnlinePolicy(MolmoAct2_Policy):
     """MolmoSpaces policy that applies one local RLT decision per action chunk."""
@@ -829,7 +850,7 @@ def _gate_status(
     healthy = critic_is_healthy(model, batch)
     if not healthy:
         return False, 0.0, False, 0.0
-    advantage = predicted_lcb_advantage(model, batch)
+    advantage = predicted_deploy_advantage(model, batch)
     sensitivity = action_sensitivity(
         model, batch, noise=float(args.gate_sensitivity_noise)
     )
@@ -1236,7 +1257,8 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         n_steps = 0
         last_q, last_actor, last_guide, last_token = {}, {}, {}, {}
         try:
-            # Serialize MuJoCo EGL + the following CUDA train step on this GPU.
+            # Serialize MuJoCo EGL only; CUDA train runs after unlock so it does
+            # not extend the per-GPU EGL queue.
             with _egl_gpu_lock():
                 results = run_evaluation(
                     eval_config_cls=MolmoAct2PolicyEvalConfig,
@@ -1273,16 +1295,15 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                     if token_overflow > 0:
                         del token_replay.tokens[:token_overflow]
                         del token_replay.masks[:token_overflow]
-                    # Train while still holding the GPU lock so another trainer
-                    # cannot start EGL on this device during our CUDA updates.
-                    last_q, last_actor, last_guide, last_token = _train_after_episode(
-                        args,
-                        model,
-                        optimizers,
-                        replay,
-                        token_replay,
-                        device,
-                    )
+            if rollout_ok and n_steps > 0:
+                last_q, last_actor, last_guide, last_token = _train_after_episode(
+                    args,
+                    model,
+                    optimizers,
+                    replay,
+                    token_replay,
+                    device,
+                )
         except Exception as error:  # noqa: BLE001
             log.warning("Episode %d rollout failed: %s", episode_idx, error)
             success = False
@@ -1591,7 +1612,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cql_action_radius", type=float, default=0.2)
     parser.add_argument("--ref_dropout", type=float, default=0.5)
     parser.add_argument("--actor_beta", type=float, default=1.0)
-    parser.add_argument("--guide_beta", type=float, default=1.0)
+    parser.add_argument("--guide_beta", type=float, default=0.1)
     parser.add_argument("--target_divergence", type=float, default=0.0025)
     parser.add_argument("--lr_token", type=float, default=1e-4)
     parser.add_argument("--lr_critic", type=float, default=3e-4)

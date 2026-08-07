@@ -125,6 +125,28 @@ def test_td_actor_guide_steps_finite():
     assert np.isfinite(adv)
 
 
+def test_residual_guide_is_additive():
+    """Deploy must be ã+Δπ+Δg, not replace the actor with ref+Δg (v8 bug)."""
+    torch.manual_seed(0)
+    model = MolmoAct2RLTCF(token_layers=1, token_d_model=128, use_cf_guide=True)
+    model.set_norm_stats(torch.zeros(8), torch.ones(8), torch.zeros(8), torch.ones(8))
+    # Break zero-init so the actor residual is nonzero.
+    with torch.no_grad():
+        for p in model.actor.parameters():
+            p.add_(0.05 * torch.randn_like(p))
+    state = torch.randn(4, STATE_DIM)
+    ref = torch.zeros(4, CHUNK_SIZE, ACTION_DIM)
+    act_a, info_a = model.actor_chunk(state, ref, deterministic=True, apply_guide=False)
+    act_g, info_g = model.actor_chunk(state, ref, deterministic=True, apply_guide=True)
+    assert "guide_delta" in info_g
+    expected = info_a["actor_mean"] + info_g["guide_delta"]
+    assert torch.allclose(act_g, expected, atol=1e-5)
+    assert float(info_a["actor_delta"].abs().mean()) > 1e-4
+    # Must not collapse to reference + guide only.
+    ref_plus_g = ref + info_g["guide_delta"]
+    assert not torch.allclose(act_g, ref_plus_g, atol=1e-5)
+
+
 def test_normalized_grad_and_guide():
     grads = [torch.randn(3, CHUNK_SIZE, ACTION_DIM) for _ in range(2)]
     tgt = normalized_grad_target(grads)
