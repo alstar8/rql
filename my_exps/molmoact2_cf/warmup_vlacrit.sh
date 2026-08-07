@@ -41,7 +41,7 @@ if [[ ! -f "${BUFFER}" || "${FORCE_COLLECT:-0}" == "1" ]]; then
     --disable_g \
     --replay_out "${BUFFER}" \
     --fit_replay_norm_stats \
-    --tmp_rollout_dir /tmp/molmoact2_cf_rollouts \
+    --tmp_rollout_dir /workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_cf_rollouts \
     --seed 0 \
     2>&1 | tee "${COLLECT_OUT}/collect.log"
 else

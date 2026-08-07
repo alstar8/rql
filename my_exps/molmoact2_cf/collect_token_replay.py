@@ -253,7 +253,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tmp_rollout_dir",
         type=str,
-        default="/tmp/molmoact2_rlt_rollouts",
+        default="/workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_rlt_rollouts",
     )
     parser.add_argument("--num_episodes", type=int, default=100)
     parser.add_argument("--max_attempts", type=int, default=0)

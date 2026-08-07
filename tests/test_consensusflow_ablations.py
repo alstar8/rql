@@ -161,6 +161,8 @@ def test_ablation_specs_document_switches():
         "no_residual",
         "no_floor",
         "no_crf",
+        "k2",
+        "k20",
         "nocrf_k2",
         "nocrf_k5",
         "nocrf_k20",
@@ -191,6 +193,12 @@ def test_ablation_specs_document_switches():
         "residual_coef": 0.0,
         "ensemble_ct": 10,
     }
+    assert mod.ABLATION_SPECS["k2"]["flags"]["ensemble_ct"] == 2
+    assert mod.ABLATION_SPECS["k20"]["flags"]["ensemble_ct"] == 20
+    for name in ("k2", "k20"):
+        assert mod.ABLATION_SPECS[name]["flags"]["conflict_power"] == 2.0
+        assert mod.ABLATION_SPECS[name]["flags"]["residual_coef"] == 0.25
+        assert mod.ABLATION_SPECS[name]["flags"]["consensus_floor"] == 0.01
     assert mod.ABLATION_SPECS["nocrf_k2"]["flags"]["ensemble_ct"] == 2
     assert mod.ABLATION_SPECS["nocrf_k5"]["flags"]["ensemble_ct"] == 5
     assert mod.ABLATION_SPECS["nocrf_k20"]["flags"]["ensemble_ct"] == 20

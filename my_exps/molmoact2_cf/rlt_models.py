@@ -22,7 +22,14 @@ from models import (
 CHUNK_SIZE = 8
 ACTION_DIM = 8
 STATE_DIM = Z_DIM + PROPRIO_DIM  # 264
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+CF_MODE_RESIDUAL = "residual"
+CF_MODE_FLOW = "flow"
+DEFAULT_FLOW_STEPS = 10
+DEFAULT_GUIDANCE_COEF = 0.5
+DEFAULT_CONSENSUS_FLOOR = 0.01
+DEFAULT_CONFLICT_POWER = 2.0
+DEFAULT_RESIDUAL_DAMP = 0.25
 
 
 def _sinusoidal_positions(length: int, dim: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -233,6 +240,278 @@ class ChunkGaussianActor(nn.Module):
         return mean + std * eps, mean
 
 
+def sinusoidal_time_embed(t: torch.Tensor, dim: int) -> torch.Tensor:
+    """t: (B,) or (B,1) in [0,1] → (B, dim) Fourier features."""
+    if t.ndim == 2:
+        t = t.squeeze(-1)
+    half = dim // 2
+    freqs = torch.exp(
+        -math.log(10000.0)
+        * torch.arange(half, device=t.device, dtype=t.dtype)
+        / max(half - 1, 1)
+    )
+    args = t.unsqueeze(-1) * freqs.unsqueeze(0) * 2.0 * math.pi
+    emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
+    if dim % 2 == 1:
+        emb = F.pad(emb, (0, 1))
+    return emb
+
+
+class TimeCriticHead(nn.Module):
+    """Success-return head Q(s, x, t) with bounded sigmoid output."""
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden: int = 256,
+        time_dim: int = 64,
+        bounded: bool = True,
+    ) -> None:
+        super().__init__()
+        self.bounded = bool(bounded)
+        self.time_dim = int(time_dim)
+        self.net = mlp(state_dim + action_dim + time_dim, 1, hidden, n_hidden=2)
+
+    def forward(self, state: torch.Tensor, actions: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        flat = actions.reshape(actions.shape[0], -1)
+        if t.ndim == 1:
+            t = t.unsqueeze(-1)
+        temb = sinusoidal_time_embed(t.squeeze(-1), self.time_dim)
+        logits = self.net(torch.cat([state, flat, temb], dim=-1)).squeeze(-1)
+        return torch.sigmoid(logits) if self.bounded else logits
+
+
+class EnsembleTimeCQL(nn.Module):
+    """Time-conditioned ensemble critic for flow-time ConsensusFlow."""
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        n_critics: int = 10,
+        hidden: int = 256,
+        time_dim: int = 64,
+        bounded: bool = True,
+    ) -> None:
+        super().__init__()
+        self.action_dim = int(action_dim)
+        self.bounded = bool(bounded)
+        self.critics = nn.ModuleList(
+            [
+                TimeCriticHead(state_dim, action_dim, hidden, time_dim, bounded=bounded)
+                for _ in range(n_critics)
+            ]
+        )
+
+    def forward(self, state: torch.Tensor, actions: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return torch.stack([c(state, actions, t) for c in self.critics], dim=0)
+
+    def q_mean(self, state: torch.Tensor, actions: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return self.forward(state, actions, t).mean(dim=0)
+
+    def q_min(self, state: torch.Tensor, actions: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        return self.forward(state, actions, t).min(dim=0).values
+
+    def cql_penalty(
+        self,
+        state: torch.Tensor,
+        data_actions: torch.Tensor,
+        t: torch.Tensor,
+        n_actions: int = 4,
+        coef: float = 1.0,
+        action_radius: float = 0.05,
+        margin: float = 0.0,
+        far_scale: float = 1.0,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        if n_actions < 1:
+            zero = data_actions.new_zeros(())
+            return zero, {
+                "cql_loss": zero.detach(),
+                "cql_logmeanexp_q": zero.detach(),
+                "cql_data_q": self.q_mean(state, data_actions, t).mean().detach(),
+                "cql_gap": zero.detach(),
+            }
+        b = state.shape[0]
+        noise = torch.randn(
+            n_actions, b, self.action_dim, device=state.device, dtype=state.dtype
+        ) * float(far_scale)
+        norms = noise.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        min_norm = float(action_radius) + 1e-3
+        noise = noise * (min_norm + F.relu(norms - min_norm)) / norms
+        far_actions = data_actions.unsqueeze(0) + noise
+        state_rep = state.unsqueeze(0).expand(n_actions, -1, -1).reshape(n_actions * b, -1)
+        far_flat = far_actions.reshape(n_actions * b, -1)
+        if t.ndim == 1:
+            t = t.unsqueeze(-1)
+        t_rep = t.unsqueeze(0).expand(n_actions, -1, -1).reshape(n_actions * b, -1)
+        far_q = self.q_mean(state_rep, far_flat, t_rep).reshape(n_actions, b)
+        logmeanexp_q = torch.logsumexp(far_q, dim=0) - math.log(n_actions)
+        data_q = self.q_mean(state, data_actions, t)
+        gap = logmeanexp_q - data_q + margin
+        cql = F.relu(gap).mean()
+        return coef * cql, {
+            "cql_loss": cql.detach(),
+            "cql_logmeanexp_q": logmeanexp_q.mean().detach(),
+            "cql_data_q": data_q.mean().detach(),
+            "cql_gap": gap.mean().detach(),
+        }
+
+
+class FlowVelocityActor(nn.Module):
+    """VLA-conditioned flow velocity: v_θ(s, x_t, t, a_VLA)."""
+
+    def __init__(
+        self,
+        state_dim: int = STATE_DIM,
+        action_dim: int = ACTION_DIM,
+        chunk_size: int = CHUNK_SIZE,
+        hidden: int = 256,
+        time_dim: int = 64,
+    ) -> None:
+        super().__init__()
+        self.action_dim = int(action_dim)
+        self.chunk_size = int(chunk_size)
+        self.flat_action = self.action_dim * self.chunk_size
+        self.time_dim = int(time_dim)
+        # state + x_t + a_ref + t
+        self.net = mlp(
+            state_dim + 2 * self.flat_action + time_dim,
+            self.flat_action,
+            hidden,
+            n_hidden=3,
+            zero_out=False,
+        )
+
+    def forward(
+        self,
+        state: torch.Tensor,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        reference: torch.Tensor,
+    ) -> torch.Tensor:
+        b = state.shape[0]
+        x_flat = x_t.reshape(b, -1)
+        ref_flat = reference.reshape(b, -1).detach()
+        if t.ndim == 1:
+            t = t.unsqueeze(-1)
+        temb = sinusoidal_time_embed(t.squeeze(-1), self.time_dim)
+        v = self.net(torch.cat([state, x_flat, ref_flat, temb], dim=-1))
+        return v.reshape(b, self.chunk_size, self.action_dim)
+
+
+class FlowCFGuide(nn.Module):
+    """Paper ConsensusFlow guide: W_φ(s,x,t) → bounded G_φ with trust/conflict/damping."""
+
+    def __init__(
+        self,
+        state_dim: int = STATE_DIM,
+        action_dim: int = ACTION_DIM,
+        chunk_size: int = CHUNK_SIZE,
+        hidden: int = 256,
+        time_dim: int = 64,
+        guidance_coef: float = DEFAULT_GUIDANCE_COEF,
+        conflict_power: float = DEFAULT_CONFLICT_POWER,
+        residual_coef: float = DEFAULT_RESIDUAL_DAMP,
+    ) -> None:
+        super().__init__()
+        self.action_dim = int(action_dim)
+        self.chunk_size = int(chunk_size)
+        self.flat_action = self.action_dim * self.chunk_size
+        self.time_dim = int(time_dim)
+        self.guidance_coef = float(guidance_coef)
+        self.conflict_power = float(conflict_power)
+        self.residual_coef = float(residual_coef)
+        self.net = mlp(
+            state_dim + self.flat_action + time_dim,
+            self.flat_action,
+            hidden,
+            n_hidden=3,
+            zero_out=True,
+        )
+
+    def raw_w(
+        self,
+        state: torch.Tensor,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+    ) -> torch.Tensor:
+        b = state.shape[0]
+        x_flat = x_t.reshape(b, -1).detach()
+        if t.ndim == 1:
+            t = t.unsqueeze(-1)
+        temb = sinusoidal_time_embed(t.squeeze(-1), self.time_dim)
+        return self.net(torch.cat([state, x_flat, temb], dim=-1))
+
+    @staticmethod
+    def _project_unit_ball(w: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        norms = w.norm(dim=-1, keepdim=True).clamp_min(eps)
+        return w * torch.minimum(torch.ones_like(norms), 1.0 / norms)
+
+    def behavior_safe_direction(
+        self,
+        w: torch.Tensor,
+        behavior_velocity: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        flat_v = behavior_velocity.reshape(behavior_velocity.shape[0], -1).detach()
+        w = self._project_unit_ball(w)
+        w_norm = w.norm(dim=-1, keepdim=True)
+        trust = w_norm.detach()
+        v_norm = flat_v.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        v_unit = flat_v / v_norm
+        parallel = (w * v_unit).sum(dim=-1, keepdim=True)
+        kill_frac = 1.0 - torch.pow(trust.clamp(0.0, 1.0), self.conflict_power)
+        conflict_free = self._project_unit_ball(w - kill_frac * torch.minimum(parallel, torch.zeros_like(parallel)) * v_unit)
+        alignment_cos = parallel / (w_norm + 1e-6)
+        damp = (1.0 - self.residual_coef * torch.relu(alignment_cos) * trust).clamp(0.0, 1.0)
+        safe_w = self._project_unit_ball(conflict_free * damp)
+        return safe_w, {
+            "trust": trust.mean().detach(),
+            "behavior_conflict": (parallel < 0).float().mean().detach(),
+            "residual_damp": damp.mean().detach(),
+        }
+
+    def guidance(
+        self,
+        state: torch.Tensor,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        behavior_velocity: torch.Tensor,
+        *,
+        bypass_safety: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        """Return (G chunk-shaped, W flat, diagnostics)."""
+        b = state.shape[0]
+        w = self.raw_w(state, x_t, t)
+        if bypass_safety:
+            safe = self._project_unit_ball(w)
+            diag: dict[str, torch.Tensor] = {}
+        else:
+            safe, diag = self.behavior_safe_direction(w, behavior_velocity)
+        if t.ndim == 1:
+            t_col = t.unsqueeze(-1)
+        else:
+            t_col = t
+        g_flat = self.guidance_coef * t_col * safe
+        g = g_flat.reshape(b, self.chunk_size, self.action_dim)
+        return g, w, diag
+
+    # Residual-API compatibility shim used by online residual paths.
+    def guide(
+        self,
+        state: torch.Tensor,
+        reference: torch.Tensor,
+        actor_delta: torch.Tensor | None = None,
+        trust: float = 1.0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        del actor_delta, trust
+        t = torch.ones(state.shape[0], 1, device=state.device, dtype=state.dtype)
+        x = reference.detach()
+        v = torch.zeros_like(x)
+        g, _, _ = self.guidance(state, x, t, v, bypass_safety=True)
+        return reference.detach() + g, g
+
+
 class CFGradientGuide(nn.Module):
     """Distill common-scale-normalized ensemble action gradients into a bounded guide."""
 
@@ -275,7 +554,7 @@ class CFGradientGuide(nn.Module):
 
 
 class MolmoAct2RLTCF(nn.Module):
-    """Full RLT+CF stack: RL token, chunk critic/actor, optional CF guide."""
+    """RLT+CF stack: residual one-shot CF or full flow-time ConsensusFlow."""
 
     def __init__(
         self,
@@ -294,9 +573,18 @@ class MolmoAct2RLTCF(nn.Module):
         token_d_model: int = 256,
         token_layers: int = 2,
         token_heads: int = 4,
+        cf_mode: str = CF_MODE_RESIDUAL,
+        flow_steps: int = DEFAULT_FLOW_STEPS,
+        guidance_coef: float = DEFAULT_GUIDANCE_COEF,
+        time_dim: int = 64,
     ) -> None:
         super().__init__()
+        mode = str(cf_mode).lower().strip()
+        if mode not in {CF_MODE_RESIDUAL, CF_MODE_FLOW}:
+            raise ValueError(f"cf_mode must be residual|flow, got {cf_mode!r}")
         self.schema_version = SCHEMA_VERSION
+        self.cf_mode = mode
+        self.is_flow = mode == CF_MODE_FLOW
         self.feature_dim = int(feature_dim)
         self.z_dim = int(z_dim)
         self.proprio_dim = int(proprio_dim)
@@ -314,6 +602,9 @@ class MolmoAct2RLTCF(nn.Module):
         self.token_d_model = int(token_d_model)
         self.token_layers = int(token_layers)
         self.token_heads = int(token_heads)
+        self.flow_steps = int(flow_steps)
+        self.guidance_coef = float(guidance_coef)
+        self.time_dim = int(time_dim)
 
         self.token_ae = RLTokenAutoencoder(
             token_dim=self.feature_dim,
@@ -334,43 +625,80 @@ class MolmoAct2RLTCF(nn.Module):
         for p in self.target_token_encoder.parameters():
             p.requires_grad_(False)
 
-        self.actor = ChunkGaussianActor(
-            self.state_dim,
-            self.action_dim,
-            self.chunk_size,
-            hidden=hidden,
-            residual=residual_actor,
-            max_delta=max_delta,
-        )
-        self.critic = EnsembleCQL(
-            self.state_dim,
-            self.flat_action,
-            n_critics=n_critics,
-            hidden=hidden,
-            bounded=self.bounded_critic,
-        )
-        self.target_critic = EnsembleCQL(
-            self.state_dim,
-            self.flat_action,
-            n_critics=n_critics,
-            hidden=hidden,
-            bounded=self.bounded_critic,
-        )
-        self.target_critic.load_state_dict(self.critic.state_dict())
-        for p in self.target_critic.parameters():
-            p.requires_grad_(False)
-
-        self.guide = (
-            CFGradientGuide(
+        if self.is_flow:
+            self.actor = FlowVelocityActor(
                 self.state_dim,
                 self.action_dim,
                 self.chunk_size,
                 hidden=hidden,
+                time_dim=time_dim,
+            )
+            self.critic = EnsembleTimeCQL(
+                self.state_dim,
+                self.flat_action,
+                n_critics=n_critics,
+                hidden=hidden,
+                time_dim=time_dim,
+                bounded=self.bounded_critic,
+            )
+            self.target_critic = EnsembleTimeCQL(
+                self.state_dim,
+                self.flat_action,
+                n_critics=n_critics,
+                hidden=hidden,
+                time_dim=time_dim,
+                bounded=self.bounded_critic,
+            )
+            self.guide = (
+                FlowCFGuide(
+                    self.state_dim,
+                    self.action_dim,
+                    self.chunk_size,
+                    hidden=hidden,
+                    time_dim=time_dim,
+                    guidance_coef=guidance_coef,
+                )
+                if self.use_cf_guide
+                else None
+            )
+        else:
+            self.actor = ChunkGaussianActor(
+                self.state_dim,
+                self.action_dim,
+                self.chunk_size,
+                hidden=hidden,
+                residual=residual_actor,
                 max_delta=max_delta,
             )
-            if self.use_cf_guide
-            else None
-        )
+            self.critic = EnsembleCQL(
+                self.state_dim,
+                self.flat_action,
+                n_critics=n_critics,
+                hidden=hidden,
+                bounded=self.bounded_critic,
+            )
+            self.target_critic = EnsembleCQL(
+                self.state_dim,
+                self.flat_action,
+                n_critics=n_critics,
+                hidden=hidden,
+                bounded=self.bounded_critic,
+            )
+            self.guide = (
+                CFGradientGuide(
+                    self.state_dim,
+                    self.action_dim,
+                    self.chunk_size,
+                    hidden=hidden,
+                    max_delta=max_delta,
+                )
+                if self.use_cf_guide
+                else None
+            )
+        self.target_critic.load_state_dict(self.critic.state_dict())
+        for p in self.target_critic.parameters():
+            p.requires_grad_(False)
+
         self.log_alpha = LogAlpha(1.0)
 
         self.register_buffer("proprio_mean", torch.zeros(self.proprio_dim))
@@ -455,6 +783,51 @@ class MolmoAct2RLTCF(nn.Module):
         for p, tp in zip(self.token_ae.encoder.parameters(), self.target_token_encoder.parameters()):
             tp.data.mul_(1.0 - tau).add_(p.data, alpha=tau)
 
+    def flow_velocity(
+        self,
+        state: torch.Tensor,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        reference_n: torch.Tensor,
+    ) -> torch.Tensor:
+        if not self.is_flow:
+            raise RuntimeError("flow_velocity requires cf_mode=flow")
+        return self.actor(state, x_t, t, reference_n)
+
+    def flow_sample(
+        self,
+        state: torch.Tensor,
+        reference_n: torch.Tensor,
+        *,
+        apply_guide: bool = False,
+        n_steps: int | None = None,
+        x0: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Euler integrate dx/dt = v_θ(+G) from noise to action chunk."""
+        if not self.is_flow:
+            raise RuntimeError("flow_sample requires cf_mode=flow")
+        s = state.detach()
+        ref = reference_n.detach()
+        steps = int(n_steps or self.flow_steps)
+        b = s.shape[0]
+        x = torch.randn_like(ref) if x0 is None else x0
+        dt = 1.0 / float(steps)
+        guide_norm = s.new_zeros(())
+        for i in range(steps):
+            t = torch.full((b, 1), i / float(steps), device=s.device, dtype=s.dtype)
+            v = self.flow_velocity(s, x, t, ref)
+            g = torch.zeros_like(v)
+            if apply_guide and self.guide is not None:
+                g, _, _ = self.guide.guidance(s, x, t, v)
+                guide_norm = guide_norm + g.detach().flatten(1).norm(dim=-1).mean()
+            x = x + (v + g) * dt
+        info = {
+            "actor_mean": x,
+            "actor_delta": x - ref,
+            "guide_norm": guide_norm / float(steps),
+        }
+        return x, info
+
     def actor_chunk(
         self,
         state: torch.Tensor,
@@ -466,6 +839,14 @@ class MolmoAct2RLTCF(nn.Module):
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         # Actor/guide see stop-grad state so token updates come only from recon/critic.
         s = state.detach()
+        if self.is_flow:
+            # reference_present dropout: blend toward zeros so actor must not rely only on ref.
+            ref = reference_n
+            if reference_present is not None:
+                present = reference_present.reshape(-1, 1, 1).to(dtype=ref.dtype)
+                ref = ref * present
+            return self.flow_sample(s, ref, apply_guide=apply_guide)
+
         sample, mean = self.actor.sample(
             s, reference_n, reference_present=reference_present, deterministic=deterministic
         )
@@ -477,19 +858,42 @@ class MolmoAct2RLTCF(nn.Module):
             info["guide_delta"] = g_delta
         return out, info
 
-    def q_chunk(self, state: torch.Tensor, actions_n: torch.Tensor, *, target: bool = False) -> torch.Tensor:
+    def q_chunk(
+        self,
+        state: torch.Tensor,
+        actions_n: torch.Tensor,
+        *,
+        target: bool = False,
+        t: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         critic = self.target_critic if target else self.critic
         flat = actions_n.reshape(actions_n.shape[0], -1)
+        if self.is_flow:
+            if t is None:
+                t = torch.ones(state.shape[0], 1, device=state.device, dtype=state.dtype)
+            return critic(state, flat, t)
         return critic(state, flat)
 
-    def q_min_chunk(self, state: torch.Tensor, actions_n: torch.Tensor, *, target: bool = False) -> torch.Tensor:
+    def q_min_chunk(
+        self,
+        state: torch.Tensor,
+        actions_n: torch.Tensor,
+        *,
+        target: bool = False,
+        t: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         critic = self.target_critic if target else self.critic
         flat = actions_n.reshape(actions_n.shape[0], -1)
+        if self.is_flow:
+            if t is None:
+                t = torch.ones(state.shape[0], 1, device=state.device, dtype=state.dtype)
+            return critic.q_min(state, flat, t)
         return critic.q_min(state, flat)
 
     def save(self, path: str, meta: dict[str, Any] | None = None) -> None:
         payload = {
             "schema_version": self.schema_version,
+            "cf_mode": self.cf_mode,
             "state_dict": self.state_dict(),
             "feature_dim": self.feature_dim,
             "z_dim": self.z_dim,
@@ -506,6 +910,9 @@ class MolmoAct2RLTCF(nn.Module):
             "token_d_model": self.token_d_model,
             "token_layers": self.token_layers,
             "token_heads": self.token_heads,
+            "flow_steps": self.flow_steps,
+            "guidance_coef": self.guidance_coef,
+            "time_dim": self.time_dim,
             "meta": meta or {},
         }
         torch.save(payload, path)
@@ -529,8 +936,58 @@ class MolmoAct2RLTCF(nn.Module):
             token_d_model=int(payload.get("token_d_model", 256)),
             token_layers=int(payload.get("token_layers", 2)),
             token_heads=int(payload.get("token_heads", 4)),
+            cf_mode=str(payload.get("cf_mode", CF_MODE_RESIDUAL)),
+            flow_steps=int(payload.get("flow_steps", DEFAULT_FLOW_STEPS)),
+            guidance_coef=float(payload.get("guidance_coef", DEFAULT_GUIDANCE_COEF)),
+            time_dim=int(payload.get("time_dim", 64)),
         )
         model.load_state_dict(payload["state_dict"], strict=False)
+        return model
+
+    @classmethod
+    def from_token_ckpt_as_flow(
+        cls,
+        path: str,
+        map_location: str | torch.device = "cpu",
+        *,
+        use_cf_guide: bool = True,
+        n_critics: int = 10,
+        flow_steps: int = DEFAULT_FLOW_STEPS,
+        guidance_coef: float = DEFAULT_GUIDANCE_COEF,
+    ) -> "MolmoAct2RLTCF":
+        """Build a flow-CF model, copying token AE + norm stats from a residual/token ckpt."""
+        payload = torch.load(path, map_location=map_location, weights_only=False)
+        model = cls(
+            feature_dim=int(payload.get("feature_dim", FEATURE_DIM)),
+            z_dim=int(payload.get("z_dim", Z_DIM)),
+            proprio_dim=int(payload.get("proprio_dim", PROPRIO_DIM)),
+            action_dim=int(payload.get("action_dim", ACTION_DIM)),
+            chunk_size=int(payload.get("chunk_size", CHUNK_SIZE)),
+            bounded_critic=bool(payload.get("bounded_critic", True)),
+            use_cf_guide=use_cf_guide,
+            tune_token_online=False,
+            hidden=int(payload.get("hidden", 256)),
+            n_critics=int(n_critics),
+            token_d_model=int(payload.get("token_d_model", 256)),
+            token_layers=int(payload.get("token_layers", 2)),
+            token_heads=int(payload.get("token_heads", 4)),
+            cf_mode=CF_MODE_FLOW,
+            flow_steps=flow_steps,
+            guidance_coef=guidance_coef,
+            time_dim=64,
+        )
+        src = payload["state_dict"]
+        dst = model.state_dict()
+        copied = {
+            k: v
+            for k, v in src.items()
+            if k.startswith(("token_ae.", "target_token_encoder.", "proprio_", "action_", "feature_"))
+            and k in dst
+            and dst[k].shape == v.shape
+        }
+        dst.update(copied)
+        model.load_state_dict(dst, strict=True)
+        model.freeze_token_encoder()
         return model
 
 
@@ -544,6 +1001,22 @@ def normalized_grad_target(
     scales = scales.unsqueeze(-1)
     unit = stacked / scales
     return unit.mean(dim=0)
+
+
+def common_scale_normalize(
+    grad: torch.Tensor,
+    batch_valid: torch.Tensor | None = None,
+    floor_coef: float = DEFAULT_CONSENSUS_FLOOR,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Paper z_k = g / (||g|| + c * m_B + eps) for flat grads (B,D)."""
+    norms = grad.norm(dim=-1, keepdim=True)
+    if batch_valid is None:
+        m_b = norms.mean()
+    else:
+        w = batch_valid.reshape(-1).to(dtype=grad.dtype)
+        m_b = (norms.squeeze(-1) * w).sum() / w.sum().clamp_min(1.0)
+    return grad / (norms + float(floor_coef) * m_b + eps)
 
 
 def chunk_return(

@@ -8,7 +8,7 @@
 #   nohup bash launch_100m.sh --instances_per_gpu 4 \
 #     --out_root .../runs/molmoact2_cf_100m_vlacrit \
 #     --ckpt .../runs/molmoact2_cf_vlacrit_warmup_v2/molmoact2_cf.pt \
-#     > /tmp/molmoact2_cf_100m_vlacrit_launch.log 2>&1 &
+#     > /workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_cf_100m_vlacrit_launch.log 2>&1 &
 
 set -euo pipefail
 
@@ -52,7 +52,7 @@ if [[ ! -f "${BUFFER}" ]]; then
 fi
 
 TOTAL_INSTANCES=$((NUM_GPUS * INSTANCES_PER_GPU))
-mkdir -p "${OUT_ROOT}" "${LOG_DIR}" /tmp/molmoact2_cf_rollouts
+mkdir -p "${OUT_ROOT}" "${LOG_DIR}" /workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_cf_rollouts
 
 echo "[100m] stopping prior CF serve/train/watchdog ..."
 pkill -9 -f 'molmoact2_cf/server_watchdog.sh' 2>/dev/null || true
@@ -127,7 +127,7 @@ for ((g=0; g<TOTAL_INSTANCES; g++)); do
     --target_env_steps "${STEPS_PER}"
     --log_every_steps "${LOG_EVERY_STEPS}"
     --log_every_episodes "${LOG_EVERY_EPS}"
-    --tmp_rollout_dir /tmp/molmoact2_cf_rollouts
+    --tmp_rollout_dir /workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_cf_rollouts
     --updates_per_episode 5
     --g_start_episodes 20
     --g_min_advantage 0.005

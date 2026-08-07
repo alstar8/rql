@@ -1,0 +1,285 @@
+% Standalone section: coupling between the behavior field v and the residual G.
+% Include from ConsensusFlow.tex / supplement with \input{...} after adjusting paths,
+% or compile alone with a thin wrapper. Notation matches ConsensusFlow.tex.
+
+\section{When Must $v$ See $G$, and When Is Absorbing $G$ into $v$ Harmful?}
+\label{sec:vg-coupling}
+
+\noindent\textbf{Claim (informal).}
+The behavior field $v_\theta$ should be trained under dynamics that include the
+residual $G_\phi$ (so $v$ ``sees'' $G$), but forcing all improvement into $v$ until
+$G$ is payoff-redundant at evaluation is often harmful relative to keeping a
+nontrivial sample-time residual.
+
+\noindent We separate what follows from geometry (provable) from what is only
+supported by matched ablations (empirical).
+
+\subsection{Setup}
+\label{subsec:vg-setup}
+
+Let $T_{v,G}$ denote the (Euler) flow map induced by
+\begin{equation}
+  \frac{\mathrm{d}x}{\mathrm{d}t}=v_\theta(s,x,t)+G_\phi(s,x,t),
+  \label{eq:vg-ode}
+\end{equation}
+and write $T_{v,0}$ for the unguided map ($G\equiv 0$).
+For an endpoint refiner $G_a$ one may equivalently take
+$a=T_{v,0}(s,z)+G_a(s,T_{v,0}(s,z))$ with a trust set
+$\|G_a\|\le\varepsilon$ (or $\mathbb{E}\|G_a\|^2\le\delta$).
+Let $J(v,G)$ be any bounded performance functional of the deployed map
+(e.g.\ success rate, expected return).
+Define the \emph{role gap}
+\begin{equation}
+  \Delta(v,G)\;:=\;J(v,G)-J(v,0).
+  \label{eq:role-gap}
+\end{equation}
+In ConsensusFlow, the $\lambda$-gap is the special case obtained by evaluating
+the same checkpoint at train-$\lambda$ versus $\lambda=0$
+($G_\phi=\lambda t\,u_{\mathrm{damp}}$).
+
+Base ConsensusFlow optimizes $v$ on the \emph{guided} one-step lookahead
+\begin{equation}
+  x^+=x_t+\bigl(v_\theta+\mathrm{sg}(G_\phi)\bigr)\Delta t,
+  \qquad
+  \mathcal{L}_{\mathrm{actor}}=-\mathbb{E}\bigl[Q(s,x^+,t^+)\bigr],
+  \label{eq:guided-actor}
+\end{equation}
+so gradients update $v$ at states that depend on $G$, while stop-gradient
+prevents $G$ from receiving the actor path.
+Decoupled BC-$v$ removes~\eqref{eq:guided-actor} and trains $v$ by flow matching
+only; residual RL is confined to $G$.
+
+\subsection{Provable: a small residual cannot replace moving $v$}
+\label{subsec:budget}
+
+\begin{proposition}[Endpoint residual budget]
+\label{prop:budget}
+Fix a base action $a_v=T_{v,0}(s,z)\in\mathbb{R}^d$ and a closed ball
+$\mathcal{B}_\varepsilon(a_v)=\{a:\|a-a_v\|\le\varepsilon\}$.
+For any measurable residual with $\|G_a(s,a_v)\|\le\varepsilon$,
+the deployed action lies in $\mathcal{B}_\varepsilon(a_v)$.
+Consequently, if every optimal action $a^\star(s)$ for a given $(s,z)$ satisfies
+$\|a^\star(s)-a_v\|>\varepsilon$, then no such $G_a$ can realize $a^\star(s)$.
+\end{proposition}
+
+\begin{proof}
+Immediate from $a=\mathrm{clip}(a_v+G_a)$ (or the Euclidean projection of
+$a_v+G_a$ onto $[-1,1]^d$): the set of reachable actions is contained in the
+$\varepsilon$-neighborhood of $a_v$.
+\end{proof}
+
+\begin{corollary}[Necessity of plastic $v$ or larger trust]
+\label{cor:plastic}
+Under a fixed trust radius $\varepsilon$ (or dual target $\delta$), either
+\begin{enumerate}
+  \item $v$ must be updated so that $a_v$ enters the $\varepsilon$-neighborhood of
+  useful actions, or
+  \item the trust budget must grow until that neighborhood covers them.
+\end{enumerate}
+In particular, \emph{frozen} $v$ with a tiny endpoint/ODE residual budget is
+strictly less expressive than jointly adapted $(v,G)$ whenever the BC map lies
+outside the residual ball of the RL-improving actions.
+\end{corollary}
+
+\noindent\textbf{Remark (ODE form).}
+ConsensusFlow's applied guidance obeys $\|G_\phi\|\le\lambda t\,q\le\lambda t$
+(Eq.~guidance bounds in the main text). Integrating over $N$ Euler steps yields
+a pathwise displacement of order $O(\lambda)$ relative to the pure-$v$ trajectory,
+so the same neighborhood obstruction applies with $\varepsilon=\Theta(\lambda)$.
+
+\noindent\textbf{What this proves for the informal claim.}
+It proves that $v$ must receive \emph{some} adaptation toward high-value actions
+\emph{or} $G$'s budget must be large. It does \emph{not} by itself require that
+adaptation to be the guided actor loss~\eqref{eq:guided-actor}; BC-online updates
+on online data are another (weaker) form of plasticity.
+
+\subsection{Provable: absorption makes $G$ payoff-redundant}
+\label{subsec:absorption}
+
+\begin{definition}[Payoff absorption]
+A pair $(v,G)$ is \emph{payoff-absorbed} if $\Delta(v,G)=0$, i.e.\
+$J(v,G)=J(v,0)$.
+\end{definition}
+
+\begin{proposition}[Representability implies a redundant-$G$ fixed point]
+\label{prop:absorb}
+Suppose the hypothesis class for $v$ is rich enough that for every
+$\phi$ there exists $\theta'(\phi)$ with
+$T_{v_{\theta'(\phi)},0}=T_{v_\theta,G_\phi}$ almost everywhere under the
+evaluation measure.
+Then for every $(v_\theta,G_\phi)$ there exists an equivalent unguided field
+$v_{\theta'}$ with $J(v_{\theta'},0)=J(v_\theta,G_\phi)$ and
+$\Delta(v_{\theta'},G)=0$ for any subsequent residual evaluated at that
+$v_{\theta'}$ with $G\equiv 0$ at test time.
+\end{proposition}
+
+\begin{proof}
+Take $\theta'(\phi)$ from the representability assumption.
+Then $J(v_{\theta'},0)=J(v_\theta,G_\phi)$ by equality of the induced maps.
+Deploying with $G=0$ at $v_{\theta'}$ leaves performance unchanged, so the role
+gap vanishes.
+\end{proof}
+
+\begin{corollary}[Training pressure toward absorption]
+\label{cor:absorb-pressure}
+If the actor objective~\eqref{eq:guided-actor} (or any imitation of the guided
+map by $v$) is active with positive weight while $G$ is simultaneously trained,
+and $v$ is sufficiently expressive, gradient descent on $v$ is incentivized to
+imitate $T_{v,G}$ with $T_{v,0}$.
+Any limit point at which this imitation is exact is payoff-absorbed
+($\Delta=0$): sample-time $G$ no longer changes $J$.
+\end{corollary}
+
+\noindent\textbf{What this proves.}
+``Integrating $G$ completely into $v$'' is a well-defined limit
+(payoff absorption, $\Delta\!\to\!0$).
+It is \emph{not} automatically optimal for $J$; it only says $G$ becomes
+unnecessary \emph{given that $v$}.
+Whether absorption lowers $J$ relative to a non-absorbed coupled solution is
+outside pure geometry and is answered empirically below.
+
+\subsection{What ``$v$ should see $G$'' means precisely}
+\label{subsec:see-g}
+
+We distinguish three couplings:
+
+\begin{center}
+\begin{tabular}{@{}llp{0.48\linewidth}@{}}
+\toprule
+Coupling & $v$ objective & Role of $G$ in $v$'s training \\
+\midrule
+Unguided RL ($G$-blind) &
+  $-Q(s,x_t+v\Delta t)$ &
+  $G$ absent from $v$'s lookahead \\
+Guided actor (CF) &
+  $-Q(s,x_t+(v+\mathrm{sg}G)\Delta t)$ &
+  $v$ updated on guided states; no $\nabla$ through $G$ \\
+BC-only / frozen $v$ &
+  flow matching (or none) &
+  $G$ never enters $v$'s loss \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{proposition}[Guided vs.\ unguided one-step targets]
+\label{prop:guided-target}
+Let $Q$ be differentiable and fix $(s,x_t,t,G)$.
+Write $x_v^+=x_t+v\Delta t$ and $x_g^+=x_t+(v+\mathrm{sg}G)\Delta t$.
+The actor gradients differ:
+\begin{equation}
+  \nabla_v\mathcal{L}_{\mathrm{guided}}
+  =-\Delta t\,\nabla_x Q(s,x_g^+,t^+)\,
+  \tfrac{\partial v}{\partial\theta},
+  \qquad
+  \nabla_v\mathcal{L}_{\mathrm{unguided}}
+  =-\Delta t\,\nabla_x Q(s,x_v^+,t^+)\,
+  \tfrac{\partial v}{\partial\theta}.
+\end{equation}
+Whenever $\nabla_x Q(s,x_g^+)\neq\nabla_x Q(s,x_v^+)$, the BC+$G$-blind RL
+update is \emph{not} the same as ConsensusFlow's guided actor update.
+\end{proposition}
+
+\noindent Thus the precise, defensible form of the claim is:
+
+\begin{quote}
+\emph{$v$ should be optimized under the same guided dynamics used at deployment
+(lookahead with $\mathrm{sg}(G)$), not in isolation from $G$.
+Removing that coupling (BC-only / frozen $v$) is a different algorithm with a
+strictly smaller plastic hypothesis class for the base map
+(Proposition~\ref{prop:budget}).}
+\end{quote}
+
+\subsection{Empirical status of the two informal claims}
+\label{subsec:vg-empirical}
+
+\paragraph{Evidence that a nontrivial $G$ is needed (lack of $G$ hurts when $\Delta$ is large).}
+On Decoupled CF with BC-online $v$ and endpoint $G_a$ (three seeds, $2$M steps),
+the role gap~\eqref{eq:role-gap} is large on locomotion and near zero on saturated
+manipulation:
+
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Task & $J(v,G)$ & $J(v,0)$ & $\Delta$ \\
+\midrule
+antmaze-giant & $0.88$ & $0.07$ & $+0.82$ \\
+humanoidmaze-medium & $0.87$ & $0.10$ & $+0.77$ \\
+antsoccer & $0.33$ & $0.17$ & $+0.17$ \\
+cube-double & $0.98$ & $0.98$ & $\approx 0$ \\
+puzzle-4x4 & $0.67$ & $0.65$ & $\approx 0$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Matched G-role $\lambda$-gaps for ConsensusFlow variants (train-$\lambda$ vs.\
+$\lambda{=}0$ at the same checkpoint) show the same pattern when $v$ is kept BC
+(\texttt{bcg\_fromcf}: antmaze $+0.54$, humanoid $+0.44$) and collapse under full
+joint training (\texttt{joint}: five-task mean gap $\approx 0$).
+
+\paragraph{Evidence that full absorption into $v$ can be harmful.}
+Absorption ($\Delta\!\approx\!0$) is \emph{not} universally bad for raw success:
+on cube/puzzle, joint CF remains near-perfect with vanishing $\lambda$-gap.
+It \emph{is} harmful on at least one matched regime: joint online training on
+humanoidmaze-medium yields mean full-$\lambda$ success $\approx 0.19$ with
+\emph{negative} $\lambda$-gap ($\approx -0.11$), i.e.\ the absorbed $v$ is a poor
+standalone policy and sample-time $G$ does not repair it.
+By contrast, BC-$v$ + active $G$ keeps large positive gaps and much higher
+humanoid success under the Decoupled / \texttt{bcg\_fromcf} protocols.
+
+\paragraph{Evidence that $v$ still needs plasticity beyond pure freeze.}
+Frozen-$v$ Decoupled / residual pilots underperform BC-online $v$ and base CF
+(Corollary~\ref{cor:plastic}): five-task Decoupled BC-online mean success
+$0.75$ vs.\ base CF $0.86$, while frozen-$v$+trust is far worse on antmaze
+($0.40$ vs.\ $0.91$).
+Thus ``some signal into $v$'' is supported, but that signal should remain
+\emph{coupled to $G$'s guided states}~\eqref{eq:guided-actor}, not a substitute
+that erases $G$.
+
+\subsection{Sharpened theorem-level statement}
+\label{subsec:vg-sharpened}
+
+\begin{theorem}[Coupling without absorption; informal target]
+\label{thm:goldilocks}
+Under a residual trust budget $\varepsilon=O(\lambda)$ as in ConsensusFlow:
+\begin{enumerate}
+  \item \textbf{(Necessity of base plasticity or budget).}
+  If high-value actions lie outside the $\varepsilon$-neighborhood of the BC
+  map, then either $v$ must move or $\varepsilon$ must grow
+  (Proposition~\ref{prop:budget}).
+  \item \textbf{(Necessity of a live residual when $\Delta>0$).}
+  If a trained pair satisfies $\Delta(v,G)>0$, then deploying $G\equiv 0$
+  strictly reduces $J$; erasing $G$ at evaluation is then harmful for that
+  checkpoint (definition~\eqref{eq:role-gap}).
+  \item \textbf{(Absorption is a distinct, non-guaranteed limit).}
+  Guided actor training incentivizes payoff absorption when $v$ can imitate
+  $T_{v,G}$ (Corollary~\ref{cor:absorb-pressure}), but absorption neither
+  implies optimality of $J$ nor preserves a useful sample-time $G$.
+\end{enumerate}
+\end{theorem}
+
+\noindent\textbf{What remains a conjecture (not proved).}
+That \emph{every} absorbed solution has lower $J$ than every non-absorbed coupled
+solution is false (cube/puzzle counterexamples).
+The operational research claim supported by geometry plus ablations is narrower:
+
+\begin{quote}
+\emph{Train $v$ on guided lookahads $\mathrm{sg}(G)$ (or an equivalent coupling),
+keep a trust-constrained residual with $\Delta>0$ at evaluation on tasks where
+the BC map is far from optimal, and treat vanishing role/$\lambda$-gap as a
+diagnostic of absorption---not as proof of a good $v$.}
+\end{quote}
+
+\subsection{Implication for Decoupled CF}
+\label{subsec:vg-implication}
+
+Decoupled endpoint CF validates item~2 of Theorem~\ref{thm:goldilocks}
+(large $\Delta$ on mazes) but violates the guided coupling in
+item~1's preferred form: $v$ receives BC-only plasticity, not
+$\mathcal{L}_{\mathrm{actor}}$ on $x^+$.
+That explains the intermediate outcome---$G$ clearly matters, yet five-task
+success still trails base ConsensusFlow.
+The indicated next algorithm is therefore \emph{not} ``put all of $G$ back into
+$v$'', but restore a \emph{partial} guided actor weight on $v$ while
+regularizing against absorption (e.g.\ maintain a target role-gap, or an
+explicit penalty on $\|\pi_{v,G}-\pi_{v,0}\|$, or stop-gradient schedules that
+keep $G$ payoff-relevant).

@@ -24,8 +24,12 @@ from utils.datasets import (
     compute_episode_success_flags,
 )
 from utils.evaluation import evaluate, flatten
-from utils.flax_utils import restore_agent, save_agent
+from utils.flax_utils import restore_agent, restore_agent_backbone, save_agent
 from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, prepare_eval_video, setup_experiment_logging
+from utils.ar_qdfl_fast_sac_plumbing import (
+    example_transition_from_dataset,
+    sample_stratified_batch,
+)
 
 FLAGS = flags.FLAGS
 
@@ -47,12 +51,37 @@ flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 100000, 'Evaluation interval.')
 flags.DEFINE_integer('save_interval', 1000000, 'Saving interval.')
 flags.DEFINE_integer('eval_episodes', 50, 'Number of evaluation episodes.')
+flags.DEFINE_bool(
+    'eval_residual_off',
+    False,
+    'Also evaluate Decoupled CF with its RL policy-improvement module disabled.',
+)
 flags.DEFINE_integer('video_episodes', 0, 'Number of video episodes for each task.')
 flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
 flags.DEFINE_bool('sparse', False, "make the task sparse reward")
 flags.DEFINE_float('p_aug', None, 'Probability of applying image augmentation.')
 flags.DEFINE_integer('frame_stack', None, 'Number of frames to stack.')
 flags.DEFINE_integer('utd', 1, 'UTD.')
+flags.DEFINE_integer(
+    'training_step_offset',
+    0,
+    'Offset used for logs/checkpoint names after a reset-state backbone restore.',
+)
+flags.DEFINE_float(
+    'online_replay_fraction_max',
+    0.0,
+    'Maximum online share in stratified batches; <=0 keeps legacy mixed replay.',
+)
+flags.DEFINE_integer(
+    'online_replay_ramp_steps',
+    100000,
+    'Online interactions over which the stratified online share ramps up.',
+)
+flags.DEFINE_integer(
+    'online_buffer_size',
+    2000000,
+    'Capacity of the online-only replay partition when stratification is enabled.',
+)
 # Optional resume: restore weights/opt/RNG after create(), then continue the
 # training loop from agent.network.step (TrainState starts at 1 and increments
 # once per update, so after a save at loop i the stored step is i+1 and the
@@ -67,6 +96,16 @@ flags.DEFINE_integer(
     'restore_epoch',
     None,
     'Checkpoint step when --restore_path is a directory. Ignored for .pkl files.',
+)
+flags.DEFINE_bool(
+    'restore_backbone_only',
+    False,
+    'Copy only shape-compatible BC actor modules and reset optimizer/counter.',
+)
+flags.DEFINE_bool(
+    'restore_backbone_critic',
+    False,
+    'With --restore_backbone_only, also copy compatible critic modules.',
 )
 
 config_flags.DEFINE_config_file('agent', 'agents/rql.py', lock_config=False)
@@ -193,13 +232,29 @@ def main(_):
     
     # Set up datasets.
     train_dataset = Dataset.create(**train_dataset)
+    use_stratified_replay = FLAGS.online_replay_fraction_max > 0.0
+    offline_capacity = (
+        train_dataset.size + 1
+        if use_stratified_replay
+        else max(FLAGS.buffer_size, train_dataset.size + 1)
+    )
     train_dataset = ReplayBuffer.create_from_initial_dataset(
-        dict(train_dataset), size=max(FLAGS.buffer_size, train_dataset.size + 1)
+        dict(train_dataset), size=offline_capacity
     )
     replay_buffer = train_dataset
+    online_replay = None
+    if use_stratified_replay:
+        if FLAGS.online_buffer_size <= 0:
+            raise ValueError(
+                f'online_buffer_size must be > 0, got {FLAGS.online_buffer_size}'
+            )
+        online_replay = ReplayBuffer.create(
+            example_transition_from_dataset(train_dataset),
+            size=FLAGS.online_buffer_size,
+        )
 
     # Set p_aug and frame_stack.
-    for dataset in [train_dataset, val_dataset, replay_buffer]:
+    for dataset in [train_dataset, val_dataset, replay_buffer, online_replay]:
         if dataset is not None:
             dataset.p_aug = FLAGS.p_aug
             dataset.frame_stack = FLAGS.frame_stack
@@ -218,13 +273,35 @@ def main(_):
     # Optional resume: load pytree state (params, opt_state, network.step, rng).
     # Loop continues from agent.network.step so checkpointed steps are not redone.
     if FLAGS.restore_path:
-        agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
-        print(
-            f'Resume: restored step counter network.step={int(agent.network.step)} '
-            f'(next train iteration will start at this index)'
-        )
+        if FLAGS.restore_backbone_only:
+            agent = restore_agent_backbone(
+                agent,
+                FLAGS.restore_path,
+                FLAGS.restore_epoch,
+                restore_critic=FLAGS.restore_backbone_critic,
+            )
+            print(
+                'Backbone initialization: fresh RL heads/optimizer, '
+                f'local network.step={int(agent.network.step)}, '
+                f'plot offset={FLAGS.training_step_offset}'
+            )
+        else:
+            agent = restore_agent(agent, FLAGS.restore_path, FLAGS.restore_epoch)
+            print(
+                f'Resume: restored step counter network.step={int(agent.network.step)} '
+                f'(next train iteration will start at this index)'
+            )
+    elif FLAGS.restore_backbone_only:
+        raise ValueError('--restore_backbone_only requires --restore_path')
 
     print("replay buffer size:", replay_buffer.size)
+    if online_replay is not None:
+        print(
+            'stratified replay enabled: '
+            f'offline_size={train_dataset.size} '
+            f'online_capacity={online_replay.max_size} '
+            f'online_fraction_max={FLAGS.online_replay_fraction_max}'
+        )
 
     # Train agent.
     train_logger = CsvLogger(os.path.join(FLAGS.save_dir, 'train.csv'))
@@ -250,6 +327,7 @@ def main(_):
     for i in tqdm.tqdm(
         range(start_step, total_steps + 1), smoothing=0.1, dynamic_ncols=True
     ):
+        plot_step = FLAGS.training_step_offset + i
         if i <= FLAGS.offline_steps:
             if FLAGS.ogbench_dataset_dir is not None and FLAGS.dataset_replace_interval != 0 and i % FLAGS.dataset_replace_interval == 0:
                 dataset_idx = (dataset_idx + 1) % len(dataset_paths)
@@ -305,15 +383,30 @@ def main(_):
                 'masks': np.array(1.0 - terminated, copy=True),
                 'next_observations': np.array(next_ob, copy=True),
             }
-            replay_buffer.add_transition(tstn)
+            if online_replay is not None:
+                online_replay.add_transition(tstn)
+            else:
+                replay_buffer.add_transition(tstn)
 
             ob = next_ob
 
             for _ in range(FLAGS.utd):
-                # Sample from the growing replay (offline seed + online appends).
-                # ``replay_buffer`` aliases the offline-seeded buffer created above.
-                batch = replay_buffer.sample(config['batch_size'])
+                if online_replay is not None:
+                    batch, replay_info = sample_stratified_batch(
+                        train_dataset,
+                        online_replay,
+                        config['batch_size'],
+                        online_env_step=i - FLAGS.offline_steps,
+                        ramp_steps=FLAGS.online_replay_ramp_steps,
+                        fraction_max=FLAGS.online_replay_fraction_max,
+                    )
+                else:
+                    # Legacy replay: the million-transition offline seed and
+                    # online appends share one uniformly sampled partition.
+                    batch = replay_buffer.sample(config['batch_size'])
+                    replay_info = {}
                 agent, update_info = agent.update(batch)
+                update_info = {**update_info, **replay_info}
 
         # Log metrics.
         if i % FLAGS.log_interval == 0:
@@ -321,8 +414,8 @@ def main(_):
             train_metrics['time/epoch_time'] = (time.time() - last_time) / FLAGS.log_interval
             train_metrics['time/total_time'] = time.time() - first_time
             last_time = time.time()
-            tb_logger.log(train_metrics, step=i)
-            train_logger.log(train_metrics, step=i)
+            tb_logger.log(train_metrics, step=plot_step)
+            train_logger.log(train_metrics, step=plot_step)
 
         # Evaluate agent. Also evaluate on the first resumed step so
         # offline→online joins get an immediate eval.csv point near restore.
@@ -346,18 +439,53 @@ def main(_):
                 eval_metrics[f'evaluation/{k}'] = v
                 print(k, v)
 
+            if FLAGS.eval_residual_off and agent_name in (
+                'dflrql11',
+                'dflrql12',
+            ):
+                residual_off_config = agent.config.copy(
+                    add_or_replace={'disable_rl_policy': True}
+                )
+                residual_off_agent = agent.replace(config=residual_off_config)
+                residual_off_info, _, _ = evaluate(
+                    agent=residual_off_agent,
+                    env=eval_env,
+                    env_name=FLAGS.env_name,
+                    config=residual_off_config,
+                    num_eval_episodes=FLAGS.eval_episodes,
+                    num_video_episodes=0,
+                    video_frame_skip=FLAGS.video_frame_skip,
+                )
+                for k, v in residual_off_info.items():
+                    eval_metrics[f'evaluation/residual_off_{k}'] = v
+                if (
+                    'success' in eval_info
+                    and 'success' in residual_off_info
+                ):
+                    role_gap = (
+                        eval_info['success']
+                        - residual_off_info['success']
+                    )
+                    eval_metrics['evaluation/role_gap_success'] = role_gap
+                    print(
+                        'residual_off_success',
+                        residual_off_info['success'],
+                        'role_gap_success',
+                        role_gap,
+                    )
+
             if FLAGS.video_episodes > 0:
                 video = prepare_eval_video(renders=renders)
                 tb_logger.log_video('evaluation/video', video, step=i)
 
-            tb_logger.log(eval_metrics, step=i)
-            eval_logger.log(eval_metrics, step=i)
+            tb_logger.log(eval_metrics, step=plot_step)
+            eval_logger.log(eval_metrics, step=plot_step)
 
         # Save agent (offline and online). Also save the final step once.
         if FLAGS.save_interval > 0 and (
             i % FLAGS.save_interval == 0 or i == total_steps
         ):
-            save_agent(agent, FLAGS.save_dir, i)
+            save_agent(agent, FLAGS.save_dir, plot_step)
 
     train_logger.close()
     eval_logger.close()

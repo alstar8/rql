@@ -96,4 +96,6 @@ def get_config():
     config.conflict_power = 2.0
     # Mild damping when BC and consensus already point the same way.
     config.residual_coef = 0.25
+    # Inherited default actor_q_coef=1.0 (full CF). Experiment B sets 0.
+    # Inherited actor_lookahead_use_guidance=True; G-role ablation sets False.
     return config

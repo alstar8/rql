@@ -16,6 +16,10 @@ from agents.dflrql6 import DFLRQL6Agent
 from agents.dflrql7 import DFLRQL7Agent
 from agents.dflrql8 import DFLRQL8Agent
 from agents.dflrql9 import DFLRQL9Agent
+from agents.dflrql10 import DFLRQL10Agent
+from agents.dflrql11 import DFLRQL11Agent
+from agents.dflrql12 import DFLRQL12Agent
+from agents.pi05_cf import Pi05CFAgent
 from agents.quantized_dflrql9 import QuantizedDFLRQL9Agent
 from agents.qflow import QFlowAgent
 from agents.qflow_rql_warmstart import QFlowRQLWarmstartAgent
@@ -39,6 +43,10 @@ agents = dict(
     dflrql7=DFLRQL7Agent,
     dflrql8=DFLRQL8Agent,
     dflrql9=DFLRQL9Agent,
+    dflrql10=DFLRQL10Agent,
+    dflrql11=DFLRQL11Agent,
+    dflrql12=DFLRQL12Agent,
+    pi05_cf=Pi05CFAgent,
     quantized_dflrql9=QuantizedDFLRQL9Agent,
     consensus_discrete_flow=ConsensusDiscreteFlowAgent,
     consensus_latent_flow=ConsensusLatentFlowAgent,

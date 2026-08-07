@@ -1,0 +1,786 @@
+[
+  {
+    "variant": "base CF (joint v+G)",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "antmaze",
+    "mean": 0.9066666666666666,
+    "n": 3,
+    "seeds": [
+      0.9,
+      0.98,
+      0.84
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "base CF (joint v+G)",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "humanoid",
+    "mean": 0.98,
+    "n": 3,
+    "seeds": [
+      0.98,
+      1.0,
+      0.96
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "base CF (joint v+G)",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "soccer",
+    "mean": 0.44,
+    "n": 3,
+    "seeds": [
+      0.6,
+      0.34,
+      0.38
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "base CF (joint v+G)",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "cube",
+    "mean": 0.9866666666666667,
+    "n": 3,
+    "seeds": [
+      1.0,
+      0.96,
+      1.0
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "base CF (joint v+G)",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "puzzle",
+    "mean": 1.0,
+    "n": 3,
+    "seeds": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "CF G-role: freeze v",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill (v frozen)",
+    "task": "antmaze",
+    "mean": 0.10666666666666667,
+    "n": 3,
+    "seeds": [
+      0.08,
+      0.16,
+      0.08
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.0
+  },
+  {
+    "variant": "CF G-role: freeze v",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill (v frozen)",
+    "task": "humanoid",
+    "mean": 0.9866666666666667,
+    "n": 3,
+    "seeds": [
+      0.98,
+      0.98,
+      1.0
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.9733333333333333
+  },
+  {
+    "variant": "CF G-role: freeze v",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill (v frozen)",
+    "task": "soccer",
+    "mean": 0.36,
+    "n": 3,
+    "seeds": [
+      0.36,
+      0.36,
+      0.36
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.3666666666666667
+  },
+  {
+    "variant": "CF G-role: freeze v",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill (v frozen)",
+    "task": "cube",
+    "mean": 0.6799999999999999,
+    "n": 3,
+    "seeds": [
+      0.72,
+      0.7,
+      0.62
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.2
+  },
+  {
+    "variant": "CF G-role: freeze v",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill (v frozen)",
+    "task": "puzzle",
+    "mean": 0.3666666666666667,
+    "n": 3,
+    "seeds": [
+      0.32,
+      0.0,
+      0.78
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.1
+  },
+  {
+    "variant": "CF G-role: BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "ODE distill (v BC-only)",
+    "task": "antmaze",
+    "mean": 0.94,
+    "n": 3,
+    "seeds": [
+      0.96,
+      0.96,
+      0.9
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.4
+  },
+  {
+    "variant": "CF G-role: BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "ODE distill (v BC-only)",
+    "task": "humanoid",
+    "mean": 0.6066666666666667,
+    "n": 3,
+    "seeds": [
+      0.68,
+      0.6,
+      0.54
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.16666666666666666
+  },
+  {
+    "variant": "CF G-role: BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "ODE distill (v BC-only)",
+    "task": "soccer",
+    "mean": 0.15333333333333335,
+    "n": 3,
+    "seeds": [
+      0.16,
+      0.2,
+      0.1
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.11333333333333333
+  },
+  {
+    "variant": "CF G-role: BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "ODE distill (v BC-only)",
+    "task": "cube",
+    "mean": 0.98,
+    "n": 3,
+    "seeds": [
+      0.98,
+      1.0,
+      0.96
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.9933333333333333
+  },
+  {
+    "variant": "CF G-role: BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "ODE distill (v BC-only)",
+    "task": "puzzle",
+    "mean": 0.9733333333333333,
+    "n": 3,
+    "seeds": [
+      0.98,
+      0.96,
+      0.98
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.7933333333333333
+  },
+  {
+    "variant": "CF G-role: joint",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "antmaze",
+    "mean": 0.9533333333333333,
+    "n": 3,
+    "seeds": [
+      0.96,
+      0.96,
+      0.94
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.9533333333333334
+  },
+  {
+    "variant": "CF G-role: joint",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "humanoid",
+    "mean": 0.19333333333333333,
+    "n": 3,
+    "seeds": [
+      0.3,
+      0.18,
+      0.1
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.30666666666666664
+  },
+  {
+    "variant": "CF G-role: joint",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "soccer",
+    "mean": 0.42666666666666664,
+    "n": 3,
+    "seeds": [
+      0.38,
+      0.48,
+      0.42
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.31333333333333335
+  },
+  {
+    "variant": "CF G-role: joint",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "cube",
+    "mean": 0.9733333333333333,
+    "n": 3,
+    "seeds": [
+      1.0,
+      0.96,
+      0.96
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 0.9866666666666667
+  },
+  {
+    "variant": "CF G-role: joint",
+    "frozen_v": "no",
+    "g_kind": "ODE distill+actor",
+    "task": "puzzle",
+    "mean": 1.0,
+    "n": 3,
+    "seeds": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "step": 2000000,
+    "note": "\u03bb-gap eval",
+    "lam0_mean": 1.0
+  },
+  {
+    "variant": "CF g-only online (BCVG@1M)",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill",
+    "task": "antmaze",
+    "mean": 0.26,
+    "n": 3,
+    "seeds": [
+      0.36,
+      0.18,
+      0.24
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "CF g-only online (BCVG@1M)",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill",
+    "task": "humanoid",
+    "mean": 0.13333333333333333,
+    "n": 3,
+    "seeds": [
+      0.1,
+      0.14,
+      0.16
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "CF g-only online (BCVG@1M)",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill",
+    "task": "soccer",
+    "mean": 0.1,
+    "n": 3,
+    "seeds": [
+      0.1,
+      0.1,
+      0.1
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "CF g-only online (BCVG@1M)",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill",
+    "task": "cube",
+    "mean": 0.08,
+    "n": 3,
+    "seeds": [
+      0.08,
+      0.04,
+      0.12
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "CF g-only online (BCVG@1M)",
+    "frozen_v": "yes",
+    "g_kind": "ODE distill",
+    "task": "puzzle",
+    "mean": 0.03333333333333333,
+    "n": 3,
+    "seeds": [
+      0.04,
+      0.04,
+      0.02
+    ],
+    "step": 2000000,
+    "note": "",
+    "report_steps": [
+      2000000,
+      2000000,
+      2000000
+    ]
+  },
+  {
+    "variant": "cfgres adv (dflrql10)",
+    "frozen_v": "yes",
+    "g_kind": "ODE residual RL",
+    "task": "antmaze",
+    "mean": 0.02,
+    "n": 1,
+    "seeds": [
+      0.02
+    ],
+    "step": 1400000,
+    "note": "from CF@1M"
+  },
+  {
+    "variant": "cfgres adv (dflrql10)",
+    "frozen_v": "yes",
+    "g_kind": "ODE residual RL",
+    "task": "cube",
+    "mean": 0.74,
+    "n": 1,
+    "seeds": [
+      0.74
+    ],
+    "step": 1400000,
+    "note": "from CF@1M"
+  },
+  {
+    "variant": "cfgres adv (dflrql10)",
+    "frozen_v": "yes",
+    "g_kind": "ODE residual RL",
+    "task": "puzzle",
+    "mean": 0.38,
+    "n": 1,
+    "seeds": [
+      0.38
+    ],
+    "step": 1400000,
+    "note": "from CF@1M"
+  },
+  {
+    "variant": "DCF endpoint frozen",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a",
+    "task": "antmaze",
+    "mean": 0.2,
+    "n": 1,
+    "seeds": [
+      0.2
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF endpoint frozen",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a",
+    "task": "soccer",
+    "mean": 0.5,
+    "n": 1,
+    "seeds": [
+      0.5
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF endpoint frozen",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a",
+    "task": "cube",
+    "mean": 1.0,
+    "n": 1,
+    "seeds": [
+      1.0
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF endpoint frozen",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a",
+    "task": "puzzle",
+    "mean": 0.0,
+    "n": 1,
+    "seeds": [
+      0.0
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF endpoint+trust",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a + trust",
+    "task": "antmaze",
+    "mean": 0.25,
+    "n": 1,
+    "seeds": [
+      0.25
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF endpoint+trust",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a + trust",
+    "task": "soccer",
+    "mean": 0.4,
+    "n": 1,
+    "seeds": [
+      0.4
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF endpoint+trust",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a + trust",
+    "task": "cube",
+    "mean": 0.95,
+    "n": 1,
+    "seeds": [
+      0.95
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF endpoint+trust",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a + trust",
+    "task": "puzzle",
+    "mean": 1.0,
+    "n": 1,
+    "seeds": [
+      1.0
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF latent frozen",
+    "frozen_v": "yes",
+    "g_kind": "Latent G_z",
+    "task": "antmaze",
+    "mean": 0.0,
+    "n": 1,
+    "seeds": [
+      0.0
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF latent frozen",
+    "frozen_v": "yes",
+    "g_kind": "Latent G_z",
+    "task": "soccer",
+    "mean": 0.0,
+    "n": 1,
+    "seeds": [
+      0.0
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF latent frozen",
+    "frozen_v": "yes",
+    "g_kind": "Latent G_z",
+    "task": "cube",
+    "mean": 1.0,
+    "n": 1,
+    "seeds": [
+      1.0
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF latent frozen",
+    "frozen_v": "yes",
+    "g_kind": "Latent G_z",
+    "task": "puzzle",
+    "mean": 0.0,
+    "n": 1,
+    "seeds": [
+      0.0
+    ],
+    "step": 1400000,
+    "note": "screen seed0"
+  },
+  {
+    "variant": "DCF endpoint+trust scale",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a + trust",
+    "task": "antmaze",
+    "mean": 0.4,
+    "n": 3,
+    "seeds": [
+      0.25,
+      0.45,
+      0.5
+    ],
+    "step": 2000000,
+    "note": "scale"
+  },
+  {
+    "variant": "DCF endpoint+trust scale",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a + trust",
+    "task": "humanoid",
+    "mean": 0.65,
+    "n": 3,
+    "seeds": [
+      0.75,
+      0.85,
+      0.35
+    ],
+    "step": 2000000,
+    "note": "scale"
+  },
+  {
+    "variant": "DCF endpoint+trust scale",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a + trust",
+    "task": "soccer",
+    "mean": 0.26666666666666666,
+    "n": 3,
+    "seeds": [
+      0.2,
+      0.35,
+      0.25
+    ],
+    "step": 2000000,
+    "note": "scale"
+  },
+  {
+    "variant": "DCF endpoint+trust scale",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a + trust",
+    "task": "cube",
+    "mean": 0.8333333333333334,
+    "n": 3,
+    "seeds": [
+      1.0,
+      0.95,
+      0.55
+    ],
+    "step": 2000000,
+    "note": "scale"
+  },
+  {
+    "variant": "DCF endpoint+trust scale",
+    "frozen_v": "yes",
+    "g_kind": "Endpoint G_a + trust",
+    "task": "puzzle",
+    "mean": 0.0,
+    "n": 2,
+    "seeds": [
+      0.0,
+      0.0
+    ],
+    "step": 2000000,
+    "note": "scale"
+  },
+  {
+    "variant": "DCF endpoint BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "Endpoint G_a",
+    "task": "antmaze",
+    "mean": 0.8833333333333333,
+    "n": 3,
+    "seeds": [
+      0.8,
+      0.95,
+      0.9
+    ],
+    "step": 2000000,
+    "note": "best decoupled"
+  },
+  {
+    "variant": "DCF endpoint BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "Endpoint G_a",
+    "task": "humanoid",
+    "mean": 0.8666666666666667,
+    "n": 3,
+    "seeds": [
+      0.8,
+      1.0,
+      0.8
+    ],
+    "step": 2000000,
+    "note": "best decoupled"
+  },
+  {
+    "variant": "DCF endpoint BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "Endpoint G_a",
+    "task": "soccer",
+    "mean": 0.3333333333333333,
+    "n": 3,
+    "seeds": [
+      0.35,
+      0.25,
+      0.4
+    ],
+    "step": 2000000,
+    "note": "best decoupled"
+  },
+  {
+    "variant": "DCF endpoint BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "Endpoint G_a",
+    "task": "cube",
+    "mean": 0.9833333333333333,
+    "n": 3,
+    "seeds": [
+      0.95,
+      1.0,
+      1.0
+    ],
+    "step": 2000000,
+    "note": "best decoupled"
+  },
+  {
+    "variant": "DCF endpoint BC-v (not frozen)",
+    "frozen_v": "partial-BC",
+    "g_kind": "Endpoint G_a",
+    "task": "puzzle",
+    "mean": 0.6666666666666666,
+    "n": 3,
+    "seeds": [
+      1.0,
+      0.0,
+      1.0
+    ],
+    "step": 2000000,
+    "note": "best decoupled"
+  }
+]

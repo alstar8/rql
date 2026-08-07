@@ -214,30 +214,48 @@ class ChunkReplay:
     @classmethod
     def load_npz(cls, path: str, **kwargs: Any) -> "ChunkReplay":
         data = np.load(path, allow_pickle=False)
+        # Materialize each array once — NpzFile.__getitem__ re-decompresses on
+        # every access, which OOMs for large buffers if done inside the row loop.
+        z = data["z"]
+        proprio = data["proprio"]
+        reference_actions = data["reference_actions"]
+        executed_actions = data["executed_actions"]
+        rewards = data["rewards"]
+        action_mask = data["action_mask"]
+        next_z = data["next_z"]
+        next_proprio = data["next_proprio"]
+        next_reference_actions = data["next_reference_actions"]
+        terminal = data["terminal"]
+        mc_return = data["mc_return"]
+        success = data["success"]
+        episode_id = data["episode_id"]
+        start_step = data["start_step"]
         buf = cls(
             chunk_size=int(data["chunk_size"]),
             action_dim=int(data["action_dim"]),
             z_dim=int(data["z_dim"]),
             **kwargs,
         )
-        n = len(data["z"])
+        n = len(z)
+        if "max_transitions" not in kwargs:
+            buf.max_transitions = max(buf.max_transitions, n)
         for i in range(n):
             buf.add(
                 ChunkTransition(
-                    z=data["z"][i],
-                    proprio=data["proprio"][i],
-                    reference_actions=data["reference_actions"][i],
-                    executed_actions=data["executed_actions"][i],
-                    rewards=data["rewards"][i],
-                    action_mask=data["action_mask"][i],
-                    next_z=data["next_z"][i],
-                    next_proprio=data["next_proprio"][i],
-                    next_reference_actions=data["next_reference_actions"][i],
-                    terminal=bool(data["terminal"][i]),
-                    mc_return=float(data["mc_return"][i]),
-                    success=float(data["success"][i]),
-                    episode_id=int(data["episode_id"][i]),
-                    start_step=int(data["start_step"][i]),
+                    z=z[i],
+                    proprio=proprio[i],
+                    reference_actions=reference_actions[i],
+                    executed_actions=executed_actions[i],
+                    rewards=rewards[i],
+                    action_mask=action_mask[i],
+                    next_z=next_z[i],
+                    next_proprio=next_proprio[i],
+                    next_reference_actions=next_reference_actions[i],
+                    terminal=bool(terminal[i]),
+                    mc_return=float(mc_return[i]),
+                    success=float(success[i]),
+                    episode_id=int(episode_id[i]),
+                    start_step=int(start_step[i]),
                 )
             )
         buf.n_episodes = int(data["n_episodes"]) if "n_episodes" in data else 0

@@ -5,7 +5,7 @@
 # Uses the matched VLA buffer + bounded warmup_v2 ckpt.
 #
 # Usage:
-#   nohup bash launch_smoke_v2.sh > /tmp/molmoact2_cf_smoke_v2.log 2>&1 &
+#   nohup bash launch_smoke_v2.sh > /workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_cf_smoke_v2.log 2>&1 &
 
 set -euo pipefail
 
@@ -51,7 +51,7 @@ MUJOCO_EGL_DEVICE_ID=0 CUDA_VISIBLE_DEVICES=0 \
   --updates_per_episode 0 \
   --disable_g \
   --log_every_episodes "${N_EVAL}" \
-  --tmp_rollout_dir /tmp/molmoact2_cf_rollouts \
+  --tmp_rollout_dir /workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_cf_rollouts \
   --seed 0 \
   2>&1 | tee "${OUT_ROOT}/eval_g0.log"
 
@@ -71,7 +71,7 @@ MUJOCO_EGL_DEVICE_ID=1 CUDA_VISIBLE_DEVICES=1 \
   --updates_per_episode 0 \
   --force_g \
   --log_every_episodes "${N_EVAL}" \
-  --tmp_rollout_dir /tmp/molmoact2_cf_rollouts \
+  --tmp_rollout_dir /workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_cf_rollouts \
   --seed 0 \
   2>&1 | tee "${OUT_ROOT}/eval_g_on.log"
 
@@ -97,7 +97,7 @@ MUJOCO_EGL_DEVICE_ID=2 CUDA_VISIBLE_DEVICES=2 \
   --lr_alpha 0.0001 \
   --online_frac 0.5 \
   --log_every_episodes 5 \
-  --tmp_rollout_dir /tmp/molmoact2_cf_rollouts \
+  --tmp_rollout_dir /workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_cf_rollouts \
   --seed 2 \
   2>&1 | tee "${OUT_ROOT}/online_short.log"
 

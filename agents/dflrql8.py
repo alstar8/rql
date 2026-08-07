@@ -75,8 +75,34 @@ class DFLRQL8Agent(DFLRQL6Agent):
         w = self.network.select("guidance")(
             jnp.concatenate([observations, actions, times], axis=-1)
         )
+        return self._scaled_guidance(w, times, behavior_velocity)[0]
+
+    def _scaled_guidance(
+        self,
+        w,
+        times,
+        behavior_velocity,
+        *,
+        bypass_safety=False,
+    ):
+        """Apply scaling used for residual RL / inference guidance."""
+        if bypass_safety:
+            # Keep the unit-ball range of consensus targets, but do not kill
+            # anti-BC components during residual RL. Inference still uses the
+            # full behavior-safe path via guidance_direction().
+            unit_w = self._project_unit_ball(w)
+            scaled = self.config["guidance_coef"] * times * unit_w
+            return scaled, unit_w
         safe_w, _ = self._behavior_safe_direction(w, behavior_velocity)
-        return self.config["guidance_coef"] * times * safe_w
+        scaled = self.config["guidance_coef"] * times * safe_w
+        return scaled, safe_w
+
+    def _target_q_from_action(self, observations, flat_action, times):
+        """Ensemble-mean(-ρ·std) target critic score at a flow point."""
+        qs = self.network.select("target_value")(
+            jnp.concatenate([observations, flat_action, times], axis=-1)
+        )
+        return qs.mean(axis=0) - self.config["rho"] * qs.std(axis=0)
 
     def _actor_q_action(self, flat_action):
         """Hook for the actor q_pe one-step lookahead action only.
@@ -195,7 +221,11 @@ class DFLRQL8Agent(DFLRQL6Agent):
         behavior_velocity = self.network.select("actor")(
             fm_actor, params=grad_params
         ).mode()
-        guided_velocity = behavior_velocity + jax.lax.stop_gradient(
+        # Default: score the guided one-step lookahead so v_θ can absorb the
+        # RL residual that G would otherwise provide at sample time. Set
+        # actor_lookahead_use_guidance=False to force policy improvement to
+        # rely on G at inference (G-role ablation).
+        guidance = jax.lax.stop_gradient(
             self.guidance_direction(
                 batch["observations"][0],
                 x_t,
@@ -203,6 +233,10 @@ class DFLRQL8Agent(DFLRQL6Agent):
                 behavior_velocity,
             )
         )
+        if bool(self.config.get("actor_lookahead_use_guidance", True)):
+            guided_velocity = behavior_velocity + guidance
+        else:
+            guided_velocity = behavior_velocity
         lookahead_action = x_t + guided_velocity * jnp.minimum(
             1 / self.config["flow_steps"],
             1 - t,
@@ -229,7 +263,11 @@ class DFLRQL8Agent(DFLRQL6Agent):
             r=self.config["action_dim"] // self.config["h"],
         )
         bc_loss = (jnp.square(behavior_velocity - target_velocity) * ac_mask).mean()
+        # Q-lookahead policy improvement for the flow actor. Set actor_q_coef=0
+        # for the BC-only-v / RL-only-G ablation (experiment B): v_θ trains
+        # only on flow matching, while W_φ still gets consensus distillation.
         actor_loss = -(q_pe * valids).mean()
+        actor_q_coef = self.config.get("actor_q_coef", 1.0)
 
         # Scale-invariant soft ensemble-consensus distillation.
         member = jax.random.randint(
@@ -270,6 +308,161 @@ class DFLRQL8Agent(DFLRQL6Agent):
         ).mean()
 
         safe_w, safety = self._behavior_safe_direction(w, behavior_velocity)
+        rl_bypass_safety = bool(
+            self.config.get("guidance_rl_bypass_safety", False)
+        )
+        use_advantage = bool(self.config.get("guidance_use_advantage", False))
+        scaled_guidance, _ = self._scaled_guidance(
+            w,
+            t,
+            behavior_velocity,
+            bypass_safety=rl_bypass_safety,
+        )
+
+        # Direct one-step residual policy improvement. Unlike actor_loss,
+        # gradients flow only through G: v and the target critic are constants.
+        # This is useful when a pretrained flow expert must remain frozen.
+        guidance_q_coef = self.config.get("guidance_q_coef", 0.0)
+        guidance_q_loss = jnp.asarray(0.0, dtype=q.dtype)
+        guidance_q_mean = jnp.asarray(0.0, dtype=q.dtype)
+        guidance_adv_mean = jnp.asarray(0.0, dtype=q.dtype)
+        if guidance_q_coef != 0.0:
+            guidance_dt = jnp.minimum(
+                1 / self.config["flow_steps"],
+                1 - t,
+            )
+            frozen_velocity = jax.lax.stop_gradient(behavior_velocity)
+            guidance_q_action = x_t + (
+                frozen_velocity + scaled_guidance
+            ) * guidance_dt
+            guidance_q_action = self._actor_q_action(guidance_q_action)
+            guidance_t_next = jnp.clip(
+                t + 1 / self.config["flow_steps"],
+                max=1,
+            )
+            guidance_q = self._target_q_from_action(
+                batch["observations"][0],
+                guidance_q_action,
+                guidance_t_next,
+            )
+            if use_advantage:
+                baseline_action = self._actor_q_action(
+                    x_t + frozen_velocity * guidance_dt
+                )
+                baseline_q = jax.lax.stop_gradient(
+                    self._target_q_from_action(
+                        batch["observations"][0],
+                        baseline_action,
+                        guidance_t_next,
+                    )
+                )
+                guidance_adv = guidance_q - baseline_q
+                guidance_q_loss = -(guidance_adv * valids).mean()
+                guidance_adv_mean = (guidance_adv * valids).sum() / valid_count
+            else:
+                guidance_q_loss = -(guidance_q * valids).mean()
+            guidance_q_mean = (guidance_q * valids).sum() / valid_count
+
+        # Reparameterized residual policy improvement through the full frozen
+        # flow. Actor outputs are stop-gradded, so this never backpropagates
+        # through v (important for large VLA experts); G receives gradients
+        # through every Euler step and the final target-Q score.
+        guidance_rollout_q_coef = self.config.get(
+            "guidance_rollout_q_coef", 0.0
+        )
+        guidance_energy_coef = self.config.get("guidance_energy_coef", 0.0)
+        guidance_rollout_q_loss = jnp.asarray(0.0, dtype=q.dtype)
+        guidance_rollout_q_mean = jnp.asarray(0.0, dtype=q.dtype)
+        guidance_rollout_adv_mean = jnp.asarray(0.0, dtype=q.dtype)
+        guidance_energy = jnp.asarray(0.0, dtype=q.dtype)
+        if guidance_rollout_q_coef != 0.0 or guidance_energy_coef != 0.0:
+            rollout_action = x_0
+            baseline_action = x_0
+            rollout_energy = jnp.zeros((batch_size,), dtype=q.dtype)
+            for flow_idx in range(self.config["flow_steps"]):
+                rollout_t = jnp.full(
+                    (batch_size, 1),
+                    flow_idx / self.config["flow_steps"],
+                )
+                # Evaluate the frozen expert along the *guided* trajectory so
+                # the residual is a local correction, not a separate open-loop
+                # baseline path that diverges immediately.
+                rollout_actor_in = jnp.concatenate(
+                    [
+                        batch["observations"][0],
+                        rollout_action,
+                        rollout_t,
+                    ],
+                    axis=-1,
+                )
+                rollout_velocity = jax.lax.stop_gradient(
+                    self.network.select("target_actor")(
+                        rollout_actor_in
+                    ).mode()
+                )
+                baseline_actor_in = jnp.concatenate(
+                    [
+                        batch["observations"][0],
+                        baseline_action,
+                        rollout_t,
+                    ],
+                    axis=-1,
+                )
+                baseline_velocity = jax.lax.stop_gradient(
+                    self.network.select("target_actor")(
+                        baseline_actor_in
+                    ).mode()
+                )
+                rollout_w = self.network.select("guidance")(
+                    rollout_actor_in,
+                    params=grad_params,
+                )
+                rollout_guidance, _ = self._scaled_guidance(
+                    rollout_w,
+                    rollout_t,
+                    rollout_velocity,
+                    bypass_safety=rl_bypass_safety,
+                )
+                rollout_energy = rollout_energy + jnp.square(
+                    rollout_guidance
+                ).sum(axis=-1)
+                rollout_action = rollout_action + (
+                    rollout_velocity + rollout_guidance
+                ) / self.config["flow_steps"]
+                baseline_action = baseline_action + baseline_velocity / self.config[
+                    "flow_steps"
+                ]
+
+            rollout_action = self._actor_q_action(rollout_action)
+            baseline_action = self._actor_q_action(baseline_action)
+            ones = jnp.ones((batch_size, 1))
+            rollout_q = self._target_q_from_action(
+                batch["observations"][0],
+                rollout_action,
+                ones,
+            )
+            if use_advantage:
+                baseline_q = jax.lax.stop_gradient(
+                    self._target_q_from_action(
+                        batch["observations"][0],
+                        baseline_action,
+                        ones,
+                    )
+                )
+                rollout_adv = rollout_q - baseline_q
+                guidance_rollout_q_loss = -(rollout_adv * valids).mean()
+                guidance_rollout_adv_mean = (
+                    rollout_adv * valids
+                ).sum() / valid_count
+            else:
+                guidance_rollout_q_loss = -(rollout_q * valids).mean()
+            guidance_rollout_q_mean = (
+                rollout_q * valids
+            ).sum() / valid_count
+            guidance_energy = (
+                rollout_energy / self.config["flow_steps"] * valids
+            ).sum() / valid_count
+
         unit_q_grad = q_grad / (q_grad_norm + 1e-6)
         w_norm_per = jnp.linalg.norm(w, axis=-1)
         w_grad_cos_per = (w * unit_q_grad).sum(axis=-1) / (
@@ -277,15 +470,23 @@ class DFLRQL8Agent(DFLRQL6Agent):
         )
 
         total_loss = (
-            actor_loss
+            actor_loss * actor_q_coef
             + bc_loss * self.config["alpha"]
             + critic_loss
             + distill_loss * self.config["distill_coef"]
+            + guidance_q_loss * guidance_q_coef
+            + guidance_rollout_q_loss * guidance_rollout_q_coef
+            + guidance_energy * guidance_energy_coef
         )
 
         return total_loss, {
             "total_loss": total_loss,
             "actor_loss": actor_loss,
+            "actor_q_coef": jnp.asarray(actor_q_coef, dtype=jnp.float32),
+            "actor_lookahead_use_guidance": jnp.asarray(
+                bool(self.config.get("actor_lookahead_use_guidance", True)),
+                dtype=jnp.float32,
+            ),
             "bc_loss": bc_loss,
             "q": q.mean(),
             "critic_loss": critic_loss,
@@ -296,6 +497,33 @@ class DFLRQL8Agent(DFLRQL6Agent):
             "q_pe_max": q_pe.max(),
             "q_pe_min": q_pe.min(),
             "distill_loss": distill_loss,
+            "guidance_q_loss": guidance_q_loss,
+            "guidance_q_mean": guidance_q_mean,
+            "guidance_adv_mean": guidance_adv_mean,
+            "guidance_q_coef": jnp.asarray(
+                guidance_q_coef,
+                dtype=jnp.float32,
+            ),
+            "guidance_rollout_q_loss": guidance_rollout_q_loss,
+            "guidance_rollout_q_mean": guidance_rollout_q_mean,
+            "guidance_rollout_adv_mean": guidance_rollout_adv_mean,
+            "guidance_rollout_q_coef": jnp.asarray(
+                guidance_rollout_q_coef,
+                dtype=jnp.float32,
+            ),
+            "guidance_energy": guidance_energy,
+            "guidance_energy_coef": jnp.asarray(
+                guidance_energy_coef,
+                dtype=jnp.float32,
+            ),
+            "guidance_use_advantage": jnp.asarray(
+                use_advantage,
+                dtype=jnp.float32,
+            ),
+            "guidance_rl_bypass_safety": jnp.asarray(
+                rl_bypass_safety,
+                dtype=jnp.float32,
+            ),
             "q_grad_norm": q_grad_norm.mean(),
             "q_grad_scale": grad_scale,
             "consensus_target_norm": jnp.linalg.norm(
@@ -355,10 +583,60 @@ class DFLRQL8Agent(DFLRQL6Agent):
         return jnp.clip(actions, -1, 1)
 
 
+    @jax.jit
+    def update(self, batch):
+        """Update agent; optionally freeze the flow actor (online G-only phase)."""
+        new_rng, rng = jax.random.split(self.rng)
+
+        def loss_fn(grad_params):
+            return self.total_loss(batch, grad_params, rng=rng)
+
+        new_network, info = self.network.apply_loss_fn(loss_fn=loss_fn)
+        freeze_actor = bool(self.config.get("freeze_actor", False))
+        if freeze_actor:
+            # Hard freeze: revert any actor / target-actor drift (e.g. from
+            # BC/Q terms or numerical leak) and skip target-actor EMA below.
+            new_network.params["modules_actor"] = self.network.params[
+                "modules_actor"
+            ]
+            new_network.params["modules_target_actor"] = self.network.params[
+                "modules_target_actor"
+            ]
+        info = {
+            **info,
+            "freeze_actor": jnp.asarray(freeze_actor, dtype=jnp.float32),
+        }
+        self.target_update(new_network, "value", d=self.config["tau"])
+        if not freeze_actor:
+            self.target_update(new_network, "actor", d=1 - self.config["ema"])
+
+        return self.replace(network=new_network, rng=new_rng), info
+
+
 def get_config():
     config = get_v6_config()
     config.agent_name = "dflrql8"
     # Dimensionless relative gradient floor. A typical-gradient target has
     # norm 1 / (1 + consensus_floor), while locally flat gradients vanish.
     config.consensus_floor = 0.1
+    # Weight on -Q lookahead for v_θ. Default 1 keeps legacy CF; 0 = BC-only
+    # actor (guidance / distill still trained).
+    config.actor_q_coef = 1.0
+    # If True, actor Q-lookahead scores v+sg(G). If False, scores v alone so
+    # G must carry sample-time improvement (G-role ablation).
+    config.actor_lookahead_use_guidance = True
+    # If True, zero actor grads and skip target-actor EMA (online G-only).
+    config.freeze_actor = False
+    # Direct one-step target-Q policy improvement for G. The actor and target
+    # critic remain stop-gradded; zero preserves the published v8/v9 behavior.
+    config.guidance_q_coef = 0.0
+    # Full-flow target-Q policy improvement for G under a frozen target actor.
+    config.guidance_rollout_q_coef = 0.0
+    # Mean squared applied guidance along that rollout (residual trust cost).
+    config.guidance_energy_coef = 0.0
+    # If True, residual RL maximizes Q(v+G)-Q(v) instead of absolute Q(v+G).
+    config.guidance_use_advantage = False
+    # If True, residual RL scales W without behavior-conflict projection.
+    # Inference still uses the full safe guidance_direction path.
+    config.guidance_rl_bypass_safety = False
     return config

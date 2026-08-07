@@ -1,0 +1,719 @@
+{
+  "base": {
+    "antmaze_giant_task1": {
+      "0": {
+        "complete": true,
+        "diagnostics": {
+          "constraint_error": null,
+          "critic_bellman_mse": 0.07304566,
+          "critic_bellman_rmse": 0.27026960613431916,
+          "critic_q_bias": null,
+          "dual_alpha": null,
+          "latent_kl": null,
+          "latent_mean_norm": null,
+          "latent_std_mean": null,
+          "online_replay_fraction": null,
+          "residual_rms": null,
+          "step": 1400000
+        },
+        "max_step": 2000000,
+        "online_auc": 0.155,
+        "residual_off_success": null,
+        "role_gap": null,
+        "run_dir": "exp/rql/cftune-antmaze-C-rho0-lam1-o2o1m/sd000_20260726_212410",
+        "steps_to_90": 1700000,
+        "success": {
+          "1200000": 0.0,
+          "1400000": 0.62,
+          "2000000": 0.9
+        }
+      }
+    },
+    "antsoccer_arena_task4": {
+      "0": {
+        "complete": true,
+        "diagnostics": {
+          "constraint_error": null,
+          "critic_bellman_mse": 0.3616252,
+          "critic_bellman_rmse": 0.6013528082581805,
+          "critic_q_bias": null,
+          "dual_alpha": null,
+          "latent_kl": null,
+          "latent_mean_norm": null,
+          "latent_std_mean": null,
+          "online_replay_fraction": null,
+          "residual_rms": null,
+          "step": 1400000
+        },
+        "max_step": 2000000,
+        "online_auc": 0.455,
+        "residual_off_success": null,
+        "role_gap": null,
+        "run_dir": "exp/rql/cftune-soccer-S3-std-a03-o2o1m/sd000_20260726_190928",
+        "steps_to_90": null,
+        "success": {
+          "1200000": 0.4,
+          "1400000": 0.58,
+          "2000000": 0.6
+        }
+      }
+    },
+    "cube_double_task2": {
+      "0": {
+        "complete": true,
+        "diagnostics": {
+          "constraint_error": null,
+          "critic_bellman_mse": 1.0918347,
+          "critic_bellman_rmse": 1.04490894340129,
+          "critic_q_bias": null,
+          "dual_alpha": null,
+          "latent_kl": null,
+          "latent_mean_norm": null,
+          "latent_std_mean": null,
+          "online_replay_fraction": null,
+          "residual_rms": null,
+          "step": 1400000
+        },
+        "max_step": 2000000,
+        "online_auc": 0.97,
+        "residual_off_success": null,
+        "role_gap": null,
+        "run_dir": "exp/rql/ogbench50-dflrql9-cube_double_task2-o2o1m/sd000_20260723_103603",
+        "steps_to_90": 1200000,
+        "success": {
+          "1200000": 1.0,
+          "1400000": 0.96,
+          "2000000": 1.0
+        }
+      }
+    },
+    "puzzle_4x4_task4": {
+      "0": {
+        "complete": true,
+        "diagnostics": {
+          "constraint_error": null,
+          "critic_bellman_mse": 0.90064967,
+          "critic_bellman_rmse": 0.9490256424354402,
+          "critic_q_bias": null,
+          "dual_alpha": null,
+          "latent_kl": null,
+          "latent_mean_norm": null,
+          "latent_std_mean": null,
+          "online_replay_fraction": null,
+          "residual_rms": null,
+          "step": 1400000
+        },
+        "max_step": 2000000,
+        "online_auc": 1.0,
+        "residual_off_success": null,
+        "role_gap": null,
+        "run_dir": "exp/rql/ogbench50-dflrql9-puzzle_4x4_task4-o2o1m/sd000_20260723_103620",
+        "steps_to_90": 1200000,
+        "success": {
+          "1200000": 1.0,
+          "1400000": 1.0,
+          "2000000": 1.0
+        }
+      }
+    }
+  },
+  "methods": {
+    "endpoint_bc": {
+      "antmaze_giant_task1": {
+        "0": {
+          "complete": false,
+          "diagnostics": {
+            "constraint_error": -0.00062709,
+            "critic_bellman_mse": 0.8690713,
+            "critic_bellman_rmse": 0.9322399369261113,
+            "critic_q_bias": 0.03923000000000343,
+            "dual_alpha": 0.15241128,
+            "latent_kl": null,
+            "latent_mean_norm": null,
+            "latent_std_mean": null,
+            "online_replay_fraction": null,
+            "residual_rms": 0.04327713,
+            "step": 1075000
+          },
+          "max_step": 1000001,
+          "online_auc": null,
+          "residual_off_success": null,
+          "role_gap": null,
+          "run_dir": "exp/rql/dcf-seed0-o200k-n200k-v1-endpoint_bc-antmaze_giant_task1/sd000_20260730_193927",
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "antsoccer_arena_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "cube_double_task2": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "puzzle_4x4_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      }
+    },
+    "endpoint_frozen": {
+      "antmaze_giant_task1": {
+        "0": {
+          "complete": false,
+          "diagnostics": {
+            "constraint_error": -0.00053858105,
+            "critic_bellman_mse": 0.7580782,
+            "critic_bellman_rmse": 0.870676863135802,
+            "critic_q_bias": 0.0367700000000184,
+            "dual_alpha": 0.15076704,
+            "latent_kl": null,
+            "latent_mean_norm": null,
+            "latent_std_mean": null,
+            "online_replay_fraction": null,
+            "residual_rms": 0.04428791,
+            "step": 1075000
+          },
+          "max_step": 1000001,
+          "online_auc": null,
+          "residual_off_success": null,
+          "role_gap": null,
+          "run_dir": "exp/rql/dcf-seed0-o200k-n200k-v1-endpoint_frozen-antmaze_giant_task1/sd000_20260730_193927",
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "antsoccer_arena_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "cube_double_task2": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "puzzle_4x4_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      }
+    },
+    "endpoint_trust": {
+      "antmaze_giant_task1": {
+        "0": {
+          "complete": false,
+          "diagnostics": {
+            "constraint_error": -0.0013819991,
+            "critic_bellman_mse": 0.5479802,
+            "critic_bellman_rmse": 0.7402568473171998,
+            "critic_q_bias": 0.06185999999999581,
+            "dual_alpha": 0.14877032,
+            "latent_kl": null,
+            "latent_mean_norm": null,
+            "latent_std_mean": null,
+            "online_replay_fraction": null,
+            "residual_rms": 0.03343652,
+            "step": 1070000
+          },
+          "max_step": 1000001,
+          "online_auc": null,
+          "residual_off_success": null,
+          "role_gap": null,
+          "run_dir": "exp/rql/dcf-seed0-o200k-n200k-v1-endpoint_trust-antmaze_giant_task1/sd000_20260730_193927",
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "antsoccer_arena_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "cube_double_task2": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "puzzle_4x4_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      }
+    },
+    "latent_bc": {
+      "antmaze_giant_task1": {
+        "0": {
+          "complete": false,
+          "diagnostics": {
+            "constraint_error": null,
+            "critic_bellman_mse": 2.0961356,
+            "critic_bellman_rmse": 1.4478037159781019,
+            "critic_q_bias": 0.1444699999999841,
+            "dual_alpha": null,
+            "latent_kl": 0.024701359,
+            "latent_mean_norm": 0.14400074,
+            "latent_std_mean": 1.0025003,
+            "online_replay_fraction": null,
+            "residual_rms": null,
+            "step": 1075000
+          },
+          "max_step": 1000001,
+          "online_auc": null,
+          "residual_off_success": null,
+          "role_gap": null,
+          "run_dir": "exp/rql/dcf-seed0-o200k-n200k-v1-latent_bc-antmaze_giant_task1/sd000_20260730_193927",
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "antsoccer_arena_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "cube_double_task2": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "puzzle_4x4_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      }
+    },
+    "latent_frozen": {
+      "antmaze_giant_task1": {
+        "0": {
+          "complete": false,
+          "diagnostics": {
+            "constraint_error": null,
+            "critic_bellman_mse": 0.87324065,
+            "critic_bellman_rmse": 0.9344734613674163,
+            "critic_q_bias": -0.003500000000002501,
+            "dual_alpha": null,
+            "latent_kl": 0.021961983,
+            "latent_mean_norm": 0.12697525,
+            "latent_std_mean": 1.0026011,
+            "online_replay_fraction": null,
+            "residual_rms": null,
+            "step": 1075000
+          },
+          "max_step": 1000001,
+          "online_auc": null,
+          "residual_off_success": null,
+          "role_gap": null,
+          "run_dir": "exp/rql/dcf-seed0-o200k-n200k-v1-latent_frozen-antmaze_giant_task1/sd000_20260730_193927",
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "antsoccer_arena_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "cube_double_task2": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      },
+      "puzzle_4x4_task4": {
+        "0": {
+          "complete": false,
+          "diagnostics": {},
+          "max_step": null,
+          "online_auc": null,
+          "role_gap": null,
+          "run_dir": null,
+          "steps_to_90": null,
+          "success": {
+            "1200000": null,
+            "1400000": null,
+            "2000000": null
+          }
+        }
+      }
+    }
+  },
+  "protocol": {
+    "arms": [
+      "endpoint_frozen",
+      "endpoint_bc",
+      "endpoint_trust",
+      "latent_frozen",
+      "latent_bc"
+    ],
+    "milestones": [
+      1200000,
+      1400000,
+      2000000
+    ],
+    "online_start": 1200000,
+    "report_step": 1400000,
+    "seeds": [
+      0
+    ],
+    "steps_to_threshold": 0.9,
+    "success_key": "evaluation/success",
+    "tag": "seed0-o200k-n200k-v1",
+    "tasks": [
+      "antmaze_giant_task1",
+      "antsoccer_arena_task4",
+      "cube_double_task2",
+      "puzzle_4x4_task4"
+    ]
+  },
+  "ranking": [
+    "endpoint_frozen",
+    "endpoint_bc",
+    "endpoint_trust",
+    "latent_frozen",
+    "latent_bc"
+  ],
+  "summaries": {
+    "endpoint_bc": {
+      "completed_pairs": 0,
+      "online_auc": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "online_auc_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      },
+      "role_gap": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      }
+    },
+    "endpoint_frozen": {
+      "completed_pairs": 0,
+      "online_auc": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "online_auc_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      },
+      "role_gap": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      }
+    },
+    "endpoint_trust": {
+      "completed_pairs": 0,
+      "online_auc": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "online_auc_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      },
+      "role_gap": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      }
+    },
+    "latent_bc": {
+      "completed_pairs": 0,
+      "online_auc": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "online_auc_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      },
+      "role_gap": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      }
+    },
+    "latent_frozen": {
+      "completed_pairs": 0,
+      "online_auc": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "online_auc_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      },
+      "role_gap": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean": null,
+        "n": 0
+      },
+      "success_vs_base": {
+        "ci_high": null,
+        "ci_low": null,
+        "mean_delta": null,
+        "n": 0
+      }
+    }
+  }
+}

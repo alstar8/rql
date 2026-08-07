@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 cd "${ROOT}"
 
 RUN_DIR="${RLT_CF_V6_RUN_DIR:-${RUN_DIR:-runs/rlt_cf_v6_actsense}}"
-LOCAL_LOG_DIR="${LOCAL_LOG_DIR:-/tmp/rlt_cf_v6_logs}"
+LOCAL_LOG_DIR="${LOCAL_LOG_DIR:-/workspace-SR008.nfs2/users/staroverov/B1K/tmp/rlt_cf_v6_logs}"
 SCREEN_NAME="${SCREEN_NAME:-rlt_cf_v6}"
 NUM_GPUS="${NUM_GPUS:-8}"
 INSTANCES_PER_GPU="${INSTANCES_PER_GPU:-4}"

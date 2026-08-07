@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 cd "${ROOT}"
 
 RUN_DIR="${RLT_CF_V7_RUN_DIR:-${RUN_DIR:-runs/rlt_cf_v7_rank}}"
-LOCAL_LOG_DIR="${LOCAL_LOG_DIR:-/tmp/rlt_cf_v7_logs}"
+LOCAL_LOG_DIR="${LOCAL_LOG_DIR:-/workspace-SR008.nfs2/users/staroverov/B1K/tmp/rlt_cf_v7_logs}"
 SCREEN_NAME="${SCREEN_NAME:-rlt_cf_v7}"
 NUM_GPUS="${NUM_GPUS:-8}"
 INSTANCES_PER_GPU="${INSTANCES_PER_GPU:-3}"
@@ -221,6 +221,7 @@ start_trainer() {
     --shard_size "${shard_size}"
     --horizon "${HORIZON}"
     --log_every_episodes "${LOG_EVERY_EPISODES}"
+    --ckpt_every_episodes "${CKPT_EVERY_EPISODES:-10}"
     --replay_out "${shard_out}/chunk_replay.npz"
     --seed "${worker}"
     --n_critics "${N_CRITICS}"
@@ -286,7 +287,9 @@ start_trainer() {
   exec 9>> "${logfile}"
   setsid env \
     RLT_CF_V4_RUN_DIR="${RUN_DIR}" \
-    RLT_EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR:-/tmp/rlt_egl_locks}" \
+    RLT_EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR:-/workspace-SR008.nfs2/users/staroverov/B1K/tmp/rlt_egl_locks}" \
+    RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-1.5}" \
+    RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT:-4}" \
     MLSPACES_ASSETS_DIR="${MLSPACES_ASSETS_DIR:-$HOME/.cache/molmospaces/assets}" \
     MUJOCO_GL=egl \
     PYOPENGL_PLATFORM=egl \
@@ -312,7 +315,11 @@ Improvements over v6:
 - explore noise in *normalized* action space (std=0.05, x1.5 when gated off)
 - local + far + shuffle action-ranking losses
 - stabler packing: 3 instances/GPU (v6 4/GPU mass-aborted MuJoCo)
-- per-GPU EGL flock around each rollout (prevents concurrent classic/EGL aborts)
+- per-GPU EGL flock around each rollout+train (prevents concurrent classic/EGL aborts)
+- machine-wide EGL concurrency cap (RLT_EGL_MAX_CONCURRENT=4) + EGL init flock
+- disable MolmoSpaces forkserver for num_workers=1 (root cause of 3/GPU SIGABRT)
+- pin MjOpenGLRenderer to physical MUJOCO_EGL_DEVICE_ID
+- trainer_watchdog_v7.sh auto-restarts dead trainers with checkpoint resume
 - ensemble K=${N_CRITICS}
 
 - Workers: ${TOTAL_WORKERS} (${NUM_GPUS} GPUs x ${INSTANCES_PER_GPU} instances/GPU)

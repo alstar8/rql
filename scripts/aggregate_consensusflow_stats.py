@@ -177,6 +177,38 @@ ABLATION_SPECS = {
             "ensemble_ct": 10,
         },
     },
+    "k2": {
+        "run_group_template": "ogbench-hl5-cf-ablation-k2-task{task}-1m",
+        "reuse_from_2m": False,
+        "description": (
+            "ensemble_ct=2 with default gates "
+            "(conflict_power=2, residual_coef=0.25, consensus_floor=0.01)"
+        ),
+        "flags": {
+            "guidance_coef": 0.5,
+            "distill_coef": 1.0,
+            "consensus_floor": 0.01,
+            "conflict_power": 2.0,
+            "residual_coef": 0.25,
+            "ensemble_ct": 2,
+        },
+    },
+    "k20": {
+        "run_group_template": "ogbench-hl5-cf-ablation-k20-task{task}-1m",
+        "reuse_from_2m": False,
+        "description": (
+            "ensemble_ct=20 with default gates "
+            "(conflict_power=2, residual_coef=0.25, consensus_floor=0.01)"
+        ),
+        "flags": {
+            "guidance_coef": 0.5,
+            "distill_coef": 1.0,
+            "consensus_floor": 0.01,
+            "conflict_power": 2.0,
+            "residual_coef": 0.25,
+            "ensemble_ct": 20,
+        },
+    },
     "nocrf_k2": {
         "run_group_template": "ogbench-hl5-cf-ablation-nocrf-k2-task{task}-1m",
         "reuse_from_2m": False,

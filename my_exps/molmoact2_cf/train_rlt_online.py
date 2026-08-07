@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import gc
 import json
 import logging
 import os
 import shutil
 import signal
 import sys
+import threading
 import time
 from collections import deque
 from contextlib import contextmanager
@@ -35,7 +37,14 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from chunk_replay import ChunkReplay, TokenReplay  # noqa: E402
-from rlt_models import ACTION_DIM, CHUNK_SIZE, Z_DIM, MolmoAct2RLTCF  # noqa: E402
+from rlt_models import (  # noqa: E402
+    ACTION_DIM,
+    CF_MODE_FLOW,
+    CF_MODE_RESIDUAL,
+    CHUNK_SIZE,
+    MolmoAct2RLTCF,
+    Z_DIM,
+)
 from train_100m import _bench_size  # noqa: E402
 from train_full import _default_bench  # noqa: E402
 from train_rlt import (  # noqa: E402
@@ -44,6 +53,9 @@ from train_rlt import (  # noqa: E402
     build_rlt_optimizers,
     critic_is_healthy,
     critic_td_step,
+    flow_actor_step,
+    flow_critic_td_step,
+    flow_guide_step,
     guide_step,
     predicted_lcb_advantage,
     token_step,
@@ -56,9 +68,151 @@ from molmo_spaces.policy.learned_policy.molmoact2_policy import (  # noqa: E402
     MolmoAct2_Policy,
 )
 
-json_numpy.patch()
+
+def _patch_molmo_single_worker_mp() -> None:
+    """Stop MolmoSpaces from starting a CUDA-unsafe forkserver on every episode.
+
+    ``ParallelRolloutRunner`` always allocates ``mp_context.Value`` / ``Lock`` /
+    ``Event`` even when ``num_workers=1``.  With CUDA available that context is
+    ``forkserver``, which races with EGL/CUDA across 3 trainers/GPU and ends in
+    SIGABRT.  Our trainers always use ``num_workers=1``, so thread-local stand-ins
+    are sufficient and avoid the resource_tracker / forkserver entirely.
+    """
+    import molmo_spaces.data_generation.pipeline as pipeline
+
+    class _LocalValue:
+        def __init__(self, _typecode: str, value: int) -> None:
+            self.value = int(value)
+
+    class _LocalMPContext:
+        Lock = staticmethod(threading.Lock)
+        Event = staticmethod(threading.Event)
+
+        @staticmethod
+        def Value(typecode: str, value: int) -> _LocalValue:
+            return _LocalValue(typecode, value)
+
+        @staticmethod
+        def Process(*_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError(
+                "molmoact2_cf expects num_workers=1; refusing to spawn forkserver workers"
+            )
+
+    pipeline.mp_context = _LocalMPContext()  # type: ignore[assignment]
+
+
+_patch_molmo_single_worker_mp()
 
 log = logging.getLogger("molmoact2_cf.train_rlt_online")
+
+# Keep scratch / locks / rollouts under the workspace (no system /tmp).
+_B1K_ROOT = Path("/workspace-SR008.nfs2/users/staroverov/B1K")
+_B1K_TMP = Path(os.environ.get("B1K_TMP", str(_B1K_ROOT / "tmp")))
+_DEFAULT_EGL_LOCK_DIR = str(_B1K_TMP / "rlt_egl_locks")
+_DEFAULT_TMP_ROLLOUT_DIR = str(_B1K_TMP / "molmoact2_rlt_rollouts")
+_IO_RETRY_ATTEMPTS = max(1, int(os.environ.get("RLT_IO_RETRY_ATTEMPTS", "5")))
+_IO_RETRY_BASE_SEC = float(os.environ.get("RLT_IO_RETRY_BASE_SEC", "1.0"))
+
+
+def _egl_lock_dir() -> Path:
+    return Path(os.environ.get("RLT_EGL_LOCK_DIR", _DEFAULT_EGL_LOCK_DIR))
+
+
+def _io_retry(
+    label: str,
+    fn: Any,
+    *,
+    attempts: int | None = None,
+    base_sec: float | None = None,
+) -> Any:
+    """Retry NFS-ish I/O failures (ENOSPC / short writes) with exponential backoff."""
+    n_attempts = _IO_RETRY_ATTEMPTS if attempts is None else max(1, int(attempts))
+    delay = _IO_RETRY_BASE_SEC if base_sec is None else max(0.05, float(base_sec))
+    last_error: BaseException | None = None
+    for attempt in range(1, n_attempts + 1):
+        try:
+            return fn()
+        except (OSError, RuntimeError) as error:
+            last_error = error
+            if attempt >= n_attempts:
+                break
+            log.warning(
+                "%s failed (attempt %d/%d): %s; retrying in %.1fs",
+                label,
+                attempt,
+                n_attempts,
+                error,
+                delay,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2.0, 30.0)
+    assert last_error is not None
+    raise last_error
+
+
+def _cleanup_path(path: Path) -> None:
+    try:
+        if path.is_file() or path.is_symlink():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        pass
+
+
+def _patch_renderer_device_id() -> None:
+    """Pin MjOpenGLRenderer to the physical ``MUJOCO_EGL_DEVICE_ID``.
+
+    Without this, MolmoSpaces sets ``device_id=0`` from remapped CUDA and can
+    attach every trainer's EGL context to the wrong GPU under contention.
+    """
+    from molmo_spaces.renderer import opengl_rendering as ogl
+
+    original_init = ogl.MjOpenGLRenderer.__init__
+
+    def _init(self: Any, *args: Any, device_id: int | None = None, **kwargs: Any) -> None:
+        raw = os.environ.get("MUJOCO_EGL_DEVICE_ID", "").strip()
+        if raw:
+            device_id = int(raw.split(",")[0].strip())
+        original_init(self, *args, device_id=device_id, **kwargs)
+
+    ogl.MjOpenGLRenderer.__init__ = _init  # type: ignore[method-assign]
+
+
+_patch_renderer_device_id()
+
+
+def _patch_egl_context_serialize() -> None:
+    """Serialize EGL display/context construction across all trainer processes.
+
+    Per-GPU rollout locks are not enough during a multi-GPU start storm: many
+    processes call ``eglInitialize`` / ``eglCreateContext`` at once and the
+    NVIDIA EGL stack occasionally SIGABRTs with no Python traceback.  A short
+    global flock around context creation keeps device-parallel rendering while
+    making init single-flight.
+    """
+    from molmo_spaces.renderer import opengl_context as egl_ctx
+
+    original_init = egl_ctx.EGLGLContext.__init__
+    lock_dir = _egl_lock_dir()
+    lock_path = lock_dir / "egl_init.lock"
+
+    def _init(self: Any, *args: Any, **kwargs: Any) -> None:
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                original_init(self, *args, **kwargs)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    egl_ctx.EGLGLContext.__init__ = _init  # type: ignore[method-assign]
+
+
+_patch_egl_context_serialize()
+
+json_numpy.patch()
+
 _STOP_REQUESTED = False
 
 
@@ -82,30 +236,115 @@ def _egl_device_id() -> str:
 
 
 @contextmanager
+def _egl_concurrency_slot() -> Iterator[int]:
+    """Limit how many MuJoCo EGL rollouts run at once across the machine."""
+    lock_dir = _egl_lock_dir()
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    max_concurrent = max(1, int(os.environ.get("RLT_EGL_MAX_CONCURRENT", "4")))
+    handles: list[Any] = []
+    slot = -1
+    waited_rounds = 0
+    try:
+        while not _STOP_REQUESTED:
+            for idx in range(max_concurrent):
+                path = lock_dir / f"slot_{idx}.lock"
+                handle = open(path, "a+", encoding="utf-8")
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    handle.close()
+                    continue
+                handle.seek(0)
+                handle.truncate()
+                handle.write(f"pid={os.getpid()} slot={idx}\n")
+                handle.flush()
+                handles.append(handle)
+                slot = idx
+                log.info(
+                    "Acquired EGL concurrency slot %d/%d",
+                    idx + 1,
+                    max_concurrent,
+                )
+                yield idx
+                return
+            waited_rounds += 1
+            # Heartbeat so trainer_watchdog does not treat slot waits as hung.
+            if waited_rounds == 1 or waited_rounds % 20 == 0:
+                log.info(
+                    "Waiting for EGL concurrency slot (%d/%d busy, waited ~%.0fs)",
+                    max_concurrent,
+                    max_concurrent,
+                    waited_rounds * 0.5,
+                )
+            time.sleep(0.5)
+        raise RuntimeError("Stop requested while waiting for an EGL concurrency slot")
+    finally:
+        for handle in handles:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
+        if slot >= 0:
+            log.info("Released EGL concurrency slot %d", slot)
+
+
+@contextmanager
 def _egl_gpu_lock() -> Iterator[None]:
-    """Serialize classic/EGL MuJoCo on one GPU across trainer processes.
+    """Serialize classic/EGL MuJoCo (+ post-rollout CUDA train) per GPU.
 
     Concurrent MjOpenGLRenderer contexts on the same device abort with SIGABRT.
-    Holding an exclusive flock for the whole ``run_evaluation`` call keeps at
-    most one live env renderer per GPU while still allowing multiple trainers
-    to time-share that GPU.
+    Holding an exclusive flock for the rollout *and* the subsequent critic/actor
+    update keeps EGL rendering from overlapping another trainer's CUDA kernels
+    on the same device.  Checkpoint / metrics I/O must happen *outside* this
+    lock (see the train loop) so NFS stalls cannot pin the GPU.  A machine-wide
+    concurrency cap further reduces cross-GPU EGL SIGABRTs seen during
+    24-worker starts.  A short cooldown after unlock lets GL teardown finish.
+
+    Important: take the per-GPU lock *before* a global concurrency slot.  The
+    reverse order lets N workers on one GPU consume all slots while blocked on
+    that GPU's lock, starving other GPUs for tens of minutes.
     """
     device = _egl_device_id()
-    lock_dir = Path(os.environ.get("RLT_EGL_LOCK_DIR", "/tmp/rlt_egl_locks"))
+    lock_dir = _egl_lock_dir()
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / f"gpu_{device}.lock"
+    cooldown = float(os.environ.get("RLT_EGL_COOLDOWN_SEC", "1.5"))
     handle = open(lock_path, "a+", encoding="utf-8")
     try:
         log.info("Waiting for EGL lock on GPU %s (%s)", device, lock_path)
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        waited_rounds = 0
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                waited_rounds += 1
+                if waited_rounds == 1 or waited_rounds % 20 == 0:
+                    log.info(
+                        "Still waiting for EGL lock on GPU %s (waited ~%.0fs)",
+                        device,
+                        waited_rounds * 0.5,
+                    )
+                time.sleep(0.5)
+                if _STOP_REQUESTED:
+                    raise RuntimeError(
+                        f"Stop requested while waiting for EGL lock on GPU {device}"
+                    ) from None
         handle.seek(0)
         handle.truncate()
         handle.write(f"pid={os.getpid()} device={device}\n")
         handle.flush()
         log.info("Acquired EGL lock on GPU %s", device)
-        yield
+        # Only after we own this GPU, consume a machine-wide rollout slot.
+        with _egl_concurrency_slot():
+            yield
     finally:
         try:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            if cooldown > 0.0:
+                time.sleep(cooldown)
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
             handle.close()
@@ -434,20 +673,80 @@ def _validate_server_features(health: dict[str, Any]) -> None:
         raise RLTFeatureError("The MolmoAct2 server was started with --no_features")
 
 
+def _resolve_resume_checkpoint(args: argparse.Namespace) -> Path | None:
+    """Prefer the shard's latest online checkpoint so watchdog restarts continue."""
+    if args.no_resume:
+        return None
+    latest = Path(args.out_dir) / "rlt_cf_latest.pt"
+    if latest.is_file():
+        return latest
+    return None
+
+
+def _load_metrics_resume(out_dir: Path) -> dict[str, Any] | None:
+    metrics_path = out_dir / "metrics.jsonl"
+    if not metrics_path.is_file():
+        return None
+    last: dict[str, Any] | None = None
+    with metrics_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                last = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    return last
+
+
 def _load_model(args: argparse.Namespace, device: torch.device) -> MolmoAct2RLTCF:
-    if args.rlt_ckpt:
+    cf_mode = str(getattr(args, "cf_mode", CF_MODE_RESIDUAL)).lower()
+    resume_ckpt = _resolve_resume_checkpoint(args)
+    if resume_ckpt is not None:
+        model = MolmoAct2RLTCF.load(str(resume_ckpt), map_location=device).to(device)
+        log.info("Resumed RLT checkpoint %s (cf_mode=%s)", resume_ckpt, model.cf_mode)
+    elif args.rlt_ckpt:
         checkpoint = Path(args.rlt_ckpt)
         if not checkpoint.is_file():
             raise FileNotFoundError(f"RLT checkpoint not found: {checkpoint}")
-        model = MolmoAct2RLTCF.load(str(checkpoint), map_location=device).to(device)
-        log.info("Loaded RLT checkpoint %s", checkpoint)
+        # Residual ckpt → flow: rebuild time-dependent heads, keep token AE.
+        if cf_mode == CF_MODE_FLOW:
+            peek = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+            src_mode = str(peek.get("cf_mode", CF_MODE_RESIDUAL))
+            if src_mode != CF_MODE_FLOW:
+                model = MolmoAct2RLTCF.from_token_ckpt_as_flow(
+                    str(checkpoint),
+                    map_location=device,
+                    use_cf_guide=args.use_cf_guide,
+                    n_critics=args.n_critics,
+                    flow_steps=int(getattr(args, "flow_steps", 10)),
+                    guidance_coef=float(getattr(args, "guidance_coef", 0.5)),
+                ).to(device)
+                log.info(
+                    "Upgraded residual/token ckpt %s → flow CF (fresh time critic/actor/guide)",
+                    checkpoint,
+                )
+            else:
+                model = MolmoAct2RLTCF.load(str(checkpoint), map_location=device).to(device)
+                log.info("Loaded flow CF checkpoint %s", checkpoint)
+        else:
+            model = MolmoAct2RLTCF.load(str(checkpoint), map_location=device).to(device)
+            log.info("Loaded RLT checkpoint %s", checkpoint)
     else:
         model = MolmoAct2RLTCF(
             use_cf_guide=args.use_cf_guide,
             tune_token_online=args.tune_token_online,
             n_critics=args.n_critics,
+            cf_mode=cf_mode,
+            flow_steps=int(getattr(args, "flow_steps", 10)),
+            guidance_coef=float(getattr(args, "guidance_coef", 0.5)),
         ).to(device)
-        log.info("Initialized a fresh RLT model with n_critics=%d", args.n_critics)
+        log.info("Initialized a fresh RLT model cf_mode=%s n_critics=%d", cf_mode, args.n_critics)
+    if cf_mode == CF_MODE_FLOW and not model.is_flow:
+        raise ValueError(f"--cf_mode=flow but loaded model is {model.cf_mode}")
+    if cf_mode == CF_MODE_RESIDUAL and model.is_flow:
+        raise ValueError("--cf_mode=residual but loaded model is flow")
     if int(getattr(model, "n_critics", 0) or 0) != int(args.n_critics):
         raise ValueError(
             f"Checkpoint n_critics={getattr(model, 'n_critics', '?')} "
@@ -562,7 +861,8 @@ def _train_after_episode(
         # RLT uses two critic updates for every actor update.
         for _critic_update in range(2):
             batch = replay.sample(args.batch_size, device=device)
-            q_info = critic_td_step(
+            critic_fn = flow_critic_td_step if model.is_flow else critic_td_step
+            q_info = critic_fn(
                 model,
                 optimizers["critic"],
                 batch,
@@ -582,7 +882,8 @@ def _train_after_episode(
             )
         if args.actor_mode == "rlt":
             actor_batch = replay.sample(args.batch_size, device=device)
-            actor_info = actor_step(
+            actor_fn = flow_actor_step if model.is_flow else actor_step
+            actor_info = actor_fn(
                 model,
                 optimizers["actor"],
                 optimizers["alpha"],
@@ -592,7 +893,8 @@ def _train_after_episode(
                 ref_dropout=args.ref_dropout,
             )
             if args.use_cf_guide:
-                guide_info = guide_step(
+                guide_fn = flow_guide_step if model.is_flow else guide_step
+                guide_info = guide_fn(
                     model,
                     optimizers["guide"],
                     actor_batch,
@@ -611,8 +913,20 @@ def _atomic_model_save(
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
-    model.save(str(temporary), meta=meta)
-    os.replace(temporary, path)
+
+    def _write() -> None:
+        _cleanup_path(temporary)
+        model.save(str(temporary), meta=meta)
+        # Ensure bytes hit stable storage before the atomic rename.
+        with open(temporary, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+
+    try:
+        _io_retry(f"checkpoint save {path}", _write)
+    except Exception:
+        _cleanup_path(temporary)
+        raise
 
 
 def _save_checkpoint(
@@ -623,7 +937,11 @@ def _save_checkpoint(
 ) -> Path:
     latest = out_dir / "rlt_cf_latest.pt"
     _atomic_model_save(model, latest, {**meta, "env_steps": int(env_steps)})
-    (out_dir / "LATEST_CKPT.txt").write_text(f"{latest.name}\n", encoding="utf-8")
+
+    def _write_pointer() -> None:
+        (out_dir / "LATEST_CKPT.txt").write_text(f"{latest.name}\n", encoding="utf-8")
+
+    _io_retry(f"LATEST_CKPT.txt in {out_dir}", _write_pointer)
     return latest
 
 
@@ -633,8 +951,87 @@ def _save_chunk_replay(replay: ChunkReplay, replay_out: str) -> None:
     path = Path(replay_out)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp.npz")
-    replay.save_npz(str(temporary))
-    os.replace(temporary, path)
+
+    def _write() -> None:
+        _cleanup_path(temporary)
+        replay.save_npz(str(temporary))
+        with open(temporary, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+
+    try:
+        _io_retry(f"chunk replay save {path}", _write)
+    except Exception:
+        _cleanup_path(temporary)
+        raise
+
+
+def _append_metrics_row(metrics_path: Path, row: dict[str, Any]) -> None:
+    def _write() -> None:
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        with metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+    _io_retry(f"metrics append {metrics_path}", _write)
+
+
+def _persist_training_state(
+    *,
+    model: MolmoAct2RLTCF,
+    out_dir: Path,
+    metrics_path: Path,
+    env_steps: int,
+    row: dict[str, Any],
+    replay: ChunkReplay,
+    replay_out: str,
+    required: bool,
+) -> Path | None:
+    """Checkpoint first, then metrics — so counters never outrun weights.
+
+    On transient NFS failures, log and continue unless ``required`` (final save).
+    Always runs outside the EGL GPU lock.
+    """
+    checkpoint: Path | None = None
+    try:
+        checkpoint = _save_checkpoint(model, out_dir, env_steps, row)
+    except Exception as error:  # noqa: BLE001
+        log.error(
+            "Checkpoint save failed after retries (steps=%d): %s",
+            env_steps,
+            error,
+        )
+        if required:
+            raise
+        return None
+
+    try:
+        _save_chunk_replay(replay, replay_out)
+    except Exception as error:  # noqa: BLE001
+        log.warning(
+            "Chunk replay save failed after retries (steps=%d): %s",
+            env_steps,
+            error,
+        )
+        if required:
+            raise
+
+    try:
+        _append_metrics_row(metrics_path, row)
+    except Exception as error:  # noqa: BLE001
+        log.error(
+            "Metrics append failed after retries (steps=%d): %s",
+            env_steps,
+            error,
+        )
+        if required:
+            raise
+        # Keep weights on disk, but signal caller to retry metrics next cadence
+        # so resume counters do not lag the checkpoint forever unnoticed.
+        return None
+
+    return checkpoint
 
 
 def _metrics_row(
@@ -725,6 +1122,17 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         pos_frac=args.pos_frac,
         seed=args.seed,
     )
+    if args.replay_out and Path(args.replay_out).is_file() and not args.no_resume:
+        try:
+            replay = ChunkReplay.load_npz(
+                args.replay_out,
+                max_transitions=args.replay_capacity,
+                pos_frac=args.pos_frac,
+                seed=args.seed,
+            )
+            log.info("Resumed chunk replay %s (%d transitions)", args.replay_out, len(replay))
+        except Exception as error:  # noqa: BLE001
+            log.warning("Failed to resume chunk replay %s: %s", args.replay_out, error)
     token_replay = TokenReplay(
         max_seq=args.token_max_seq,
         token_dim=model.feature_dim,
@@ -773,6 +1181,23 @@ def train_rlt_online(args: argparse.Namespace) -> None:
     last_logged_episode = -1
     warned_missing_tokens = False
 
+    resume_row = None if args.no_resume else _load_metrics_resume(out_dir)
+    if resume_row is not None:
+        env_steps = int(resume_row.get("env_steps", 0) or 0)
+        valid_episodes = int(resume_row.get("valid_episodes", 0) or 0)
+        skipped_episodes = int(resume_row.get("skipped_episodes", 0) or 0)
+        rate = float(resume_row.get("cumulative_success_rate", 0.0) or 0.0)
+        successes = int(round(rate * max(valid_episodes, 1))) if valid_episodes else 0
+        cycle = valid_episodes + skipped_episodes
+        last_logged_episode = valid_episodes
+        log.info(
+            "Resumed counters steps=%d eps=%d skipped=%d successes=%d",
+            env_steps,
+            valid_episodes,
+            skipped_episodes,
+            successes,
+        )
+
     while (
         not _STOP_REQUESTED
         and env_steps < args.target_env_steps
@@ -793,6 +1218,8 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         deploy_rlt, gate_advantage, critic_healthy, gate_sens = _gate_status(
             args, model, replay, valid_episodes, device
         )
+        if bool(getattr(args, "force_deploy_rlt", False)) and args.actor_mode == "rlt":
+            deploy_rlt = True
         policy.enable_rlt = deploy_rlt
         last_action_sensitivity = gate_sens
         model.eval()
@@ -804,8 +1231,12 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         episode_dir.mkdir(parents=True, exist_ok=True)
         episode_start = time.time()
         rollout_ok = True
+        success = False
+        trajectory: dict[str, Any] = {"n_steps": 0, "token_batches": [], "residual_rms": 0.0}
+        n_steps = 0
+        last_q, last_actor, last_guide, last_token = {}, {}, {}, {}
         try:
-            # One classic/EGL MuJoCo renderer per GPU — lock across trainers.
+            # Serialize MuJoCo EGL + the following CUDA train step on this GPU.
             with _egl_gpu_lock():
                 results = run_evaluation(
                     eval_config_cls=MolmoAct2PolicyEvalConfig,
@@ -817,18 +1248,52 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                     episode_idx=episode_idx,
                     output_dir=episode_dir,
                 )
-            success = bool(results.success_count > 0)
-            rollout_ok = bool(results.total_count > 0)
+                success = bool(results.success_count > 0)
+                rollout_ok = bool(results.total_count > 0)
+                trajectory = policy.pop_episode(success)
+                if policy.fatal_error is not None:
+                    raise policy.fatal_error
+
+                n_steps = int(trajectory["n_steps"])
+                if rollout_ok and n_steps > 0:
+                    replay.add_episode_chunks(
+                        trajectory["zs"],
+                        trajectory["proprios"],
+                        trajectory["references"],
+                        trajectory["executed"],
+                        trajectory["rewards"],
+                        trajectory["masks"],
+                        success=success,
+                        gamma=args.gamma,
+                        episode_id=valid_episodes,
+                    )
+                    for tokens, mask in trajectory["token_batches"]:
+                        token_replay.add(tokens, mask)
+                    token_overflow = len(token_replay) - args.token_replay_capacity
+                    if token_overflow > 0:
+                        del token_replay.tokens[:token_overflow]
+                        del token_replay.masks[:token_overflow]
+                    # Train while still holding the GPU lock so another trainer
+                    # cannot start EGL on this device during our CUDA updates.
+                    last_q, last_actor, last_guide, last_token = _train_after_episode(
+                        args,
+                        model,
+                        optimizers,
+                        replay,
+                        token_replay,
+                        device,
+                    )
         except Exception as error:  # noqa: BLE001
             log.warning("Episode %d rollout failed: %s", episode_idx, error)
             success = False
             rollout_ok = False
-        trajectory = policy.pop_episode(success)
+            if int(trajectory.get("n_steps", 0) or 0) <= 0:
+                trajectory = policy.pop_episode(success)
+                n_steps = int(trajectory.get("n_steps", 0) or 0)
         shutil.rmtree(episode_dir, ignore_errors=True)
         if policy.fatal_error is not None:
             raise policy.fatal_error
 
-        n_steps = int(trajectory["n_steps"])
         if not rollout_ok or n_steps <= 0:
             skipped_episodes += 1
             log.warning(
@@ -841,23 +1306,6 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             time.sleep(2.0)
             continue
 
-        replay.add_episode_chunks(
-            trajectory["zs"],
-            trajectory["proprios"],
-            trajectory["references"],
-            trajectory["executed"],
-            trajectory["rewards"],
-            trajectory["masks"],
-            success=success,
-            gamma=args.gamma,
-            episode_id=valid_episodes,
-        )
-        for tokens, mask in trajectory["token_batches"]:
-            token_replay.add(tokens, mask)
-        token_overflow = len(token_replay) - args.token_replay_capacity
-        if token_overflow > 0:
-            del token_replay.tokens[:token_overflow]
-            del token_replay.masks[:token_overflow]
         if (
             args.tune_token_online
             and not trajectory["token_batches"]
@@ -875,14 +1323,6 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         recent.append(float(success))
         last_g_enabled = deploy_rlt
 
-        last_q, last_actor, last_guide, last_token = _train_after_episode(
-            args,
-            model,
-            optimizers,
-            replay,
-            token_replay,
-            device,
-        )
         _, last_g_advantage, last_critic_healthy, last_action_sensitivity = _gate_status(
             args, model, replay, valid_episodes, device
         )
@@ -911,6 +1351,7 @@ def train_rlt_online(args: argparse.Namespace) -> None:
 
         should_log = (
             valid_episodes % args.log_every_episodes == 0
+            or valid_episodes % args.ckpt_every_episodes == 0
             or env_steps >= args.target_env_steps
             or (
                 args.max_valid_episodes > 0
@@ -937,10 +1378,26 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                 guide_info=last_guide,
                 token_info=last_token,
             )
-            with metrics_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(row) + "\n")
-            checkpoint = _save_checkpoint(model, out_dir, env_steps, row)
-            _save_chunk_replay(replay, args.replay_out)
+            # Persist outside the EGL lock (already released) so NFS stalls
+            # cannot block other trainers on this GPU.
+            checkpoint = _persist_training_state(
+                model=model,
+                out_dir=out_dir,
+                metrics_path=metrics_path,
+                env_steps=env_steps,
+                row=row,
+                replay=replay,
+                replay_out=args.replay_out,
+                required=False,
+            )
+            if checkpoint is None:
+                log.warning(
+                    "Skipping metrics bump this cycle; will retry next ckpt cadence "
+                    "(steps=%d eps=%d)",
+                    env_steps,
+                    valid_episodes,
+                )
+                continue
             last_logged_episode = valid_episodes
             log.info(
                 "METRICS config=%s steps=%d sr=%.3f window_sr=%.3f "
@@ -972,21 +1429,38 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         guide_info=last_guide,
         token_info=last_token,
     )
-    if last_logged_episode != valid_episodes:
-        with metrics_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(final_row) + "\n")
-    checkpoint = _save_checkpoint(model, out_dir, env_steps, final_row)
-    _save_chunk_replay(replay, args.replay_out)
+    checkpoint = _persist_training_state(
+        model=model,
+        out_dir=out_dir,
+        metrics_path=metrics_path,
+        env_steps=env_steps,
+        row=final_row,
+        replay=replay,
+        replay_out=args.replay_out,
+        required=False,
+    )
+    if checkpoint is None:
+        checkpoint = out_dir / "rlt_cf_latest.pt"
+        log.error(
+            "Final checkpoint/metrics persist failed; last good ckpt may be stale: %s",
+            checkpoint,
+        )
     summary = {
         **final_row,
         "stopped_by_signal": bool(_STOP_REQUESTED),
         "checkpoint": str(checkpoint),
         "metrics_path": str(metrics_path),
     }
-    (out_dir / "summary.json").write_text(
-        json.dumps(summary, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        _io_retry(
+            f"summary.json in {out_dir}",
+            lambda: (out_dir / "summary.json").write_text(
+                json.dumps(summary, indent=2) + "\n",
+                encoding="utf-8",
+            ),
+        )
+    except Exception as error:  # noqa: BLE001
+        log.error("Failed to write summary.json: %s", error)
     shutil.rmtree(tmp_rollouts, ignore_errors=True)
     log.info("Done: %s", json.dumps(summary))
 
@@ -1016,7 +1490,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tmp_rollout_dir",
         type=str,
-        default="/tmp/molmoact2_rlt_rollouts",
+        default=_DEFAULT_TMP_ROLLOUT_DIR,
     )
     parser.add_argument("--start_episode", type=int, default=0)
     parser.add_argument("--shard_size", type=int, default=125)
@@ -1024,8 +1498,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_valid_episodes", type=int, default=0)
     parser.add_argument("--horizon", type=int, default=500)
     parser.add_argument("--log_every_episodes", type=int, default=100)
+    parser.add_argument(
+        "--ckpt_every_episodes",
+        type=int,
+        default=10,
+        help="Checkpoint/metrics cadence for crash recovery (watchdog resumes).",
+    )
     parser.add_argument("--window_episodes", type=int, default=100)
     parser.add_argument("--replay_out", type=str, default="")
+    parser.add_argument(
+        "--no_resume",
+        action="store_true",
+        help="Ignore out_dir/rlt_cf_latest.pt and chunk_replay.npz on start.",
+    )
     parser.add_argument("--replay_capacity", type=int, default=50_000)
     parser.add_argument("--pos_frac", type=float, default=0.4)
     parser.add_argument("--batch_size", type=int, default=128)
@@ -1037,6 +1522,14 @@ def parse_args() -> argparse.Namespace:
         default="rlt",
         help="vla_only always executes the frozen MolmoAct2 reference chunk",
     )
+    parser.add_argument(
+        "--cf_mode",
+        choices=[CF_MODE_RESIDUAL, CF_MODE_FLOW],
+        default=CF_MODE_RESIDUAL,
+        help="residual = one-shot CF; flow = paper ConsensusFlow denoising ODE",
+    )
+    parser.add_argument("--flow_steps", type=int, default=10)
+    parser.add_argument("--guidance_coef", type=float, default=0.5)
 
     guide_group = parser.add_mutually_exclusive_group()
     guide_group.add_argument(
@@ -1065,6 +1558,11 @@ def parse_args() -> argparse.Namespace:
     parser.set_defaults(tune_token_online=False)
 
     parser.add_argument("--g_start_episodes", type=int, default=40)
+    parser.add_argument(
+        "--force_deploy_rlt",
+        action="store_true",
+        help="Always execute RLT actor/guide (eval / ignore gate)",
+    )
     parser.add_argument("--g_min_advantage", type=float, default=0.005)
     parser.add_argument(
         "--g_min_action_sensitivity",
@@ -1115,6 +1613,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--target_env_steps must be positive")
     if args.log_every_episodes <= 0:
         parser.error("--log_every_episodes must be positive")
+    if args.ckpt_every_episodes <= 0:
+        parser.error("--ckpt_every_episodes must be positive")
     if args.updates_per_episode < 0:
         parser.error("--updates_per_episode cannot be negative")
     if args.batch_size <= 0 or args.token_batch_size <= 0:

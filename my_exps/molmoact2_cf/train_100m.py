@@ -429,7 +429,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", type=str, default="cuda:0")
     p.add_argument("--benchmark_dir", type=str, default="")
     p.add_argument("--assets_dir", type=str, default=os.path.expanduser("~/.cache/molmospaces/assets"))
-    p.add_argument("--tmp_rollout_dir", type=str, default="/tmp/molmoact2_cf_rollouts")
+    p.add_argument("--tmp_rollout_dir", type=str, default="/workspace-SR008.nfs2/users/staroverov/B1K/tmp/molmoact2_cf_rollouts")
     p.add_argument("--start_episode", type=int, default=0)
     p.add_argument("--shard_size", type=int, default=125, help="Bench episodes to cycle in this shard")
     p.add_argument("--server_host", type=str, default="localhost")
