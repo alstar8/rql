@@ -294,7 +294,7 @@ def _egl_gpu_lock() -> Iterator[None]:
     """Bound concurrent classic/EGL MuJoCo rollouts per physical GPU.
 
     Concurrent MjOpenGLRenderer contexts on one device can SIGABRT, so we keep
-    a small per-GPU slot pool (``RLT_EGL_PER_GPU``, default 2) rather than a
+    a small per-GPU slot pool (``RLT_EGL_PER_GPU``, default 3) rather than a
     single exclusive lock.  With 4 trainers/GPU the old exclusive lock left
     75% of workers idle for tens of minutes.
 
@@ -307,7 +307,7 @@ def _egl_gpu_lock() -> Iterator[None]:
     device = _egl_device_id()
     lock_dir = _egl_lock_dir()
     lock_dir.mkdir(parents=True, exist_ok=True)
-    per_gpu = max(1, int(os.environ.get("RLT_EGL_PER_GPU", "2")))
+    per_gpu = max(1, int(os.environ.get("RLT_EGL_PER_GPU", "3")))
     cooldown = float(os.environ.get("RLT_EGL_COOLDOWN_SEC", "0.5"))
     handles: list[Any] = []
     slot = -1
@@ -1342,11 +1342,12 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         valid_episodes += 1
         successes += int(success)
         recent.append(float(success))
-        last_g_enabled = deploy_rlt
-
-        _, last_g_advantage, last_critic_healthy, last_action_sensitivity = _gate_status(
+        # Post-episode gate (metrics + next-episode deploy use the same check).
+        last_g_enabled, last_g_advantage, last_critic_healthy, last_action_sensitivity = _gate_status(
             args, model, replay, valid_episodes, device
         )
+        if bool(getattr(args, "force_deploy_rlt", False)) and args.actor_mode == "rlt":
+            last_g_enabled = True
 
         log.info(
             "steps=%d/%d eps=%d idx=%d success=%s ep_steps=%d gate=%s "
@@ -1358,7 +1359,7 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             episode_idx,
             success,
             n_steps,
-            deploy_rlt,
+            last_g_enabled,
             last_g_advantage,
             last_action_sensitivity,
             last_q.get("q_td_loss", 0.0),

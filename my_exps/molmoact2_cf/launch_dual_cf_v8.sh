@@ -58,8 +58,8 @@ launch_side() {
   local log_dir="$8"
   local num_gpus
   num_gpus="$(awk -F',' '{print NF}' <<<"${gpus}")"
-  # Prefer ~2 concurrent rollouts per GPU; allow override via RLT_EGL_*.
-  local per_gpu="${RLT_EGL_PER_GPU:-2}"
+  # Prefer ~3 concurrent rollouts per GPU; allow override via RLT_EGL_*.
+  local per_gpu="${RLT_EGL_PER_GPU:-3}"
   local side_concurrent="${RLT_EGL_MAX_CONCURRENT:-$(( num_gpus * per_gpu ))}"
   local egl_lock_dir="${RLT_EGL_LOCK_DIR:-${B1K_TMP}/rlt_egl_locks_${cf_mode}}"
   mkdir -p "${log_dir}" "${egl_lock_dir}"
@@ -114,14 +114,14 @@ launch_side() {
 
 if [[ "${FLOW_ONLY}" != "1" ]]; then
   launch_side residual "0,1,2,3" "${RESIDUAL_RUN_DIR}" "${RESIDUAL_CKPT}" \
-    "${BASE_PORT_RESIDUAL}" residual rlt_cf_v9_residual \
+    "${BASE_PORT_RESIDUAL}" residual "$(basename "${RESIDUAL_RUN_DIR}")" \
     "${B1K_TMP}/$(basename "${RESIDUAL_RUN_DIR}")_logs"
 fi
 if [[ "${RESIDUAL_ONLY}" != "1" ]]; then
   # Stagger so both sides don't hammer NFS/assets at once.
   sleep 15
   launch_side flow "4,5,6,7" "${FLOW_RUN_DIR}" "${FLOW_CKPT}" \
-    "${BASE_PORT_FLOW}" flow rlt_cf_v9_flow \
+    "${BASE_PORT_FLOW}" flow "$(basename "${FLOW_RUN_DIR}")" \
     "${B1K_TMP}/$(basename "${FLOW_RUN_DIR}")_logs"
 fi
 

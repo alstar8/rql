@@ -177,7 +177,7 @@ start_trainer() {
       RLT_EGL_LOCK_DIR="$EGL_LOCK_DIR" \
       RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-0.5}" \
       RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT:-8}" \
-      RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU:-2}" \
+      RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU:-3}" \
       MLSPACES_ASSETS_DIR="${MLSPACES_ASSETS_DIR:-$HOME/.cache/molmospaces/assets}" \
       MUJOCO_GL=egl \
       PYOPENGL_PLATFORM=egl \
