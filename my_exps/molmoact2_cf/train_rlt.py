@@ -242,8 +242,8 @@ def guide_step(
     opt: torch.optim.Optimizer,
     batch: dict[str, torch.Tensor],
     *,
-    beta: float = 0.1,
-    target_delta_frac: float = 0.5,
+    beta: float = 0.05,
+    target_delta_frac: float = 1.0,
 ) -> dict[str, float]:
     if model.guide is None:
         return {"guide_loss": 0.0, "guide_adv": 0.0}
@@ -566,8 +566,17 @@ def flow_actor_step(
     target_divergence: float = 0.0025,
     ref_dropout: float = 0.5,
     bc_coef: float = 1.0,
+    endpoint_aux_coef: float = 0.5,
+    endpoint_aux_steps: int = 4,
 ) -> dict[str, float]:
-    """BC flow-matching + one-step guided lookahead Q maximization."""
+    """Paper-faithful joint CF actor: BC on executed a + Q lookahead through v_θ.
+
+    ConsensusFlow trains the base flow v_θ jointly with G_φ:
+      L = L_BC(a - x0) + L_actor(-Q(s, x^+, t^+)) + β||a_end - a||^2
+    with x^+ = x_t + (v_θ + sg(G)) Δ.  Absolute Q (not adv vs BC velocity)
+    routes value into the trainable base Action Expert (FlowVelocityActor).
+    VLA reference ã is conditioning only (with dropout), not the BC target.
+    """
     if not model.is_flow:
         return actor_step(
             model,
@@ -581,19 +590,21 @@ def flow_actor_step(
     model.train()
     with torch.no_grad():
         state = _batch_state(model, batch, detach_token=True, use_target=False)
-    # BC target: VLA reference (behavior prior). Demo pretrain also uses this.
-    a1 = model.normalize_action(batch["reference_actions"])
-    b = a1.shape[0]
-    present = (torch.rand(b, device=a1.device) > ref_dropout).float()
-    ref_in = a1 * present.view(b, 1, 1)
-    x0 = torch.randn_like(a1)
-    t = torch.rand(b, 1, device=a1.device, dtype=a1.dtype)
-    x_t = (1.0 - t.view(b, 1, 1)) * x0 + t.view(b, 1, 1) * a1
-    target_v = a1 - x0
+    # BC on online/executed actions (paper CF); VLA ref is conditioning only.
+    a_data = model.normalize_action(batch["executed_actions"])
+    a_ref = model.normalize_action(batch["reference_actions"])
+    b = a_data.shape[0]
+    present = (torch.rand(b, device=a_data.device) > ref_dropout).float()
+    ref_in = a_ref * present.view(b, 1, 1)
+    x0 = torch.randn_like(a_data)
+    t = torch.rand(b, 1, device=a_data.device, dtype=a_data.dtype)
+    x_t = (1.0 - t.view(b, 1, 1)) * x0 + t.view(b, 1, 1) * a_data
+    target_v = a_data - x0
     v = model.flow_velocity(state, x_t, t, ref_in)
     mask = batch["action_mask"].unsqueeze(-1)
     bc = (((v - target_v.detach()) * mask) ** 2).sum() / mask.sum().clamp_min(1.0) / v.shape[-1]
 
+    # Paper lookahead: sg(G) so actor grads flow through v_θ only.
     g = torch.zeros_like(v)
     if model.guide is not None:
         g, _, _ = model.guide.guidance(state, x_t, t, v.detach())
@@ -602,19 +613,45 @@ def flow_actor_step(
         torch.full_like(t, 1.0 / float(model.flow_steps)),
         1.0 - t,
     )
-    # Advantage vs BC velocity (not vs stopgrad(v), which makes adv≈0 by construction).
     x_plus = x_t + (v + g) * dt.view(b, 1, 1)
     t_plus = (t + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
-    q = model.q_min_chunk(state, x_plus, t=t_plus)
+    # Absolute ensemble-mean Q at the guided one-step state (eq. cf-actor).
+    q_look = model.q_chunk(state, x_plus, t=t_plus).mean(dim=0)
     with torch.no_grad():
-        x_bc = x_t + target_v * dt.view(b, 1, 1)
-        base_q = model.q_min_chunk(state, x_bc, t=t_plus)
-    adv = q - base_q
-    # Keep flow endpoint near VLA reference.
-    endpoint, _ = model.flow_sample(state, ref_in, apply_guide=False)
-    residual_mse = (((endpoint - a1.detach()) * mask) ** 2).sum() / mask.sum().clamp_min(1.0) / endpoint.shape[-1]
+        q_base = model.q_chunk(state, x_t.detach(), t=t).mean(dim=0)
+    adv = q_look - q_base
+
+    # Endpoint auxiliary: short guided unroll so endpoint Q shapes v_θ.
+    n_aux = max(1, min(int(endpoint_aux_steps), int(model.flow_steps)))
+    x_end = x_t
+    t_end = t
+    for _ in range(n_aux):
+        v_i = model.flow_velocity(state, x_end, t_end, ref_in)
+        g_i = torch.zeros_like(v_i)
+        if model.guide is not None:
+            g_i, _, _ = model.guide.guidance(state, x_end.detach(), t_end, v_i.detach())
+            g_i = g_i.detach()
+        dt_i = torch.minimum(
+            torch.full_like(t_end, 1.0 / float(model.flow_steps)),
+            1.0 - t_end,
+        )
+        x_end = x_end + (v_i + g_i) * dt_i.view(b, 1, 1)
+        t_end = (t_end + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
+    q_end = model.q_chunk(state, x_end, t=t_end).mean(dim=0)
+
+    # Trust region vs executed data actions (online behavior), not frozen VLA.
+    endpoint_det, _ = model.flow_sample(state, ref_in, apply_guide=False)
+    residual_mse = (
+        ((endpoint_det - a_data.detach()) * mask) ** 2
+    ).sum() / mask.sum().clamp_min(1.0) / endpoint_det.shape[-1]
     alpha = model.log_alpha()
-    actor_loss = -adv.mean() + float(bc_coef) * bc + float(beta) * residual_mse + alpha.detach() * residual_mse
+    actor_loss = (
+        -q_look.mean()
+        - float(endpoint_aux_coef) * q_end.mean()
+        + float(bc_coef) * bc
+        + float(beta) * residual_mse
+        + alpha.detach() * residual_mse
+    )
     opt.zero_grad(set_to_none=True)
     actor_loss.backward()
     nn.utils.clip_grad_norm_(model.actor.parameters(), 1.0)
@@ -628,6 +665,8 @@ def flow_actor_step(
     return {
         "actor_loss": float(actor_loss.detach()),
         "actor_adv": float(adv.mean().detach()),
+        "actor_q_look": float(q_look.mean().detach()),
+        "actor_q_end": float(q_end.mean().detach()),
         "residual_mse": float(residual_mse.detach()),
         "bc_loss": float(bc.detach()),
         "alpha": float(alpha.detach()),
@@ -639,7 +678,7 @@ def flow_guide_step(
     opt: torch.optim.Optimizer,
     batch: dict[str, torch.Tensor],
     *,
-    beta: float = 0.1,
+    beta: float = 0.05,
     distill_coef: float = 1.0,
 ) -> dict[str, float]:
     """Distill common-scale-normalized ∇_x Q into W_φ at flow BC points."""

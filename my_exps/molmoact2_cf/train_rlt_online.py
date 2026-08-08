@@ -860,6 +860,13 @@ def _gate_status(
         and np.isfinite(sensitivity)
         and sensitivity >= args.g_min_action_sensitivity
     )
+    # Joint CF (trainable v_θ + G_φ): once the critic is informative, deploy the
+    # guided ODE. Paper CF does not fall back to a frozen external expert.
+    if bool(getattr(args, "joint_cf", False)):
+        enabled = (
+            np.isfinite(sensitivity)
+            and sensitivity >= args.g_min_action_sensitivity
+        )
     return bool(enabled), float(advantage), bool(healthy), float(sensitivity)
 
 
@@ -915,11 +922,16 @@ def _train_after_episode(
             )
             if args.use_cf_guide:
                 guide_fn = flow_guide_step if model.is_flow else guide_step
+                guide_kwargs = {"beta": args.guide_beta}
+                if not model.is_flow:
+                    guide_kwargs["target_delta_frac"] = float(
+                        getattr(args, "guide_target_delta_frac", 1.0)
+                    )
                 guide_info = guide_fn(
                     model,
                     optimizers["guide"],
                     actor_batch,
-                    beta=args.guide_beta,
+                    **guide_kwargs,
                 )
         if args.tune_token_online and len(token_replay) > 0:
             token_batch = token_replay.sample(args.token_batch_size, device=device)
@@ -1585,7 +1597,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Always execute RLT actor/guide (eval / ignore gate)",
     )
-    parser.add_argument("--g_min_advantage", type=float, default=0.005)
+    parser.add_argument(
+        "--joint_cf",
+        action="store_true",
+        help=(
+            "Paper-faithful joint CF: trainable FlowVelocityActor v_θ with G_φ; "
+            "after warmup deploy guided ODE when critic sensitivity is healthy "
+            "(skip g_min_advantage threshold)."
+        ),
+    )
+    parser.add_argument("--g_min_advantage", type=float, default=0.003)
     parser.add_argument(
         "--g_min_action_sensitivity",
         type=float,
@@ -1613,7 +1634,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cql_action_radius", type=float, default=0.2)
     parser.add_argument("--ref_dropout", type=float, default=0.5)
     parser.add_argument("--actor_beta", type=float, default=1.0)
-    parser.add_argument("--guide_beta", type=float, default=0.1)
+    parser.add_argument("--guide_beta", type=float, default=0.05)
+    parser.add_argument(
+        "--guide_target_delta_frac",
+        type=float,
+        default=1.0,
+        help="Residual guide distill RMS as a fraction of max_delta (v11: 1.0)",
+    )
     parser.add_argument("--target_divergence", type=float, default=0.0025)
     parser.add_argument("--lr_token", type=float, default=1e-4)
     parser.add_argument("--lr_critic", type=float, default=3e-4)

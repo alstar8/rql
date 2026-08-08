@@ -56,6 +56,7 @@ launch_side() {
   local cf_mode="$6"
   local screen_name="$7"
   local log_dir="$8"
+  local joint_cf="${9:-0}"
   local num_gpus
   num_gpus="$(awk -F',' '{print NF}' <<<"${gpus}")"
   # Prefer ~3 concurrent rollouts per GPU; allow override via RLT_EGL_*.
@@ -64,7 +65,7 @@ launch_side() {
   local egl_lock_dir="${RLT_EGL_LOCK_DIR:-${B1K_TMP}/rlt_egl_locks_${cf_mode}}"
   mkdir -p "${log_dir}" "${egl_lock_dir}"
 
-  echo "[dual] launching ${name}: GPUs=${gpus} run=${run_dir} mode=${cf_mode} ckpt=${ckpt} NO_SCREEN=${NO_SCREEN} egl_concurrent=${side_concurrent} per_gpu=${per_gpu}"
+  echo "[dual] launching ${name}: GPUs=${gpus} run=${run_dir} mode=${cf_mode} ckpt=${ckpt} JOINT_CF=${joint_cf} NO_SCREEN=${NO_SCREEN} egl_concurrent=${side_concurrent} per_gpu=${per_gpu}"
   if [[ "${NO_SCREEN}" == "1" ]]; then
     nohup env \
       NO_SCREEN=1 \
@@ -79,6 +80,10 @@ launch_side() {
       SCREEN_NAME="${screen_name}" \
       LOCAL_LOG_DIR="${log_dir}" \
       CF_MODE="${cf_mode}" \
+      JOINT_CF="${joint_cf}" \
+      G_MIN_ADVANTAGE="${G_MIN_ADVANTAGE:-0.003}" \
+      GUIDE_BETA="${GUIDE_BETA:-0.05}" \
+      GUIDE_TARGET_DELTA_FRAC="${GUIDE_TARGET_DELTA_FRAC:-1.0}" \
       B1K_ROOT="${B1K_ROOT}" \
       B1K_TMP="${B1K_TMP}" \
       RLT_EGL_LOCK_DIR="${egl_lock_dir}" \
@@ -101,6 +106,10 @@ launch_side() {
     SCREEN_NAME="${screen_name}" \
     LOCAL_LOG_DIR="${log_dir}" \
     CF_MODE="${cf_mode}" \
+    JOINT_CF="${joint_cf}" \
+    G_MIN_ADVANTAGE="${G_MIN_ADVANTAGE:-0.003}" \
+    GUIDE_BETA="${GUIDE_BETA:-0.05}" \
+    GUIDE_TARGET_DELTA_FRAC="${GUIDE_TARGET_DELTA_FRAC:-1.0}" \
     B1K_ROOT="${B1K_ROOT}" \
     B1K_TMP="${B1K_TMP}" \
     RLT_EGL_LOCK_DIR="${egl_lock_dir}" \
@@ -115,14 +124,17 @@ launch_side() {
 if [[ "${FLOW_ONLY}" != "1" ]]; then
   launch_side residual "0,1,2,3" "${RESIDUAL_RUN_DIR}" "${RESIDUAL_CKPT}" \
     "${BASE_PORT_RESIDUAL}" residual "$(basename "${RESIDUAL_RUN_DIR}")" \
-    "${B1K_TMP}/$(basename "${RESIDUAL_RUN_DIR}")_logs"
+    "${B1K_TMP}/$(basename "${RESIDUAL_RUN_DIR}")_logs" \
+    0
 fi
 if [[ "${RESIDUAL_ONLY}" != "1" ]]; then
   # Stagger so both sides don't hammer NFS/assets at once.
   sleep 15
+  # Flow side: joint trainable v_θ (FlowVelocityActor) + steering G_φ.
   launch_side flow "4,5,6,7" "${FLOW_RUN_DIR}" "${FLOW_CKPT}" \
     "${BASE_PORT_FLOW}" flow "$(basename "${FLOW_RUN_DIR}")" \
-    "${B1K_TMP}/$(basename "${FLOW_RUN_DIR}")_logs"
+    "${B1K_TMP}/$(basename "${FLOW_RUN_DIR}")_logs" \
+    "${JOINT_CF:-1}"
 fi
 
 echo "[dual] both sides requested"

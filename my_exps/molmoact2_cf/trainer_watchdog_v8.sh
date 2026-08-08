@@ -27,6 +27,10 @@ N_CRITICS="${N_CRITICS:-10}"
 CF_MODE="${CF_MODE:-residual}"
 FLOW_STEPS="${FLOW_STEPS:-10}"
 GUIDANCE_COEF="${GUIDANCE_COEF:-0.5}"
+G_MIN_ADVANTAGE="${G_MIN_ADVANTAGE:-0.003}"
+GUIDE_BETA="${GUIDE_BETA:-0.05}"
+GUIDE_TARGET_DELTA_FRAC="${GUIDE_TARGET_DELTA_FRAC:-1.0}"
+JOINT_CF="${JOINT_CF:-0}"
 EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR:-${B1K_TMP}/rlt_egl_locks}"
 TMP_ROLLOUT_DIR="${TMP_ROLLOUT_DIR:-${B1K_TMP}/molmoact2_rlt_rollouts}"
 mkdir -p "${B1K_TMP}" "${LOCAL_LOG}" "${EGL_LOCK_DIR}" "${TMP_ROLLOUT_DIR}"
@@ -168,6 +172,9 @@ start_trainer() {
       extra=(--actor_mode rlt --use_cf_guide --tune_token_online --updates_per_episode "$UPDATES_PER_EPISODE")
       ;;
   esac
+  if [[ "${JOINT_CF}" == "1" ]]; then
+    extra+=(--joint_cf)
+  fi
 
   echo "[watchdog $(date -Is)] RESTART w=$worker $config_name s=$config_worker gpu=$gpu port=$port restarts=$restarts" \
     | tee -a "$WATCH_LOG"
@@ -198,9 +205,10 @@ start_trainer() {
       --explore_residual_std 0.05 --rank_coef 1.0 --rank_margin 0.05 \
       --rank_noise 0.08 --far_rank_coef 0.5 --far_rank_noise 0.35 \
       --shuffle_rank_coef 0.5 --target_noise 0.02 \
-      --g_start_episodes 40 --g_min_advantage 0.005 \
+      --g_start_episodes 40 --g_min_advantage "$G_MIN_ADVANTAGE" \
       --g_min_action_sensitivity 0.003 --gate_sensitivity_noise 0.08 \
-      --guide_beta 0.1 \
+      --guide_beta "$GUIDE_BETA" \
+      --guide_target_delta_frac "$GUIDE_TARGET_DELTA_FRAC" \
       --cql_n_actions 8 --rlt_ckpt "$RLT_CKPT" \
       --tmp_rollout_dir "$TMP_ROLLOUT_DIR" \
       "${extra[@]}"

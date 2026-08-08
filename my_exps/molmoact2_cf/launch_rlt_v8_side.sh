@@ -33,6 +33,12 @@ SERVER_WAIT_ATTEMPTS="${SERVER_WAIT_ATTEMPTS:-240}"
 RLT_CKPT="${RLT_CKPT:-}"
 FLOW_STEPS="${FLOW_STEPS:-10}"
 GUIDANCE_COEF="${GUIDANCE_COEF:-0.5}"
+# v11 residual fixes: stronger guide distill, softer gate.
+G_MIN_ADVANTAGE="${G_MIN_ADVANTAGE:-0.003}"
+GUIDE_BETA="${GUIDE_BETA:-0.05}"
+GUIDE_TARGET_DELTA_FRAC="${GUIDE_TARGET_DELTA_FRAC:-1.0}"
+# v11 flow joint CF: trainable FlowVelocityActor v_θ + G_φ (paper-faithful).
+JOINT_CF="${JOINT_CF:-0}"
 # Isolate EGL locks per experiment side so dual runs do not starve each other.
 RLT_EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR:-${B1K_TMP}/rlt_egl_locks_${CF_MODE}}"
 # Concurrent MuJoCo EGL rollouts per physical GPU (exclusive lock was 1 and
@@ -283,15 +289,19 @@ start_trainer() {
     --shuffle_rank_coef 0.5
     --target_noise 0.02
     --g_start_episodes 40
-    --g_min_advantage 0.005
+    --g_min_advantage "${G_MIN_ADVANTAGE}"
     --g_min_action_sensitivity 0.003
     --gate_sensitivity_noise 0.08
-    --guide_beta 0.1
+    --guide_beta "${GUIDE_BETA}"
+    --guide_target_delta_frac "${GUIDE_TARGET_DELTA_FRAC}"
     --cql_n_actions 8
     --tmp_rollout_dir "${TMP_ROLLOUT_DIR}"
   )
   if [[ -n "${RLT_CKPT}" ]]; then
     command+=(--rlt_ckpt "${RLT_CKPT}")
+  fi
+  if [[ "${JOINT_CF}" == "1" ]]; then
+    command+=(--joint_cf)
   fi
 
   case "${config_name}" in
@@ -379,6 +389,10 @@ start_watchdogs() {
     TARGET_ENV_STEPS="${TARGET_ENV_STEPS}"
     FLOW_STEPS="${FLOW_STEPS}"
     GUIDANCE_COEF="${GUIDANCE_COEF}"
+    G_MIN_ADVANTAGE="${G_MIN_ADVANTAGE}"
+    GUIDE_BETA="${GUIDE_BETA}"
+    GUIDE_TARGET_DELTA_FRAC="${GUIDE_TARGET_DELTA_FRAC}"
+    JOINT_CF="${JOINT_CF}"
     RLT_EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR}"
     RLT_EGL_MAX_CONCURRENT="${RLT_EGL_MAX_CONCURRENT}"
     RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU:-3}"
