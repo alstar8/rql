@@ -673,6 +673,240 @@ def flow_actor_step(
     }
 
 
+def ae_flow_actor_step(
+    model: MolmoAct2RLTCF,
+    ae_backend: Any,
+    opt: torch.optim.Optimizer,
+    alpha_opt: torch.optim.Optimizer,
+    batch: dict[str, Any],
+    *,
+    beta: float = 1.0,
+    target_divergence: float = 0.0025,
+    bc_coef: float = 1.0,
+    endpoint_aux_coef: float = 0.5,
+    endpoint_aux_steps: int = 4,
+) -> dict[str, float]:
+    """Joint CF actor with MolmoAct2 Action Expert as \(v_\\theta\).
+
+    Requires ``batch`` keys from ImageChunkReplay (cameras + instruction) plus
+    standard chunk fields.  VLM KV is stop-grad (knowledge insulation); LoRA AE
+    receives BC + Q lookahead through ``v_AE + sg(G)``.
+    """
+    if not model.is_flow:
+        raise RuntimeError("ae_flow_actor_step requires cf_mode=flow")
+    model.train()
+    ae_backend.train(True)
+
+    external = batch["external_cam"]  # list[np.ndarray] length B
+    wrist = batch["wrist_cam"]
+    instructions = batch["instruction"]
+    b = int(batch["executed_actions"].shape[0])
+    device = batch["executed_actions"].device
+
+    with torch.no_grad():
+        state = _batch_state(model, batch, detach_token=True, use_target=False)
+        contexts = []
+        for i in range(b):
+            ctx, _feats = ae_backend.encode_context(
+                external[i],
+                wrist[i],
+                str(instructions[i]),
+                batch["proprio"][i].detach().float().cpu().numpy(),
+                action_horizon=int(model.chunk_size),
+            )
+            contexts.append(ctx)
+
+    a_data_raw = batch["executed_actions"].to(device=device, dtype=torch.float32)
+    a_data = model.normalize_action(a_data_raw)
+    mask = batch["action_mask"].unsqueeze(-1)
+    x0_raw = torch.randn_like(a_data_raw)
+    t = torch.rand(b, 1, device=device, dtype=torch.float32)
+    x_t_raw = (1.0 - t.view(b, 1, 1)) * x0_raw + t.view(b, 1, 1) * a_data_raw
+    target_v_raw = a_data_raw - x0_raw
+
+    # Per-sample AE velocity (distinct KV contexts); stack for Q/BC.
+    v_raw_rows = []
+    for i in range(b):
+        v_i = ae_backend.velocity(contexts[i], x_t_raw[i : i + 1], t[i : i + 1])
+        v_raw_rows.append(v_i)
+    v_raw = torch.cat(v_raw_rows, dim=0)
+    std = model.action_std.to(device=device, dtype=torch.float32).clamp_min(1e-6)
+    v_n = v_raw / std
+    x_t = model.normalize_action(x_t_raw)
+    target_v = target_v_raw / std
+    bc = (((v_n - target_v.detach()) * mask) ** 2).sum() / mask.sum().clamp_min(1.0) / v_n.shape[-1]
+
+    g = torch.zeros_like(v_n)
+    if model.guide is not None:
+        g, _, _ = model.guide.guidance(state, x_t, t, v_n.detach())
+        g = g.detach()
+    dt = torch.minimum(
+        torch.full_like(t, 1.0 / float(model.flow_steps)),
+        1.0 - t,
+    )
+    x_plus = x_t + (v_n + g) * dt.view(b, 1, 1)
+    t_plus = (t + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
+    q_look = model.q_chunk(state, x_plus, t=t_plus).mean(dim=0)
+    with torch.no_grad():
+        q_base = model.q_chunk(state, x_t.detach(), t=t).mean(dim=0)
+    adv = q_look - q_base
+
+    n_aux = max(1, min(int(endpoint_aux_steps), int(model.flow_steps)))
+    x_end_raw = x_t_raw
+    t_end = t
+    for _ in range(n_aux):
+        v_rows = [
+            ae_backend.velocity(contexts[i], x_end_raw[i : i + 1], t_end[i : i + 1])
+            for i in range(b)
+        ]
+        v_i_raw = torch.cat(v_rows, dim=0)
+        v_i = v_i_raw / std
+        x_end_n = model.normalize_action(x_end_raw)
+        g_i = torch.zeros_like(v_i)
+        if model.guide is not None:
+            g_i, _, _ = model.guide.guidance(state, x_end_n.detach(), t_end, v_i.detach())
+            g_i = g_i.detach()
+        dt_i = torch.minimum(
+            torch.full_like(t_end, 1.0 / float(model.flow_steps)),
+            1.0 - t_end,
+        )
+        # Integrate in raw space: Δx_raw = (v_raw + g_raw) dt
+        g_raw = g_i * std
+        x_end_raw = x_end_raw + (v_i_raw + g_raw) * dt_i.view(b, 1, 1)
+        t_end = (t_end + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
+    x_end = model.normalize_action(x_end_raw)
+    q_end = model.q_chunk(state, x_end, t=t_end).mean(dim=0)
+
+    residual_mse = (
+        ((x_end - a_data.detach()) * mask) ** 2
+    ).sum() / mask.sum().clamp_min(1.0) / x_end.shape[-1]
+    alpha = model.log_alpha()
+    actor_loss = (
+        -q_look.mean()
+        - float(endpoint_aux_coef) * q_end.mean()
+        + float(bc_coef) * bc
+        + float(beta) * residual_mse
+        + alpha.detach() * residual_mse
+    )
+    opt.zero_grad(set_to_none=True)
+    actor_loss.backward()
+    grad_norm = 0.0
+    for p in ae_backend.trainable_parameters():
+        if p.grad is not None:
+            grad_norm += float(p.grad.detach().float().norm().cpu())
+    nn.utils.clip_grad_norm_(ae_backend.trainable_parameters(), 1.0)
+    opt.step()
+
+    constraint = (residual_mse - target_divergence).detach()
+    alpha_loss = -model.log_alpha.log_alpha * constraint
+    alpha_opt.zero_grad(set_to_none=True)
+    alpha_loss.backward()
+    alpha_opt.step()
+
+    return {
+        "actor_loss": float(actor_loss.detach()),
+        "actor_adv": float(adv.mean().detach()),
+        "actor_q_look": float(q_look.mean().detach()),
+        "actor_q_end": float(q_end.mean().detach()),
+        "residual_mse": float(residual_mse.detach()),
+        "bc_loss": float(bc.detach()),
+        "alpha": float(alpha.detach()),
+        "ae_grad_norm": float(grad_norm),
+        "v_source": 1.0,  # marker: molmo_ae
+    }
+
+
+def ae_flow_guide_step(
+    model: MolmoAct2RLTCF,
+    ae_backend: Any,
+    opt: torch.optim.Optimizer,
+    batch: dict[str, Any],
+    *,
+    beta: float = 0.05,
+    distill_coef: float = 1.0,
+) -> dict[str, float]:
+    """CF guide distill with base velocity from MolmoAct AE (detached)."""
+    if model.guide is None:
+        return {"guide_loss": 0.0, "guide_adv": 0.0}
+    if not model.is_flow:
+        return guide_step(model, opt, batch, beta=beta)
+    model.train()
+    ae_backend.eval()
+
+    external = batch["external_cam"]
+    wrist = batch["wrist_cam"]
+    instructions = batch["instruction"]
+    b = int(batch["reference_actions"].shape[0])
+    device = batch["reference_actions"].device
+
+    with torch.no_grad():
+        state = _batch_state(model, batch, detach_token=True, use_target=False)
+        a1_raw = batch["reference_actions"].to(device=device, dtype=torch.float32)
+        a1 = model.normalize_action(a1_raw)
+        contexts = []
+        for i in range(b):
+            ctx, _ = ae_backend.encode_context(
+                external[i],
+                wrist[i],
+                str(instructions[i]),
+                batch["proprio"][i].detach().float().cpu().numpy(),
+                action_horizon=int(model.chunk_size),
+            )
+            contexts.append(ctx)
+
+    x0_raw = torch.randn_like(a1_raw)
+    t = 0.5 + 0.5 * torch.rand(b, 1, device=device, dtype=torch.float32)
+    x_t_raw = ((1.0 - t.view(b, 1, 1)) * x0_raw + t.view(b, 1, 1) * a1_raw).detach()
+    x_t = model.normalize_action(x_t_raw).detach().requires_grad_(True)
+
+    member = torch.randint(0, model.n_critics, (b,), device=device)
+    flat = x_t.reshape(b, -1)
+    qs = model.target_critic(state.detach(), flat, t)
+    q_sel = qs[member, torch.arange(b, device=device)].sum()
+    grad = torch.autograd.grad(q_sel, x_t, retain_graph=False)[0].detach()
+    target = common_scale_normalize(grad.reshape(b, -1))
+
+    std = model.action_std.to(device=device, dtype=torch.float32).clamp_min(1e-6)
+    with torch.no_grad():
+        v_rows = [
+            ae_backend.velocity(contexts[i], x_t_raw[i : i + 1], t[i : i + 1])
+            for i in range(b)
+        ]
+        v_raw = torch.cat(v_rows, dim=0)
+        v = (v_raw / std).detach()
+
+    g_chunk, w_flat, diag = model.guide.guidance(state.detach(), x_t.detach(), t, v)
+    distill = ((w_flat - target) ** 2).mean()
+
+    dt = torch.minimum(
+        torch.full_like(t, 1.0 / float(model.flow_steps)),
+        1.0 - t,
+    )
+    x_guided = x_t.detach() + (v + g_chunk) * dt.view(b, 1, 1)
+    x_base = x_t.detach() + v * dt.view(b, 1, 1)
+    t_plus = (t + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
+    q_g = model.q_min_chunk(state.detach(), x_guided, t=t_plus)
+    with torch.no_grad():
+        q_b = model.q_min_chunk(state.detach(), x_base, t=t_plus)
+    adv = q_g - q_b
+    mag = (g_chunk**2).mean()
+    loss = float(distill_coef) * distill - adv.mean() + float(beta) * mag
+    opt.zero_grad(set_to_none=True)
+    loss.backward()
+    nn.utils.clip_grad_norm_(model.guide.parameters(), 1.0)
+    opt.step()
+    out = {
+        "guide_loss": float(loss.detach()),
+        "guide_adv": float(adv.mean().detach()),
+        "guide_distill": float(distill.detach()),
+        "guide_mse": float(mag.detach()),
+        "w_norm": float(w_flat.norm(dim=-1).mean().detach()),
+    }
+    for k, v_t in diag.items():
+        out[f"guide_{k}"] = float(v_t.detach()) if torch.is_tensor(v_t) else float(v_t)
+    return out
+
+
 def flow_guide_step(
     model: MolmoAct2RLTCF,
     opt: torch.optim.Optimizer,

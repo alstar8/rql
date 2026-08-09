@@ -605,6 +605,8 @@ class MolmoAct2RLTCF(nn.Module):
         self.flow_steps = int(flow_steps)
         self.guidance_coef = float(guidance_coef)
         self.time_dim = int(time_dim)
+        # "rlt" = FlowVelocityActor; "molmo_ae" = MolmoAct2 Action Expert (V11_1).
+        self.v_source = "rlt"
 
         self.token_ae = RLTokenAutoencoder(
             token_dim=self.feature_dim,

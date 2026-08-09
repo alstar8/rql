@@ -321,3 +321,133 @@ class TokenReplay:
         for t, m in zip(data["tokens"], data["masks"]):
             buf.add(np.asarray(t), np.asarray(m))
         return buf
+
+
+@dataclass
+class ImageChunkRow:
+    """Chunk transition plus cameras for Molmo AE (=V) training."""
+
+    z: np.ndarray
+    proprio: np.ndarray
+    reference_actions: np.ndarray
+    executed_actions: np.ndarray
+    action_mask: np.ndarray
+    external_cam: np.ndarray  # uint8 HxWx3
+    wrist_cam: np.ndarray
+    instruction: str
+    success: float
+
+
+class ImageChunkReplay:
+    """Small image-augmented buffer for AE LoRA CF updates (not disk-persisted)."""
+
+    def __init__(
+        self,
+        max_transitions: int = 512,
+        chunk_size: int = CHUNK_SIZE,
+        action_dim: int = ACTION_DIM,
+        z_dim: int = Z_DIM,
+        pos_frac: float = 0.4,
+        seed: int = 0,
+    ) -> None:
+        self.max_transitions = int(max_transitions)
+        self.chunk_size = int(chunk_size)
+        self.action_dim = int(action_dim)
+        self.z_dim = int(z_dim)
+        self.pos_frac = float(pos_frac)
+        self.rng = np.random.default_rng(seed)
+        self.rows: list[ImageChunkRow] = []
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def add_episode(
+        self,
+        *,
+        zs: list[np.ndarray],
+        proprios: list[np.ndarray],
+        references: list[np.ndarray],
+        executed: list[np.ndarray],
+        masks: list[np.ndarray],
+        external_cams: list[np.ndarray],
+        wrist_cams: list[np.ndarray],
+        instructions: list[str],
+        success: bool,
+    ) -> int:
+        n = len(zs)
+        if n == 0:
+            return 0
+        if not (
+            len(proprios)
+            == len(references)
+            == len(executed)
+            == len(masks)
+            == len(external_cams)
+            == len(wrist_cams)
+            == len(instructions)
+            == n
+        ):
+            raise ValueError("image episode list length mismatch")
+        added = 0
+        for i in range(n):
+            self.rows.append(
+                ImageChunkRow(
+                    z=np.asarray(zs[i], dtype=np.float32),
+                    proprio=np.asarray(proprios[i], dtype=np.float32),
+                    reference_actions=np.asarray(references[i], dtype=np.float32),
+                    executed_actions=np.asarray(executed[i], dtype=np.float32),
+                    action_mask=np.asarray(masks[i], dtype=np.float32),
+                    external_cam=np.asarray(external_cams[i], dtype=np.uint8),
+                    wrist_cam=np.asarray(wrist_cams[i], dtype=np.uint8),
+                    instruction=str(instructions[i]),
+                    success=float(success),
+                )
+            )
+            added += 1
+        overflow = len(self.rows) - self.max_transitions
+        if overflow > 0:
+            self.rows = self.rows[overflow:]
+        return added
+
+    def sample(self, batch_size: int, device: torch.device | str = "cpu") -> dict[str, Any]:
+        n = len(self.rows)
+        if n == 0:
+            raise RuntimeError("empty image chunk replay")
+        succ = np.asarray([r.success for r in self.rows], dtype=np.float32)
+        pos = np.flatnonzero(succ > 0.5)
+        neg = np.flatnonzero(succ <= 0.5)
+        n_pos = int(round(batch_size * self.pos_frac)) if len(pos) and len(neg) else 0
+        n_pos = min(n_pos, batch_size, len(pos)) if len(pos) else 0
+        n_neg = batch_size - n_pos
+        idxs: list[int] = []
+        if n_pos:
+            idxs.extend(self.rng.choice(pos, size=n_pos, replace=len(pos) < n_pos).tolist())
+        if n_neg:
+            pool = neg if len(neg) else np.arange(n)
+            idxs.extend(self.rng.choice(pool, size=n_neg, replace=len(pool) < n_neg).tolist())
+        batch = [self.rows[i] for i in idxs]
+
+        def stack(key: str, dtype=np.float32):
+            return torch.as_tensor(
+                np.stack([getattr(r, key) for r in batch], axis=0).astype(dtype),
+                device=device,
+            )
+
+        return {
+            "z": stack("z"),
+            "proprio": stack("proprio"),
+            "reference_actions": stack("reference_actions"),
+            "executed_actions": stack("executed_actions"),
+            "action_mask": stack("action_mask"),
+            # Dummy next_* so shared helpers stay happy if touched.
+            "next_z": stack("z"),
+            "next_proprio": stack("proprio"),
+            "next_reference_actions": stack("reference_actions"),
+            "success": torch.as_tensor(
+                np.asarray([r.success for r in batch], dtype=np.float32),
+                device=device,
+            ),
+            "external_cam": [r.external_cam for r in batch],
+            "wrist_cam": [r.wrist_cam for r in batch],
+            "instruction": [r.instruction for r in batch],
+        }

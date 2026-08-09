@@ -36,7 +36,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from chunk_replay import ChunkReplay, TokenReplay  # noqa: E402
+from chunk_replay import ChunkReplay, ImageChunkReplay, TokenReplay  # noqa: E402
 from rlt_models import (  # noqa: E402
     ACTION_DIM,
     CF_MODE_FLOW,
@@ -49,6 +49,8 @@ from train_100m import _bench_size  # noqa: E402
 from train_full import _default_bench  # noqa: E402
 from train_rlt import (  # noqa: E402
     action_sensitivity,
+    ae_flow_actor_step,
+    ae_flow_guide_step,
     actor_step,
     build_rlt_optimizers,
     critic_is_healthy,
@@ -386,6 +388,7 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         retain_tokens: bool = False,
         request_timeout_sec: float = 120.0,
         explore_residual_std: float = 0.05,
+        ae_backend: Any | None = None,
     ) -> None:
         self.rlt_model = model
         self.rlt_device = device
@@ -395,6 +398,7 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         self.retain_tokens = bool(retain_tokens)
         self.request_timeout_sec = float(request_timeout_sec)
         self.explore_residual_std = float(explore_residual_std)
+        self.ae_backend = ae_backend
         self.enable_rlt = False
         self.fatal_error: RLTFeatureError | None = None
         self._rng = np.random.default_rng(0)
@@ -415,11 +419,20 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         self.ep_tokens: list[np.ndarray | None] = []
         self.ep_token_masks: list[np.ndarray | None] = []
         self.ep_z_sources: list[str] = []
+        self.ep_external_cams: list[np.ndarray] = []
+        self.ep_wrist_cams: list[np.ndarray] = []
+        self.ep_instructions: list[str] = []
 
     def reset(self) -> None:
         super().reset()
         self.fatal_error = None
         self._clear_episode()
+
+    def prepare_model(self, model_name: str | None = None) -> None:
+        if self.ae_backend is not None:
+            log.info("In-process Molmo AE backend; skipping HTTP health check")
+            return
+        super().prepare_model(model_name)
 
     def _post_act(self, model_input: dict[str, Any]) -> dict[str, Any]:
         payload = {
@@ -429,6 +442,39 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             "state": np.asarray(model_input["state"], dtype=np.float32),
             "timestamp": model_input.get("timestamp", time.time()),
         }
+        if self.ae_backend is not None:
+            # In-process Molmo AE (=V); optional G injected inside backend.
+            apply_guide = bool(
+                self.enable_rlt
+                and self.use_cf_guide
+                and self.actor_mode == "rlt"
+                and getattr(self.rlt_model, "v_source", "rlt") == "molmo_ae"
+            )
+            rlt_state = None
+            if apply_guide:
+                # z/proprio not yet known; guide uses zeros then re-encode below
+                # after features — for deploy we encode z first via unguided
+                # features then guided resample is expensive.  Prefer: unguided
+                # AE reference + RLT guide residual in normalized space when
+                # v_source=molmo_ae (handled after predict).
+                apply_guide = False
+            out = self.ae_backend.predict(
+                payload["external_cam"],
+                payload["wrist_cam"],
+                str(payload["instruction"]),
+                payload["state"],
+                apply_guide=apply_guide,
+            )
+            body = {"actions": out["actions"]}
+            for key in (
+                "features",
+                "token_features",
+                "token_attention_mask",
+                "z_rl",
+            ):
+                if key in out:
+                    body[key] = out[key]
+            return body
         response = self.session.post(self.url, json=payload, timeout=self.request_timeout_sec)
         response.raise_for_status()
         body = response.json()
@@ -523,23 +569,45 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         z, z_source = self._response_z(response, tokens, token_mask)
 
         deployed = reference.copy()
+        use_molmo_ae = (
+            self.ae_backend is not None
+            and getattr(self.rlt_model, "v_source", "rlt") == "molmo_ae"
+        )
         if self.enable_rlt and self.actor_mode == "rlt":
             z_t = torch.from_numpy(z).unsqueeze(0).to(self.rlt_device)
             proprio_t = torch.from_numpy(proprio).unsqueeze(0).to(self.rlt_device)
-            reference_t = torch.from_numpy(reference).unsqueeze(0).to(self.rlt_device)
             with torch.inference_mode():
                 state = self.rlt_model.encode_state_from_z(z_t, proprio_t)
-                reference_n = self.rlt_model.normalize_action(reference_t)
-                deployed_n, _ = self.rlt_model.actor_chunk(
-                    state,
-                    reference_n,
-                    deterministic=True,
-                    apply_guide=self.use_cf_guide,
-                )
-                deployed = self.rlt_model.denormalize_action(deployed_n)[0].cpu().numpy()
+                if use_molmo_ae and self.use_cf_guide:
+                    # Paper CF deploy: ODE with v_AE + G (in-process AE).
+                    guided = self.ae_backend.predict(
+                        np.asarray(model_input["external_cam"], dtype=np.uint8),
+                        np.asarray(model_input["wrist_cam"], dtype=np.uint8),
+                        str(model_input["instruction"]),
+                        proprio,
+                        apply_guide=True,
+                        rlt_state=state,
+                    )
+                    deployed = np.asarray(guided["actions"], dtype=np.float32)[
+                        : self.chunk_size
+                    ].copy()
+                elif not use_molmo_ae:
+                    reference_t = torch.from_numpy(reference).unsqueeze(0).to(
+                        self.rlt_device
+                    )
+                    reference_n = self.rlt_model.normalize_action(reference_t)
+                    deployed_n, _ = self.rlt_model.actor_chunk(
+                        state,
+                        reference_n,
+                        deterministic=True,
+                        apply_guide=self.use_cf_guide,
+                    )
+                    deployed = self.rlt_model.denormalize_action(deployed_n)[
+                        0
+                    ].cpu().numpy()
             if deployed.shape != reference.shape or not np.isfinite(deployed).all():
                 raise FloatingPointError(
-                    f"RLT actor returned invalid chunk shape={deployed.shape}"
+                    f"RLT/AE actor returned invalid chunk shape={deployed.shape}"
                 )
         # Always-on exploration in *normalized* action space (v6 applied raw
         # noise which was too small relative to action_std → flat critic).
@@ -582,6 +650,13 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             else None
         )
         self.ep_z_sources.append(z_source)
+        self.ep_external_cams.append(
+            np.asarray(model_input["external_cam"], dtype=np.uint8).copy()
+        )
+        self.ep_wrist_cams.append(
+            np.asarray(model_input["wrist_cam"], dtype=np.uint8).copy()
+        )
+        self.ep_instructions.append(str(model_input.get("instruction", "")))
 
     def inference_model(self, model_input: dict[str, Any]) -> np.ndarray:
         if self.actions_buffer is None or self.current_buffer_index >= min(
@@ -658,6 +733,9 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             "z_sources": list(self.ep_z_sources),
             "n_steps": n_steps,
             "residual_rms": residual_rms,
+            "external_cams": list(self.ep_external_cams),
+            "wrist_cams": list(self.ep_wrist_cams),
+            "instructions": list(self.ep_instructions),
         }
         self._clear_episode()
         return trajectory
@@ -801,6 +879,7 @@ def _build_eval_policy(
     *,
     prefer_server_z: bool = True,
     retain_tokens: bool | None = None,
+    ae_backend: Any | None = None,
 ) -> tuple[RLTOnlinePolicy, MolmoAct2PolicyEvalConfig]:
     exp_config = MolmoAct2PolicyEvalConfig()
     exp_config.policy_config.remote_config = {
@@ -825,6 +904,7 @@ def _build_eval_policy(
         ),
         request_timeout_sec=args.server_request_timeout_sec,
         explore_residual_std=float(getattr(args, "explore_residual_std", 0.05)),
+        ae_backend=ae_backend,
     )
     policy._rng = np.random.default_rng(int(getattr(args, "seed", 0)))
     return policy, exp_config
@@ -862,7 +942,10 @@ def _gate_status(
     )
     # Joint CF (trainable v_θ + G_φ): once the critic is informative, deploy the
     # guided ODE. Paper CF does not fall back to a frozen external expert.
-    if bool(getattr(args, "joint_cf", False)):
+    # V11_1 Molmo AE as V uses the same deploy rule.
+    if bool(getattr(args, "joint_cf", False)) or bool(
+        getattr(args, "ae_trainable", False)
+    ):
         enabled = (
             np.isfinite(sensitivity)
             and sensitivity >= args.g_min_action_sensitivity
@@ -877,6 +960,9 @@ def _train_after_episode(
     replay: ChunkReplay,
     token_replay: TokenReplay,
     device: torch.device,
+    *,
+    ae_backend: Any | None = None,
+    image_replay: ImageChunkReplay | None = None,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
     q_info: dict[str, float] = {}
     actor_info: dict[str, float] = {}
@@ -884,6 +970,9 @@ def _train_after_episode(
     token_info: dict[str, float] = {}
     if len(replay) < args.min_replay_chunks:
         return q_info, actor_info, guide_info, token_info
+
+    ae_mode = bool(getattr(args, "ae_trainable", False)) and ae_backend is not None
+    ae_batch_size = int(getattr(args, "ae_batch_size", 2))
 
     for _ in range(args.updates_per_episode):
         # RLT uses two critic updates for every actor update.
@@ -909,30 +998,54 @@ def _train_after_episode(
                 target_noise=args.target_noise,
             )
         if args.actor_mode == "rlt":
-            actor_batch = replay.sample(args.batch_size, device=device)
-            actor_fn = flow_actor_step if model.is_flow else actor_step
-            actor_info = actor_fn(
-                model,
-                optimizers["actor"],
-                optimizers["alpha"],
-                actor_batch,
-                beta=args.actor_beta,
-                target_divergence=args.target_divergence,
-                ref_dropout=args.ref_dropout,
-            )
-            if args.use_cf_guide:
-                guide_fn = flow_guide_step if model.is_flow else guide_step
-                guide_kwargs = {"beta": args.guide_beta}
-                if not model.is_flow:
-                    guide_kwargs["target_delta_frac"] = float(
-                        getattr(args, "guide_target_delta_frac", 1.0)
-                    )
-                guide_info = guide_fn(
+            if (
+                ae_mode
+                and image_replay is not None
+                and len(image_replay) >= max(1, ae_batch_size)
+            ):
+                actor_batch = image_replay.sample(ae_batch_size, device=device)
+                actor_info = ae_flow_actor_step(
                     model,
-                    optimizers["guide"],
+                    ae_backend,
+                    optimizers["actor"],
+                    optimizers["alpha"],
                     actor_batch,
-                    **guide_kwargs,
+                    beta=args.actor_beta,
+                    target_divergence=args.target_divergence,
                 )
+                if args.use_cf_guide:
+                    guide_info = ae_flow_guide_step(
+                        model,
+                        ae_backend,
+                        optimizers["guide"],
+                        actor_batch,
+                        beta=args.guide_beta,
+                    )
+            else:
+                actor_batch = replay.sample(args.batch_size, device=device)
+                actor_fn = flow_actor_step if model.is_flow else actor_step
+                actor_info = actor_fn(
+                    model,
+                    optimizers["actor"],
+                    optimizers["alpha"],
+                    actor_batch,
+                    beta=args.actor_beta,
+                    target_divergence=args.target_divergence,
+                    ref_dropout=args.ref_dropout,
+                )
+                if args.use_cf_guide:
+                    guide_fn = flow_guide_step if model.is_flow else guide_step
+                    guide_kwargs = {"beta": args.guide_beta}
+                    if not model.is_flow:
+                        guide_kwargs["target_delta_frac"] = float(
+                            getattr(args, "guide_target_delta_frac", 1.0)
+                        )
+                    guide_info = guide_fn(
+                        model,
+                        optimizers["guide"],
+                        actor_batch,
+                        **guide_kwargs,
+                    )
         if args.tune_token_online and len(token_replay) > 0:
             token_batch = token_replay.sample(args.token_batch_size, device=device)
             token_info = token_step(model, optimizers["token"], token_batch)
@@ -1104,9 +1217,11 @@ def _metrics_row(
         "q_mean": float(q_info.get("q_mean", 0.0)),
         "q_std": float(q_info.get("q_std", 0.0)),
         "actor_adv": float(actor_info.get("actor_adv", 0.0)),
+        "ae_grad_norm": float(actor_info.get("ae_grad_norm", 0.0)),
         "guide_adv": float(guide_info.get("guide_adv", 0.0)),
         "token_recon_loss": float(token_info.get("token_recon_loss", 0.0)),
         "config_name": args.config_name,
+        "v_source": str(getattr(args, "v_source", "rlt")),
         "steps_per_sec": env_steps / elapsed,
         "chunk_transitions": len(replay),
         "server_port": int(args.server_port),
@@ -1139,6 +1254,45 @@ def train_rlt_online(args: argparse.Namespace) -> None:
     tmp_rollouts.mkdir(parents=True, exist_ok=True)
 
     model = _load_model(args, device)
+    ae_backend = None
+    image_replay: ImageChunkReplay | None = None
+    if bool(getattr(args, "ae_trainable", False)):
+        if str(args.cf_mode) != CF_MODE_FLOW:
+            raise ValueError("--ae_trainable requires --cf_mode flow")
+        # Plan: RL token frozen; Molmo AE is V.
+        args.tune_token_online = False
+        model.freeze_token_encoder()
+        model.v_source = "molmo_ae"
+        args.v_source = "molmo_ae"
+        from molmo_ae_backend import MolmoAEBackend
+
+        ae_backend = MolmoAEBackend(
+            device=device,
+            dtype=torch.bfloat16,
+            enable_lora=bool(getattr(args, "ae_lora", True)),
+            lora_rank=int(getattr(args, "ae_lora_rank", 16)),
+            lora_alpha=int(getattr(args, "ae_lora_alpha", 32)),
+            num_steps=int(args.flow_steps),
+            rlt=model,
+            feature_mode="tokens",
+        )
+        ae_backend.rlt = model
+        # Freeze unused RLT FlowVelocityActor; AE LoRA is the trainable V.
+        for p in model.actor.parameters():
+            p.requires_grad_(False)
+        image_replay = ImageChunkReplay(
+            max_transitions=int(getattr(args, "ae_image_replay_capacity", 512)),
+            chunk_size=CHUNK_SIZE,
+            action_dim=ACTION_DIM,
+            z_dim=Z_DIM,
+            pos_frac=args.pos_frac,
+            seed=args.seed,
+        )
+        log.info(
+            "V11_1 AE-as-V enabled: trainable_ae=%d params, token frozen, v_source=molmo_ae",
+            sum(p.numel() for p in ae_backend.trainable_parameters()),
+        )
+
     optimizers = build_rlt_optimizers(
         model,
         lr_token=args.lr_token,
@@ -1147,6 +1301,12 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         lr_guide=args.lr_guide,
         lr_alpha=args.lr_alpha,
     )
+    if ae_backend is not None:
+        optimizers["actor"] = torch.optim.Adam(
+            ae_backend.trainable_parameters(),
+            lr=float(getattr(args, "lr_ae", args.lr_actor)),
+        )
+
     replay = ChunkReplay(
         max_transitions=args.replay_capacity,
         chunk_size=CHUNK_SIZE,
@@ -1171,11 +1331,18 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         token_dim=model.feature_dim,
     )
 
-    health = _wait_for_server(
-        args.server_host, args.server_port, args.server_wait_sec
+    if ae_backend is None:
+        health = _wait_for_server(
+            args.server_host, args.server_port, args.server_wait_sec
+        )
+        _validate_server_features(health)
+        feature_mode_log = health.get("feature_mode", "unknown")
+    else:
+        log.info("In-process AE backend active; skipping HTTP MolmoAct2 server wait")
+        feature_mode_log = "in_process_ae_tokens"
+    policy, _exp_config = _build_eval_policy(
+        args, model, device, ae_backend=ae_backend
     )
-    _validate_server_features(health)
-    policy, _exp_config = _build_eval_policy(args, model, device)
     bench = Path(args.benchmark_dir) if args.benchmark_dir else _default_bench()
     n_bench = _bench_size(bench)
     shard_size = int(args.shard_size) if args.shard_size > 0 else n_bench
@@ -1183,15 +1350,17 @@ def train_rlt_online(args: argparse.Namespace) -> None:
 
     log.info(
         "RLT online config=%s target_steps=%d server=%s:%d feature_mode=%s "
-        "actor_mode=%s guide=%s tune_token=%s shard=[%d,+%d)",
+        "actor_mode=%s guide=%s tune_token=%s ae_trainable=%s v_source=%s shard=[%d,+%d)",
         args.config_name,
         args.target_env_steps,
         args.server_host,
         args.server_port,
-        health.get("feature_mode", "unknown"),
+        feature_mode_log,
         args.actor_mode,
         args.use_cf_guide,
         args.tune_token_online,
+        bool(ae_backend is not None),
+        getattr(model, "v_source", "rlt"),
         shard_start,
         shard_size,
     )
@@ -1239,14 +1408,15 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             or valid_episodes < args.max_valid_episodes
         )
     ):
-        health = _server_health(args.server_host, args.server_port)
-        if health is None:
-            log.warning("MolmoAct2 server is unavailable; waiting")
-            health = _wait_for_server(
-                args.server_host, args.server_port, args.server_wait_sec
-            )
-            _validate_server_features(health)
-            policy.prepare_model()
+        if ae_backend is None:
+            health = _server_health(args.server_host, args.server_port)
+            if health is None:
+                log.warning("MolmoAct2 server is unavailable; waiting")
+                health = _wait_for_server(
+                    args.server_host, args.server_port, args.server_wait_sec
+                )
+                _validate_server_features(health)
+                policy.prepare_model()
 
         deploy_rlt, gate_advantage, critic_healthy, gate_sens = _gate_status(
             args, model, replay, valid_episodes, device
@@ -1301,6 +1471,18 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                         gamma=args.gamma,
                         episode_id=valid_episodes,
                     )
+                    if image_replay is not None and trajectory.get("external_cams"):
+                        image_replay.add_episode(
+                            zs=trajectory["zs"],
+                            proprios=trajectory["proprios"],
+                            references=trajectory["references"],
+                            executed=trajectory["executed"],
+                            masks=trajectory["masks"],
+                            external_cams=trajectory["external_cams"],
+                            wrist_cams=trajectory["wrist_cams"],
+                            instructions=trajectory["instructions"],
+                            success=success,
+                        )
                     for tokens, mask in trajectory["token_batches"]:
                         token_replay.add(tokens, mask)
                     token_overflow = len(token_replay) - args.token_replay_capacity
@@ -1315,6 +1497,8 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                     replay,
                     token_replay,
                     device,
+                    ae_backend=ae_backend,
+                    image_replay=image_replay,
                 )
         except Exception as error:  # noqa: BLE001
             log.warning("Episode %d rollout failed: %s", episode_idx, error)
@@ -1424,6 +1608,11 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                 replay_out=args.replay_out,
                 required=False,
             )
+            if checkpoint is not None and ae_backend is not None:
+                try:
+                    ae_backend.save_trainable(out_dir / "molmo_ae_lora_latest.pt")
+                except Exception as error:  # noqa: BLE001
+                    log.warning("Failed to save AE LoRA weights: %s", error)
             if checkpoint is None:
                 log.warning(
                     "Skipping metrics bump this cycle; will retry next ckpt cadence "
@@ -1606,6 +1795,32 @@ def parse_args() -> argparse.Namespace:
             "(skip g_min_advantage threshold)."
         ),
     )
+    parser.add_argument(
+        "--ae_trainable",
+        action="store_true",
+        help=(
+            "V11_1: load MolmoAct2 Action Expert in-process as trainable V "
+            "(AE-only LoRA); RLT guide is G; forces --freeze_token and flow mode."
+        ),
+    )
+    parser.add_argument(
+        "--ae_lora",
+        dest="ae_lora",
+        action="store_true",
+        default=True,
+        help="Use AE-only LoRA (default on with --ae_trainable)",
+    )
+    parser.add_argument(
+        "--no_ae_lora",
+        dest="ae_lora",
+        action="store_false",
+        help="Full AE finetune instead of LoRA (more VRAM)",
+    )
+    parser.add_argument("--ae_lora_rank", type=int, default=16)
+    parser.add_argument("--ae_lora_alpha", type=int, default=32)
+    parser.add_argument("--ae_batch_size", type=int, default=2)
+    parser.add_argument("--ae_image_replay_capacity", type=int, default=512)
+    parser.add_argument("--lr_ae", type=float, default=1e-4)
     parser.add_argument("--g_min_advantage", type=float, default=0.003)
     parser.add_argument(
         "--g_min_action_sensitivity",
@@ -1657,6 +1872,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
+
+    if args.ae_trainable:
+        args.tune_token_online = False
+        args.cf_mode = CF_MODE_FLOW
+        args.joint_cf = True
+        args.v_source = "molmo_ae"
+    else:
+        args.v_source = "rlt"
 
     if args.target_env_steps <= 0:
         parser.error("--target_env_steps must be positive")
