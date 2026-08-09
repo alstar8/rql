@@ -350,6 +350,31 @@ def predicted_deploy_advantage(
         return float((q_act - q_ref).mean().detach())
 
 
+def predicted_guide_advantage(
+    model: MolmoAct2RLTCF,
+    batch: dict[str, torch.Tensor],
+) -> float:
+    """q_min advantage of guided actor vs unguided actor (residual CF guide gate)."""
+    if model.guide is None:
+        return 0.0
+    model.eval()
+    with torch.no_grad():
+        state = _batch_state(model, batch, detach_token=True, use_target=False)
+        ref = model.normalize_action(batch["reference_actions"])
+        act_g, _ = model.actor_chunk(
+            state, ref, deterministic=True, apply_guide=True
+        )
+        act_u, _ = model.actor_chunk(
+            state, ref, deterministic=True, apply_guide=False
+        )
+        t = None
+        if model.is_flow:
+            t = torch.ones(ref.shape[0], 1, device=ref.device, dtype=ref.dtype)
+        q_g = model.q_min_chunk(state, act_g, t=t)
+        q_u = model.q_min_chunk(state, act_u, t=t)
+        return float((q_g - q_u).mean().detach())
+
+
 def action_sensitivity(
     model: MolmoAct2RLTCF,
     batch: dict[str, torch.Tensor],
@@ -566,16 +591,19 @@ def flow_actor_step(
     target_divergence: float = 0.0025,
     ref_dropout: float = 0.5,
     bc_coef: float = 1.0,
+    bc_ref_coef: float = 1.0,
     endpoint_aux_coef: float = 0.5,
     endpoint_aux_steps: int = 4,
 ) -> dict[str, float]:
-    """Paper-faithful joint CF actor: BC on executed a + Q lookahead through v_θ.
+    """Paper-faithful joint CF actor: BC on reference + Q lookahead through v_θ.
 
     ConsensusFlow trains the base flow v_θ jointly with G_φ:
-      L = L_BC(a - x0) + L_actor(-Q(s, x^+, t^+)) + β||a_end - a||^2
+      L = L_BC(ã - x0) + L_actor(-Q(s, x^+, t^+)) + β||a_end - ã||^2
     with x^+ = x_t + (v_θ + sg(G)) Δ.  Absolute Q (not adv vs BC velocity)
     routes value into the trainable base Action Expert (FlowVelocityActor).
-    VLA reference ã is conditioning only (with dropout), not the BC target.
+
+    v12: BC targets the VLA reference by default (bc_ref_coef=1), not noisy
+    executed actions — executed was corrupted by explore_residual_std.
     """
     if not model.is_flow:
         return actor_step(
@@ -590,16 +618,18 @@ def flow_actor_step(
     model.train()
     with torch.no_grad():
         state = _batch_state(model, batch, detach_token=True, use_target=False)
-    # BC on online/executed actions (paper CF); VLA ref is conditioning only.
     a_data = model.normalize_action(batch["executed_actions"])
     a_ref = model.normalize_action(batch["reference_actions"])
+    # Mix BC target: default fully toward frozen VLA reference.
+    ref_w = float(max(0.0, min(1.0, bc_ref_coef)))
+    a_bc = ref_w * a_ref + (1.0 - ref_w) * a_data
     b = a_data.shape[0]
     present = (torch.rand(b, device=a_data.device) > ref_dropout).float()
     ref_in = a_ref * present.view(b, 1, 1)
-    x0 = torch.randn_like(a_data)
-    t = torch.rand(b, 1, device=a_data.device, dtype=a_data.dtype)
-    x_t = (1.0 - t.view(b, 1, 1)) * x0 + t.view(b, 1, 1) * a_data
-    target_v = a_data - x0
+    x0 = torch.randn_like(a_bc)
+    t = torch.rand(b, 1, device=a_bc.device, dtype=a_bc.dtype)
+    x_t = (1.0 - t.view(b, 1, 1)) * x0 + t.view(b, 1, 1) * a_bc
+    target_v = a_bc - x0
     v = model.flow_velocity(state, x_t, t, ref_in)
     mask = batch["action_mask"].unsqueeze(-1)
     bc = (((v - target_v.detach()) * mask) ** 2).sum() / mask.sum().clamp_min(1.0) / v.shape[-1]
@@ -639,10 +669,10 @@ def flow_actor_step(
         t_end = (t_end + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
     q_end = model.q_chunk(state, x_end, t=t_end).mean(dim=0)
 
-    # Trust region vs executed data actions (online behavior), not frozen VLA.
+    # Trust region vs VLA reference (not explore-corrupted executed).
     endpoint_det, _ = model.flow_sample(state, ref_in, apply_guide=False)
     residual_mse = (
-        ((endpoint_det - a_data.detach()) * mask) ** 2
+        ((endpoint_det - a_ref.detach()) * mask) ** 2
     ).sum() / mask.sum().clamp_min(1.0) / endpoint_det.shape[-1]
     alpha = model.log_alpha()
     actor_loss = (
@@ -669,6 +699,7 @@ def flow_actor_step(
         "actor_q_end": float(q_end.mean().detach()),
         "residual_mse": float(residual_mse.detach()),
         "bc_loss": float(bc.detach()),
+        "bc_ref_coef": float(ref_w),
         "alpha": float(alpha.detach()),
     }
 
@@ -683,6 +714,7 @@ def ae_flow_actor_step(
     beta: float = 1.0,
     target_divergence: float = 0.0025,
     bc_coef: float = 1.0,
+    bc_ref_coef: float = 1.0,
     endpoint_aux_coef: float = 0.5,
     endpoint_aux_steps: int = 4,
 ) -> dict[str, float]:
@@ -691,6 +723,8 @@ def ae_flow_actor_step(
     Requires ``batch`` keys from ImageChunkReplay (cameras + instruction) plus
     standard chunk fields.  VLM KV is stop-grad (knowledge insulation); LoRA AE
     receives BC + Q lookahead through ``v_AE + sg(G)``.
+
+    v12: BC toward VLA/AE reference by default (not explore-corrupted executed).
     """
     if not model.is_flow:
         raise RuntimeError("ae_flow_actor_step requires cf_mode=flow")
@@ -717,12 +751,17 @@ def ae_flow_actor_step(
             contexts.append(ctx)
 
     a_data_raw = batch["executed_actions"].to(device=device, dtype=torch.float32)
+    a_ref_raw = batch["reference_actions"].to(device=device, dtype=torch.float32)
+    ref_w = float(max(0.0, min(1.0, bc_ref_coef)))
+    a_bc_raw = ref_w * a_ref_raw + (1.0 - ref_w) * a_data_raw
     a_data = model.normalize_action(a_data_raw)
+    a_ref = model.normalize_action(a_ref_raw)
+    a_bc = model.normalize_action(a_bc_raw)
     mask = batch["action_mask"].unsqueeze(-1)
-    x0_raw = torch.randn_like(a_data_raw)
+    x0_raw = torch.randn_like(a_bc_raw)
     t = torch.rand(b, 1, device=device, dtype=torch.float32)
-    x_t_raw = (1.0 - t.view(b, 1, 1)) * x0_raw + t.view(b, 1, 1) * a_data_raw
-    target_v_raw = a_data_raw - x0_raw
+    x_t_raw = (1.0 - t.view(b, 1, 1)) * x0_raw + t.view(b, 1, 1) * a_bc_raw
+    target_v_raw = a_bc_raw - x0_raw
 
     # Per-sample AE velocity (distinct KV contexts); stack for Q/BC.
     v_raw_rows = []
@@ -778,7 +817,7 @@ def ae_flow_actor_step(
     q_end = model.q_chunk(state, x_end, t=t_end).mean(dim=0)
 
     residual_mse = (
-        ((x_end - a_data.detach()) * mask) ** 2
+        ((x_end - a_ref.detach()) * mask) ** 2
     ).sum() / mask.sum().clamp_min(1.0) / x_end.shape[-1]
     alpha = model.log_alpha()
     actor_loss = (
@@ -810,6 +849,7 @@ def ae_flow_actor_step(
         "actor_q_end": float(q_end.mean().detach()),
         "residual_mse": float(residual_mse.detach()),
         "bc_loss": float(bc.detach()),
+        "bc_ref_coef": float(ref_w),
         "alpha": float(alpha.detach()),
         "ae_grad_norm": float(grad_norm),
         "v_source": 1.0,  # marker: molmo_ae
@@ -824,12 +864,15 @@ def ae_flow_guide_step(
     *,
     beta: float = 0.05,
     distill_coef: float = 1.0,
+    target_delta_frac: float = 1.0,
 ) -> dict[str, float]:
     """CF guide distill with base velocity from MolmoAct AE (detached)."""
     if model.guide is None:
         return {"guide_loss": 0.0, "guide_adv": 0.0}
     if not model.is_flow:
-        return guide_step(model, opt, batch, beta=beta)
+        return guide_step(
+            model, opt, batch, beta=beta, target_delta_frac=target_delta_frac
+        )
     model.train()
     ae_backend.eval()
 
@@ -876,7 +919,12 @@ def ae_flow_guide_step(
         v = (v_raw / std).detach()
 
     g_chunk, w_flat, diag = model.guide.guidance(state.detach(), x_t.detach(), t, v)
-    distill = ((w_flat - target) ** 2).mean()
+    # v12: magnitude-aware distill (mirror residual target_delta_frac).
+    t_unit = target / target.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    guide_coef = float(getattr(model.guide, "guidance_coef", model.guidance_coef))
+    target_rms = float(target_delta_frac) * guide_coef
+    target_g = (t_unit * target_rms * t).reshape_as(g_chunk)
+    distill = F.mse_loss(g_chunk, target_g)
 
     dt = torch.minimum(
         torch.full_like(t, 1.0 / float(model.flow_steps)),
@@ -914,12 +962,15 @@ def flow_guide_step(
     *,
     beta: float = 0.05,
     distill_coef: float = 1.0,
+    target_delta_frac: float = 1.0,
 ) -> dict[str, float]:
-    """Distill common-scale-normalized ∇_x Q into W_φ at flow BC points."""
+    """Distill ∇_x Q into G_φ with residual-style magnitude target (v12)."""
     if model.guide is None:
         return {"guide_loss": 0.0, "guide_adv": 0.0}
     if not model.is_flow:
-        return guide_step(model, opt, batch, beta=beta)
+        return guide_step(
+            model, opt, batch, beta=beta, target_delta_frac=target_delta_frac
+        )
     model.train()
     with torch.no_grad():
         state = _batch_state(model, batch, detach_token=True, use_target=False)
@@ -940,7 +991,12 @@ def flow_guide_step(
 
     v = model.flow_velocity(state.detach(), x_t.detach(), t, a1).detach()
     g_chunk, w_flat, diag = model.guide.guidance(state.detach(), x_t.detach(), t, v)
-    distill = ((w_flat - target) ** 2).mean()
+    # Magnitude-aware distill: match direction × (frac * guidance_coef * t).
+    t_unit = target / target.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    guide_coef = float(getattr(model.guide, "guidance_coef", model.guidance_coef))
+    target_rms = float(target_delta_frac) * guide_coef
+    target_g = (t_unit * target_rms * t).reshape_as(g_chunk)
+    distill = F.mse_loss(g_chunk, target_g)
 
     dt = torch.minimum(
         torch.full_like(t, 1.0 / float(model.flow_steps)),

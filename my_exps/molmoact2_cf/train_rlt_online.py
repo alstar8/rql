@@ -60,6 +60,7 @@ from train_rlt import (  # noqa: E402
     flow_guide_step,
     guide_step,
     predicted_deploy_advantage,
+    predicted_guide_advantage,
     predicted_lcb_advantage,
     token_step,
 )
@@ -387,7 +388,9 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         prefer_server_z: bool = True,
         retain_tokens: bool = False,
         request_timeout_sec: float = 120.0,
-        explore_residual_std: float = 0.05,
+        explore_residual_std: float = 0.02,
+        explore_deploy_std: float | None = None,
+        explore_warmup_mult: float = 1.0,
         ae_backend: Any | None = None,
     ) -> None:
         self.rlt_model = model
@@ -398,6 +401,10 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         self.retain_tokens = bool(retain_tokens)
         self.request_timeout_sec = float(request_timeout_sec)
         self.explore_residual_std = float(explore_residual_std)
+        self.explore_deploy_std = float(
+            explore_residual_std if explore_deploy_std is None else explore_deploy_std
+        )
+        self.explore_warmup_mult = float(explore_warmup_mult)
         self.ae_backend = ae_backend
         self.enable_rlt = False
         self.fatal_error: RLTFeatureError | None = None
@@ -609,10 +616,15 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
                 raise FloatingPointError(
                     f"RLT/AE actor returned invalid chunk shape={deployed.shape}"
                 )
-        # Always-on exploration in *normalized* action space (v6 applied raw
-        # noise which was too small relative to action_std → flat critic).
+        # Exploration in *normalized* action space. v12: smaller default and no
+        # gate-off boost (v11's 0.05×1.5 drove residual_rms~0.07–0.15 and SR tax).
+        explore_std = float(self.explore_residual_std)
+        if self.enable_rlt:
+            explore_std = float(self.explore_deploy_std)
+        elif self.explore_warmup_mult != 1.0:
+            explore_std = explore_std * float(self.explore_warmup_mult)
         if (
-            self.explore_residual_std > 0.0
+            explore_std > 0.0
             and self.actor_mode == "rlt"
             and self.rlt_model is not None
         ):
@@ -620,10 +632,7 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             a_t = a_t.to(self.rlt_device)
             with torch.inference_mode():
                 a_n = self.rlt_model.normalize_action(a_t)
-                noise = torch.randn_like(a_n) * float(self.explore_residual_std)
-                # Slightly larger explore while the gate is closed.
-                if not self.enable_rlt:
-                    noise = noise * 1.5
+                noise = torch.randn_like(a_n) * explore_std
                 deployed = (
                     self.rlt_model.denormalize_action(a_n + noise)[0]
                     .detach()
@@ -903,7 +912,15 @@ def _build_eval_policy(
             else bool(retain_tokens)
         ),
         request_timeout_sec=args.server_request_timeout_sec,
-        explore_residual_std=float(getattr(args, "explore_residual_std", 0.05)),
+        explore_residual_std=float(getattr(args, "explore_residual_std", 0.02)),
+        explore_deploy_std=float(
+            getattr(
+                args,
+                "explore_deploy_std",
+                getattr(args, "explore_residual_std", 0.02),
+            )
+        ),
+        explore_warmup_mult=float(getattr(args, "explore_warmup_mult", 1.0)),
         ae_backend=ae_backend,
     )
     policy._rng = np.random.default_rng(int(getattr(args, "seed", 0)))
@@ -934,22 +951,19 @@ def _gate_status(
     sensitivity = action_sensitivity(
         model, batch, noise=float(args.gate_sensitivity_noise)
     )
+    # v12: always require advantage AND sensitivity for residual, joint CF, and AE.
+    # Skipping advantage under --joint_cf deployed negative-adv policies (SR collapse).
     enabled = (
         np.isfinite(advantage)
-        and advantage >= args.g_min_advantage
+        and advantage >= float(args.g_min_advantage)
         and np.isfinite(sensitivity)
-        and sensitivity >= args.g_min_action_sensitivity
+        and sensitivity >= float(args.g_min_action_sensitivity)
     )
-    # Joint CF (trainable v_θ + G_φ): once the critic is informative, deploy the
-    # guided ODE. Paper CF does not fall back to a frozen external expert.
-    # V11_1 Molmo AE as V uses the same deploy rule.
-    if bool(getattr(args, "joint_cf", False)) or bool(
-        getattr(args, "ae_trainable", False)
-    ):
-        enabled = (
-            np.isfinite(sensitivity)
-            and sensitivity >= args.g_min_action_sensitivity
-        )
+    # Residual CF: also require guide-vs-actor advantage when G is trained.
+    min_guide_adv = float(getattr(args, "g_min_guide_advantage", 0.0) or 0.0)
+    if enabled and args.use_cf_guide and min_guide_adv > 0.0 and model.guide is not None:
+        guide_adv = predicted_guide_advantage(model, batch)
+        enabled = np.isfinite(guide_adv) and guide_adv >= min_guide_adv
     return bool(enabled), float(advantage), bool(healthy), float(sensitivity)
 
 
@@ -1012,6 +1026,7 @@ def _train_after_episode(
                     actor_batch,
                     beta=args.actor_beta,
                     target_divergence=args.target_divergence,
+                    bc_ref_coef=float(getattr(args, "bc_ref_coef", 1.0)),
                 )
                 if args.use_cf_guide:
                     guide_info = ae_flow_guide_step(
@@ -1020,6 +1035,9 @@ def _train_after_episode(
                         optimizers["guide"],
                         actor_batch,
                         beta=args.guide_beta,
+                        target_delta_frac=float(
+                            getattr(args, "guide_target_delta_frac", 1.0)
+                        ),
                     )
             else:
                 actor_batch = replay.sample(args.batch_size, device=device)
@@ -1032,11 +1050,20 @@ def _train_after_episode(
                     beta=args.actor_beta,
                     target_divergence=args.target_divergence,
                     ref_dropout=args.ref_dropout,
+                    **(
+                        {"bc_ref_coef": float(getattr(args, "bc_ref_coef", 1.0))}
+                        if model.is_flow
+                        else {}
+                    ),
                 )
                 if args.use_cf_guide:
                     guide_fn = flow_guide_step if model.is_flow else guide_step
                     guide_kwargs = {"beta": args.guide_beta}
                     if not model.is_flow:
+                        guide_kwargs["target_delta_frac"] = float(
+                            getattr(args, "guide_target_delta_frac", 1.0)
+                        )
+                    else:
                         guide_kwargs["target_delta_frac"] = float(
                             getattr(args, "guide_target_delta_frac", 1.0)
                         )
@@ -1823,6 +1850,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr_ae", type=float, default=1e-4)
     parser.add_argument("--g_min_advantage", type=float, default=0.003)
     parser.add_argument(
+        "--g_min_guide_advantage",
+        type=float,
+        default=0.0,
+        help=(
+            "When >0 and CF guide is on, also require guide-vs-actor q_min "
+            "advantage before deploy (residual CF safety)."
+        ),
+    )
+    parser.add_argument(
         "--g_min_action_sensitivity",
         type=float,
         default=0.003,
@@ -1832,8 +1868,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--explore_residual_std",
         type=float,
-        default=0.05,
-        help="Always-on normalized-action exploration noise for RLT configs",
+        default=0.02,
+        help="Normalized-action exploration while the RLT gate is closed (v12: 0.02)",
+    )
+    parser.add_argument(
+        "--explore_deploy_std",
+        type=float,
+        default=0.02,
+        help="Normalized-action exploration once the RLT/CF gate is open",
+    )
+    parser.add_argument(
+        "--explore_warmup_mult",
+        type=float,
+        default=1.0,
+        help="Multiplier on explore_residual_std while gate is closed (v12: 1.0, was 1.5)",
+    )
+    parser.add_argument(
+        "--bc_ref_coef",
+        type=float,
+        default=1.0,
+        help=(
+            "Flow/AE actor: weight on BC toward VLA reference vs executed "
+            "(1.0 = reference only; v12 default)."
+        ),
     )
     parser.add_argument("--rank_coef", type=float, default=1.0)
     parser.add_argument("--rank_margin", type=float, default=0.05)
