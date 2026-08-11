@@ -298,7 +298,6 @@ def test_existing_outputs_validate_without_simulation(anchor_dir: Path) -> None:
     assert summary["load_all_episodes_compatible"] is True
 
 
-@pytest.mark.integration
 def test_json_sampler_replays_one_generated_episode() -> None:
     """Optional one-episode JSON sampler replay; no policy inference is run."""
 
