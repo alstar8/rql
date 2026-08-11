@@ -24,6 +24,7 @@ from rlt_models import (
     RLTokenAutoencoder,
     bootstrap_scale,
     chunk_return,
+    common_scale_normalize,
     normalized_grad_target,
 )
 from train_rlt import (
@@ -32,6 +33,7 @@ from train_rlt import (
     critic_td_step,
     guide_step,
     predicted_lcb_advantage,
+    stochastic_target_critic_gradient,
     token_step,
 )
 
@@ -159,6 +161,41 @@ def test_normalized_grad_and_guide():
     assert float(delta.abs().max()) <= 0.05 + 1e-5
 
 
+def test_common_scale_preserves_magnitude_and_opposed_members():
+    grad = torch.tensor([[1.0, 0.0], [10.0, 0.0]])
+    target = common_scale_normalize(grad, floor_coef=0.1, eps=0.0)
+    mean_norm = torch.tensor(5.5)
+    expected = torch.tensor(
+        [1.0 / (1.0 + 0.1 * mean_norm), 10.0 / (10.0 + 0.1 * mean_norm)]
+    )
+    assert torch.allclose(target.norm(dim=-1), expected)
+    assert target[1].norm() > target[0].norm()
+
+    class OpposedTarget:
+        def q_chunk(
+            self,
+            _state,
+            actions,
+            *,
+            target=False,
+            t=None,
+        ):
+            del target, t
+            score = actions.flatten(1).sum(dim=-1)
+            return torch.stack([score, -score], dim=0)
+
+    actions = torch.zeros(2, 1, 2)
+    selected = stochastic_target_critic_gradient(
+        OpposedTarget(),
+        torch.zeros(2, 1),
+        actions,
+        member=torch.tensor([0, 1]),
+    )
+    assert selected[0].norm() > 0.0
+    assert selected[1].norm() > 0.0
+    assert torch.allclose(selected[0], -selected[1])
+
+
 def test_token_replay_and_checkpoint():
     tok = TokenReplay(max_seq=32)
     for _ in range(5):
@@ -175,6 +212,7 @@ def test_token_replay_and_checkpoint():
         model.save(path, meta={"test": True})
         m2 = MolmoAct2RLTCF.load(path)
         assert m2.schema_version == model.schema_version
+        assert m2.loaded_meta == {"test": True}
         tpath = str(Path(td) / "tok.npz")
         tok.save_npz(tpath)
         tok2 = TokenReplay.load_npz(tpath)
@@ -202,6 +240,7 @@ if __name__ == "__main__":
         test_chunk_replay_partial_terminal,
         test_td_actor_guide_steps_finite,
         test_normalized_grad_and_guide,
+        test_common_scale_preserves_magnitude_and_opposed_members,
         test_token_replay_and_checkpoint,
         test_reference_dropout_changes_input_path,
     ]

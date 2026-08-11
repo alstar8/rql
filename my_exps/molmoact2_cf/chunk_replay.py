@@ -325,17 +325,28 @@ class TokenReplay:
 
 @dataclass
 class ImageChunkRow:
-    """Chunk transition plus cameras for Molmo AE (=V) training."""
+    """Full chunk transition plus current/next Molmo AE observations."""
 
     z: np.ndarray
     proprio: np.ndarray
     reference_actions: np.ndarray
     executed_actions: np.ndarray
+    rewards: np.ndarray
     action_mask: np.ndarray
+    next_z: np.ndarray
+    next_proprio: np.ndarray
+    next_reference_actions: np.ndarray
+    terminal: bool
+    mc_return: float
     external_cam: np.ndarray  # uint8 HxWx3
     wrist_cam: np.ndarray
     instruction: str
+    next_external_cam: np.ndarray
+    next_wrist_cam: np.ndarray
+    next_instruction: str
     success: float
+    episode_id: int
+    start_step: int
 
 
 class ImageChunkReplay:
@@ -357,9 +368,16 @@ class ImageChunkReplay:
         self.pos_frac = float(pos_frac)
         self.rng = np.random.default_rng(seed)
         self.rows: list[ImageChunkRow] = []
+        self.n_episodes = 0
 
     def __len__(self) -> int:
         return len(self.rows)
+
+    def has_both_outcomes(self) -> bool:
+        if not self.rows:
+            return False
+        success = np.asarray([row.success for row in self.rows], dtype=np.float32)
+        return bool(np.any(success > 0.5) and np.any(success <= 0.5))
 
     def add_episode(
         self,
@@ -368,11 +386,14 @@ class ImageChunkReplay:
         proprios: list[np.ndarray],
         references: list[np.ndarray],
         executed: list[np.ndarray],
+        rewards: list[np.ndarray],
         masks: list[np.ndarray],
         external_cams: list[np.ndarray],
         wrist_cams: list[np.ndarray],
         instructions: list[str],
         success: bool,
+        gamma: float,
+        episode_id: int | None = None,
     ) -> int:
         n = len(zs)
         if n == 0:
@@ -381,6 +402,7 @@ class ImageChunkReplay:
             len(proprios)
             == len(references)
             == len(executed)
+            == len(rewards)
             == len(masks)
             == len(external_cams)
             == len(wrist_cams)
@@ -388,22 +410,69 @@ class ImageChunkReplay:
             == n
         ):
             raise ValueError("image episode list length mismatch")
+        if episode_id is None:
+            episode_id = self.n_episodes
+        self.n_episodes += 1
+        total_steps = int(sum(int(np.asarray(mask).sum()) for mask in masks))
         added = 0
+        step = 0
         for i in range(n):
+            steps_to_end = max(total_steps - step - 1, 0)
+            mc_return = (float(gamma) ** steps_to_end) * float(success)
+            if i + 1 < n:
+                next_z = zs[i + 1]
+                next_proprio = proprios[i + 1]
+                next_reference = references[i + 1]
+                next_external = external_cams[i + 1]
+                next_wrist = wrist_cams[i + 1]
+                next_instruction = instructions[i + 1]
+                terminal = False
+            else:
+                next_z = np.zeros(self.z_dim, dtype=np.float32)
+                next_proprio = np.zeros_like(
+                    np.asarray(proprios[i], dtype=np.float32)
+                )
+                next_reference = np.zeros(
+                    (self.chunk_size, self.action_dim),
+                    dtype=np.float32,
+                )
+                next_external = np.zeros_like(
+                    np.asarray(external_cams[i], dtype=np.uint8)
+                )
+                next_wrist = np.zeros_like(
+                    np.asarray(wrist_cams[i], dtype=np.uint8)
+                )
+                next_instruction = ""
+                terminal = True
             self.rows.append(
                 ImageChunkRow(
                     z=np.asarray(zs[i], dtype=np.float32),
                     proprio=np.asarray(proprios[i], dtype=np.float32),
                     reference_actions=np.asarray(references[i], dtype=np.float32),
                     executed_actions=np.asarray(executed[i], dtype=np.float32),
+                    rewards=np.asarray(rewards[i], dtype=np.float32),
                     action_mask=np.asarray(masks[i], dtype=np.float32),
+                    next_z=np.asarray(next_z, dtype=np.float32),
+                    next_proprio=np.asarray(next_proprio, dtype=np.float32),
+                    next_reference_actions=np.asarray(
+                        next_reference,
+                        dtype=np.float32,
+                    ),
+                    terminal=terminal,
+                    mc_return=float(mc_return),
                     external_cam=np.asarray(external_cams[i], dtype=np.uint8),
                     wrist_cam=np.asarray(wrist_cams[i], dtype=np.uint8),
                     instruction=str(instructions[i]),
+                    next_external_cam=np.asarray(next_external, dtype=np.uint8),
+                    next_wrist_cam=np.asarray(next_wrist, dtype=np.uint8),
+                    next_instruction=str(next_instruction),
                     success=float(success),
+                    episode_id=int(episode_id),
+                    start_step=int(step),
                 )
             )
             added += 1
+            step += int(np.asarray(masks[i]).sum())
         overflow = len(self.rows) - self.max_transitions
         if overflow > 0:
             self.rows = self.rows[overflow:]
@@ -438,11 +507,19 @@ class ImageChunkReplay:
             "proprio": stack("proprio"),
             "reference_actions": stack("reference_actions"),
             "executed_actions": stack("executed_actions"),
+            "rewards": stack("rewards"),
             "action_mask": stack("action_mask"),
-            # Dummy next_* so shared helpers stay happy if touched.
-            "next_z": stack("z"),
-            "next_proprio": stack("proprio"),
-            "next_reference_actions": stack("reference_actions"),
+            "next_z": stack("next_z"),
+            "next_proprio": stack("next_proprio"),
+            "next_reference_actions": stack("next_reference_actions"),
+            "terminal": torch.as_tensor(
+                np.asarray([float(r.terminal) for r in batch], dtype=np.float32),
+                device=device,
+            ),
+            "mc_return": torch.as_tensor(
+                np.asarray([r.mc_return for r in batch], dtype=np.float32),
+                device=device,
+            ),
             "success": torch.as_tensor(
                 np.asarray([r.success for r in batch], dtype=np.float32),
                 device=device,
@@ -450,4 +527,147 @@ class ImageChunkReplay:
             "external_cam": [r.external_cam for r in batch],
             "wrist_cam": [r.wrist_cam for r in batch],
             "instruction": [r.instruction for r in batch],
+            "next_external_cam": [r.next_external_cam for r in batch],
+            "next_wrist_cam": [r.next_wrist_cam for r in batch],
+            "next_instruction": [r.next_instruction for r in batch],
         }
+
+    def save_npz(self, path: str) -> None:
+        """Persist the complete AE replay so watchdog resume is behaviorally exact."""
+        if not self.rows:
+            return
+
+        def stack(key: str, dtype: Any | None = None) -> np.ndarray:
+            values = np.stack([getattr(row, key) for row in self.rows], axis=0)
+            return values.astype(dtype) if dtype is not None else values
+
+        np.savez_compressed(
+            path,
+            z=stack("z", np.float32),
+            proprio=stack("proprio", np.float32),
+            reference_actions=stack("reference_actions", np.float32),
+            executed_actions=stack("executed_actions", np.float32),
+            rewards=stack("rewards", np.float32),
+            action_mask=stack("action_mask", np.float32),
+            next_z=stack("next_z", np.float32),
+            next_proprio=stack("next_proprio", np.float32),
+            next_reference_actions=stack("next_reference_actions", np.float32),
+            terminal=np.asarray([row.terminal for row in self.rows], dtype=np.bool_),
+            mc_return=np.asarray([row.mc_return for row in self.rows], dtype=np.float32),
+            external_cam=stack("external_cam", np.uint8),
+            wrist_cam=stack("wrist_cam", np.uint8),
+            instruction=np.asarray([row.instruction for row in self.rows], dtype=np.str_),
+            next_external_cam=stack("next_external_cam", np.uint8),
+            next_wrist_cam=stack("next_wrist_cam", np.uint8),
+            next_instruction=np.asarray(
+                [row.next_instruction for row in self.rows],
+                dtype=np.str_,
+            ),
+            success=np.asarray([row.success for row in self.rows], dtype=np.float32),
+            episode_id=np.asarray([row.episode_id for row in self.rows], dtype=np.int64),
+            start_step=np.asarray([row.start_step for row in self.rows], dtype=np.int64),
+            n_episodes=np.asarray(self.n_episodes, dtype=np.int64),
+            chunk_size=np.asarray(self.chunk_size, dtype=np.int64),
+            action_dim=np.asarray(self.action_dim, dtype=np.int64),
+            z_dim=np.asarray(self.z_dim, dtype=np.int64),
+        )
+
+    @classmethod
+    def load_npz(
+        cls,
+        path: str,
+        *,
+        max_transitions: int = 512,
+        pos_frac: float = 0.4,
+        seed: int = 0,
+    ) -> "ImageChunkReplay":
+        """Restore a complete AE replay without synthetic next observations."""
+        with np.load(path, allow_pickle=False) as data:
+            replay = cls(
+                max_transitions=max_transitions,
+                chunk_size=int(data["chunk_size"]),
+                action_dim=int(data["action_dim"]),
+                z_dim=int(data["z_dim"]),
+                pos_frac=pos_frac,
+                seed=seed,
+            )
+            count = int(data["z"].shape[0])
+            keys = (
+                "proprio",
+                "reference_actions",
+                "executed_actions",
+                "rewards",
+                "action_mask",
+                "next_z",
+                "next_proprio",
+                "next_reference_actions",
+                "terminal",
+                "mc_return",
+                "external_cam",
+                "wrist_cam",
+                "instruction",
+                "next_external_cam",
+                "next_wrist_cam",
+                "next_instruction",
+                "success",
+                "episode_id",
+                "start_step",
+            )
+            for key in keys:
+                if int(data[key].shape[0]) != count:
+                    raise ValueError(
+                        f"Image replay field {key} has {data[key].shape[0]} "
+                        f"rows; expected {count}"
+                    )
+            start = max(0, count - replay.max_transitions)
+            for index in range(start, count):
+                replay.rows.append(
+                    ImageChunkRow(
+                        z=np.asarray(data["z"][index], dtype=np.float32),
+                        proprio=np.asarray(data["proprio"][index], dtype=np.float32),
+                        reference_actions=np.asarray(
+                            data["reference_actions"][index],
+                            dtype=np.float32,
+                        ),
+                        executed_actions=np.asarray(
+                            data["executed_actions"][index],
+                            dtype=np.float32,
+                        ),
+                        rewards=np.asarray(data["rewards"][index], dtype=np.float32),
+                        action_mask=np.asarray(
+                            data["action_mask"][index],
+                            dtype=np.float32,
+                        ),
+                        next_z=np.asarray(data["next_z"][index], dtype=np.float32),
+                        next_proprio=np.asarray(
+                            data["next_proprio"][index],
+                            dtype=np.float32,
+                        ),
+                        next_reference_actions=np.asarray(
+                            data["next_reference_actions"][index],
+                            dtype=np.float32,
+                        ),
+                        terminal=bool(data["terminal"][index]),
+                        mc_return=float(data["mc_return"][index]),
+                        external_cam=np.asarray(
+                            data["external_cam"][index],
+                            dtype=np.uint8,
+                        ),
+                        wrist_cam=np.asarray(data["wrist_cam"][index], dtype=np.uint8),
+                        instruction=str(data["instruction"][index]),
+                        next_external_cam=np.asarray(
+                            data["next_external_cam"][index],
+                            dtype=np.uint8,
+                        ),
+                        next_wrist_cam=np.asarray(
+                            data["next_wrist_cam"][index],
+                            dtype=np.uint8,
+                        ),
+                        next_instruction=str(data["next_instruction"][index]),
+                        success=float(data["success"][index]),
+                        episode_id=int(data["episode_id"][index]),
+                        start_step=int(data["start_step"][index]),
+                    )
+                )
+            replay.n_episodes = int(data["n_episodes"])
+        return replay

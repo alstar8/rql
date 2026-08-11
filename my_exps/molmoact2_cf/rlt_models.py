@@ -513,7 +513,7 @@ class FlowCFGuide(nn.Module):
 
 
 class CFGradientGuide(nn.Module):
-    """Distill common-scale-normalized ensemble action gradients into a bounded guide."""
+    """Distill common-scale-normalized critic gradients into a deploy-safe guide."""
 
     def __init__(
         self,
@@ -530,10 +530,15 @@ class CFGradientGuide(nn.Module):
         self.max_delta = float(max_delta)
         self.net = mlp(state_dim + self.flat_action, self.flat_action, hidden, n_hidden=2, zero_out=True)
 
-    def forward(self, state: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+    def raw_w(self, state: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+        """Unbounded distillation output W; deployment bounds are applied separately."""
         b = state.shape[0]
         flat = reference.reshape(b, -1).detach()
-        raw = self.net(torch.cat([state, flat], dim=-1))
+        return self.net(torch.cat([state, flat], dim=-1))
+
+    def forward(self, state: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+        b = state.shape[0]
+        raw = self.raw_w(state, reference)
         delta = self.max_delta * torch.tanh(raw)
         return delta.reshape(b, self.chunk_size, self.action_dim)
 
@@ -605,6 +610,7 @@ class MolmoAct2RLTCF(nn.Module):
         self.flow_steps = int(flow_steps)
         self.guidance_coef = float(guidance_coef)
         self.time_dim = int(time_dim)
+        self.loaded_meta: dict[str, Any] = {}
         # "rlt" = FlowVelocityActor; "molmo_ae" = MolmoAct2 Action Expert (V11_1).
         self.v_source = "rlt"
 
@@ -949,6 +955,7 @@ class MolmoAct2RLTCF(nn.Module):
             time_dim=int(payload.get("time_dim", 64)),
         )
         model.load_state_dict(payload["state_dict"], strict=False)
+        model.loaded_meta = dict(payload.get("meta") or {})
         return model
 
     @classmethod
@@ -1002,12 +1009,17 @@ def normalized_grad_target(
     grads: list[torch.Tensor],
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """Common-scale normalize per-critic action gradients and average them."""
+    """Deterministic ensemble mean of common-scale targets (diagnostics only).
+
+    Online guide training samples one critic per example. This helper retains
+    the full common-scale magnitude for probes that need an explicit ensemble
+    mean; it must never re-normalize the resultant.
+    """
     stacked = torch.stack(grads, dim=0)  # (E,B,C,A)
-    scales = stacked.flatten(2).norm(dim=-1, keepdim=True).clamp_min(eps)  # (E,B,1)
-    scales = scales.unsqueeze(-1)
-    unit = stacked / scales
-    return unit.mean(dim=0)
+    ensemble, batch = stacked.shape[:2]
+    flat = stacked.reshape(ensemble * batch, -1)
+    normalized = common_scale_normalize(flat, eps=eps)
+    return normalized.reshape_as(stacked).mean(dim=0)
 
 
 def common_scale_normalize(

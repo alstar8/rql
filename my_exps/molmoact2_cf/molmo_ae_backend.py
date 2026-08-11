@@ -14,9 +14,10 @@ import logging
 import os
 import sys
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 import numpy as np
 import torch
@@ -286,6 +287,23 @@ class MolmoAEBackend:
     def eval(self) -> None:
         self.model.eval()
 
+    @contextmanager
+    def adapter_disabled(self) -> Iterator[None]:
+        """Run against the frozen base AE using PEFT's adapter-disable context."""
+        disable_adapter = getattr(self.model, "disable_adapter", None)
+        if disable_adapter is None:
+            if any(parameter.requires_grad for parameter in self.model.parameters()):
+                raise RuntimeError(
+                    "Trainable AE has no PEFT disable_adapter context; "
+                    "a stable frozen reference cannot be produced"
+                )
+            yield
+            return
+        if not callable(disable_adapter):
+            raise RuntimeError("PEFT disable_adapter attribute is not callable")
+        with disable_adapter():
+            yield
+
     def _pad_actions(self, actions: torch.Tensor) -> torch.Tensor:
         """Pad (B,H,8) → (B,H,max_action_dim)."""
         ae = self._action_expert()
@@ -484,7 +502,13 @@ class MolmoAEBackend:
         """Rollout act: AE ODE, optionally ``v_AE + G`` with G from RLT guide."""
         steps = int(num_steps or self.num_steps)
         with self._lock:
-            if apply_guide and self.rlt is not None and self.rlt.guide is not None:
+            if apply_guide:
+                if self.rlt is None:
+                    raise RuntimeError("Guided AE prediction requires an RLT model")
+                if self.rlt.guide is None:
+                    raise RuntimeError("Guided AE prediction requires an RLT guide")
+                if rlt_state is None:
+                    raise RuntimeError("Guided AE prediction requires an encoded RLT state")
                 actions, feats = self._predict_guided(
                     external_cam,
                     wrist_cam,
@@ -500,6 +524,30 @@ class MolmoAEBackend:
                 )
         out: dict[str, Any] = {"actions": actions, **feats}
         return out
+
+    @torch.inference_mode()
+    def predict_reference(
+        self,
+        external_cam: np.ndarray,
+        wrist_cam: np.ndarray,
+        instruction: str,
+        state: np.ndarray,
+        *,
+        num_steps: int | None = None,
+    ) -> dict[str, Any]:
+        """Predict with the frozen base AE, independent of trainable adapters."""
+        steps = int(num_steps or self.num_steps)
+        with self._lock:
+            self.model.eval()
+            with self.adapter_disabled():
+                actions, feats = self._predict_unguided(
+                    external_cam,
+                    wrist_cam,
+                    instruction,
+                    state,
+                    steps=steps,
+                )
+        return {"actions": actions, **feats}
 
     def _predict_unguided(
         self,
@@ -622,10 +670,12 @@ class MolmoAEBackend:
         action_stats: tuple[torch.Tensor, torch.Tensor] | None,
     ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         """Euler ``x ← x + (v_AE + G) dt`` in raw action space with G from RLT."""
-        if self.rlt is None or self.rlt.guide is None:
-            return self._predict_unguided(
-                external_cam, wrist_cam, instruction, state, steps=steps
-            )
+        if self.rlt is None:
+            raise RuntimeError("Guided AE prediction requires an RLT model")
+        if self.rlt.guide is None:
+            raise RuntimeError("Guided AE prediction requires an RLT guide")
+        if rlt_state is None:
+            raise RuntimeError("Guided AE prediction requires an encoded RLT state")
         ctx, feats = self.encode_context(
             external_cam, wrist_cam, instruction, state, action_horizon=CHUNK_SIZE
         )
@@ -644,13 +694,12 @@ class MolmoAEBackend:
             mean, std = action_stats
             mean = mean.to(self.device)
             std = std.to(self.device)
-        if rlt_state is None:
-            # Fall back to zeros-state guide (should be rare).
-            s = torch.zeros(
-                (1, self.rlt.state_dim), device=self.device, dtype=torch.float32
+        s = rlt_state.to(self.device)
+        if s.shape != (1, self.rlt.state_dim) or not torch.isfinite(s).all():
+            raise ValueError(
+                "Guided AE prediction received invalid RLT state "
+                f"shape={tuple(s.shape)} expected=(1, {self.rlt.state_dim})"
             )
-        else:
-            s = rlt_state.to(self.device)
 
         for i in range(steps):
             t = torch.full((b, 1), i / float(steps), device=self.device, dtype=torch.float32)
@@ -664,7 +713,12 @@ class MolmoAEBackend:
         actions = x[0].detach().float().cpu().numpy().astype(np.float32)
         return actions, feats
 
-    def save_trainable(self, path: str | Path) -> None:
+    def save_trainable(
+        self,
+        path: str | Path,
+        *,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -672,13 +726,42 @@ class MolmoAEBackend:
             for name, param in self.model.named_parameters()
             if param.requires_grad
         }
-        torch.save({"ae_trainable": payload}, path)
+        torch.save({"ae_trainable": payload, "meta": meta or {}}, path)
 
-    def load_trainable(self, path: str | Path) -> None:
+    def load_trainable(self, path: str | Path) -> dict[str, Any]:
         blob = torch.load(path, map_location="cpu", weights_only=False)
         state = blob.get("ae_trainable", blob)
+        expected = {
+            name: parameter
+            for name, parameter in self.model.named_parameters()
+            if parameter.requires_grad
+        }
+        if not isinstance(state, dict):
+            raise TypeError(f"AE trainable checkpoint must contain a state dict, got {type(state)}")
+        missing_trainable = sorted(set(expected) - set(state))
+        unexpected_trainable = sorted(set(state) - set(expected))
+        bad_shapes = sorted(
+            name
+            for name in set(expected) & set(state)
+            if tuple(expected[name].shape) != tuple(state[name].shape)
+        )
+        if missing_trainable or unexpected_trainable or bad_shapes:
+            raise RuntimeError(
+                "AE trainable checkpoint mismatch: "
+                f"missing={missing_trainable[:8]} "
+                f"unexpected={unexpected_trainable[:8]} "
+                f"bad_shapes={bad_shapes[:8]}"
+            )
         missing = self.model.load_state_dict(state, strict=False)
+        if missing.unexpected_keys:
+            raise RuntimeError(
+                "AE trainable checkpoint had unmatched keys: "
+                f"{missing.unexpected_keys[:8]}"
+            )
+        meta = dict(blob.get("meta") or {}) if isinstance(blob, dict) else {}
+        self.loaded_trainable_meta = meta
         log.info("Loaded AE trainable weights from %s missing=%s", path, missing.missing_keys[:8])
+        return meta
 
 
 GuideFn = Callable[

@@ -21,6 +21,7 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -37,6 +38,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from chunk_replay import ChunkReplay, ImageChunkReplay, TokenReplay  # noqa: E402
+from molmo_ae_backend import MolmoAEBackend  # noqa: E402
 from rlt_models import (  # noqa: E402
     ACTION_DIM,
     CF_MODE_FLOW,
@@ -50,6 +52,8 @@ from train_full import _default_bench  # noqa: E402
 from train_rlt import (  # noqa: E402
     action_sensitivity,
     ae_flow_actor_step,
+    ae_flow_critic_td_step,
+    ae_flow_gate_metrics,
     ae_flow_guide_step,
     actor_step,
     build_rlt_optimizers,
@@ -57,6 +61,7 @@ from train_rlt import (  # noqa: E402
     critic_td_step,
     flow_actor_step,
     flow_critic_td_step,
+    flow_gate_metrics,
     flow_guide_step,
     guide_step,
     predicted_deploy_advantage,
@@ -68,9 +73,12 @@ from molmo_spaces.evaluation.configs.evaluation_configs import (  # noqa: E402
     MolmoAct2PolicyEvalConfig,
 )
 from molmo_spaces.evaluation.eval_main import run_evaluation  # noqa: E402
+import molmo_spaces.data_generation.pipeline as molmo_pipeline  # noqa: E402
 from molmo_spaces.policy.learned_policy.molmoact2_policy import (  # noqa: E402
     MolmoAct2_Policy,
 )
+from molmo_spaces.renderer import opengl_context as egl_ctx  # noqa: E402
+from molmo_spaces.renderer import opengl_rendering as ogl  # noqa: E402
 
 
 def _patch_molmo_single_worker_mp() -> None:
@@ -82,8 +90,6 @@ def _patch_molmo_single_worker_mp() -> None:
     SIGABRT.  Our trainers always use ``num_workers=1``, so thread-local stand-ins
     are sufficient and avoid the resource_tracker / forkserver entirely.
     """
-    import molmo_spaces.data_generation.pipeline as pipeline
-
     class _LocalValue:
         def __init__(self, _typecode: str, value: int) -> None:
             self.value = int(value)
@@ -102,7 +108,7 @@ def _patch_molmo_single_worker_mp() -> None:
                 "molmoact2_cf expects num_workers=1; refusing to spawn forkserver workers"
             )
 
-    pipeline.mp_context = _LocalMPContext()  # type: ignore[assignment]
+    molmo_pipeline.mp_context = _LocalMPContext()  # type: ignore[assignment]
 
 
 _patch_molmo_single_worker_mp()
@@ -170,8 +176,6 @@ def _patch_renderer_device_id() -> None:
     Without this, MolmoSpaces sets ``device_id=0`` from remapped CUDA and can
     attach every trainer's EGL context to the wrong GPU under contention.
     """
-    from molmo_spaces.renderer import opengl_rendering as ogl
-
     original_init = ogl.MjOpenGLRenderer.__init__
 
     def _init(self: Any, *args: Any, device_id: int | None = None, **kwargs: Any) -> None:
@@ -195,8 +199,6 @@ def _patch_egl_context_serialize() -> None:
     global flock around context creation keeps device-parallel rendering while
     making init single-flight.
     """
-    from molmo_spaces.renderer import opengl_context as egl_ctx
-
     original_init = egl_ctx.EGLGLContext.__init__
     lock_dir = _egl_lock_dir()
     lock_path = lock_dir / "egl_init.lock"
@@ -222,6 +224,28 @@ _STOP_REQUESTED = False
 
 class RLTFeatureError(RuntimeError):
     """The expert server did not return an RLT-compatible representation."""
+
+
+@dataclass(frozen=True)
+class GateStatus:
+    """Production gate diagnostics separated from deployment overrides."""
+
+    would_enable: bool
+    deploy_actor: bool
+    deploy_guide: bool
+    paired_lcb: float
+    q_min_advantage: float
+    guide_advantage: float
+    critic_health: bool
+    sensitivity: float
+
+
+@dataclass(frozen=True)
+class ResumeArtifacts:
+    checkpoint: Path | None
+    replay: Path | None
+    ae_trainable: Path | None
+    ae_replay: Path | None
 
 
 def _request_stop(signum: int, _frame: Any) -> None:
@@ -406,7 +430,8 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         )
         self.explore_warmup_mult = float(explore_warmup_mult)
         self.ae_backend = ae_backend
-        self.enable_rlt = False
+        self.deploy_actor = False
+        self.deploy_guide = False
         self.fatal_error: RLTFeatureError | None = None
         self._rng = np.random.default_rng(0)
         self._clear_episode()
@@ -416,6 +441,16 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             raise ValueError(
                 f"RLT policy requires chunk_size={CHUNK_SIZE}, checkpoint has {self.chunk_size}"
             )
+
+    @property
+    def enable_rlt(self) -> bool:
+        """Deprecated compatibility view of deploy_actor."""
+        return self.deploy_actor
+
+    @enable_rlt.setter
+    def enable_rlt(self, enabled: bool) -> None:
+        self.deploy_actor = bool(enabled)
+        self.deploy_guide = bool(enabled) and self.use_cf_guide
 
     def _clear_episode(self) -> None:
         self.ep_zs: list[np.ndarray] = []
@@ -450,27 +485,12 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             "timestamp": model_input.get("timestamp", time.time()),
         }
         if self.ae_backend is not None:
-            # In-process Molmo AE (=V); optional G injected inside backend.
-            apply_guide = bool(
-                self.enable_rlt
-                and self.use_cf_guide
-                and self.actor_mode == "rlt"
-                and getattr(self.rlt_model, "v_source", "rlt") == "molmo_ae"
-            )
-            rlt_state = None
-            if apply_guide:
-                # z/proprio not yet known; guide uses zeros then re-encode below
-                # after features — for deploy we encode z first via unguided
-                # features then guided resample is expensive.  Prefer: unguided
-                # AE reference + RLT guide residual in normalized space when
-                # v_source=molmo_ae (handled after predict).
-                apply_guide = False
-            out = self.ae_backend.predict(
+            # Replay/reference actions must remain the frozen base-AE output.
+            out = self.ae_backend.predict_reference(
                 payload["external_cam"],
                 payload["wrist_cam"],
                 str(payload["instruction"]),
                 payload["state"],
-                apply_guide=apply_guide,
             )
             body = {"actions": out["actions"]}
             for key in (
@@ -514,6 +534,10 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
                 )
         if not np.isfinite(tokens).all() or not np.isfinite(mask).all():
             raise RLTFeatureError("MolmoAct2 server returned non-finite token features")
+        if tokens.shape[0] == 0 or float(mask.sum()) <= 0.0:
+            raise RLTFeatureError("MolmoAct2 server returned no valid token features")
+        if float(np.linalg.norm(tokens.astype(np.float32))) <= 1e-8:
+            raise RLTFeatureError("MolmoAct2 server returned an all-zero token tensor")
         return tokens, mask
 
     def _response_z(
@@ -548,6 +572,8 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             raise RLTFeatureError(
                 f"Invalid RLT state shape/values: shape={z.shape}, expected ({Z_DIM},)"
             )
+        if float(np.linalg.norm(z)) <= 1e-8:
+            raise RLTFeatureError("RLT state is all zero; refusing a mock/fallback feature")
         return z.astype(np.float32, copy=False), source
 
     def _start_chunk(self, model_input: dict[str, Any]) -> None:
@@ -580,25 +606,25 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             self.ae_backend is not None
             and getattr(self.rlt_model, "v_source", "rlt") == "molmo_ae"
         )
-        if self.enable_rlt and self.actor_mode == "rlt":
+        if self.deploy_actor and self.actor_mode == "rlt":
             z_t = torch.from_numpy(z).unsqueeze(0).to(self.rlt_device)
             proprio_t = torch.from_numpy(proprio).unsqueeze(0).to(self.rlt_device)
             with torch.inference_mode():
                 state = self.rlt_model.encode_state_from_z(z_t, proprio_t)
-                if use_molmo_ae and self.use_cf_guide:
-                    # Paper CF deploy: ODE with v_AE + G (in-process AE).
-                    guided = self.ae_backend.predict(
+                if use_molmo_ae:
+                    # Gate on: trainable AE, with guide only when requested.
+                    predicted = self.ae_backend.predict(
                         np.asarray(model_input["external_cam"], dtype=np.uint8),
                         np.asarray(model_input["wrist_cam"], dtype=np.uint8),
                         str(model_input["instruction"]),
                         proprio,
-                        apply_guide=True,
-                        rlt_state=state,
+                        apply_guide=self.deploy_guide,
+                        rlt_state=state if self.deploy_guide else None,
                     )
-                    deployed = np.asarray(guided["actions"], dtype=np.float32)[
+                    deployed = np.asarray(predicted["actions"], dtype=np.float32)[
                         : self.chunk_size
                     ].copy()
-                elif not use_molmo_ae:
+                else:
                     reference_t = torch.from_numpy(reference).unsqueeze(0).to(
                         self.rlt_device
                     )
@@ -607,7 +633,7 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
                         state,
                         reference_n,
                         deterministic=True,
-                        apply_guide=self.use_cf_guide,
+                        apply_guide=self.deploy_guide,
                     )
                     deployed = self.rlt_model.denormalize_action(deployed_n)[
                         0
@@ -619,7 +645,7 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         # Exploration in *normalized* action space. v12: smaller default and no
         # gate-off boost (v11's 0.05×1.5 drove residual_rms~0.07–0.15 and SR tax).
         explore_std = float(self.explore_residual_std)
-        if self.enable_rlt:
+        if self.deploy_actor:
             explore_std = float(self.explore_deploy_std)
         elif self.explore_warmup_mult != 1.0:
             explore_std = explore_std * float(self.explore_warmup_mult)
@@ -676,6 +702,14 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             except RLTFeatureError as error:
                 self.fatal_error = error
                 raise
+            except Exception as error:
+                if self.deploy_guide:
+                    fatal = RLTFeatureError(
+                        f"Guided policy failed without a valid fallback: {error}"
+                    )
+                    self.fatal_error = fatal
+                    raise fatal from error
+                raise
         if self.actions_buffer is None:
             raise RuntimeError("RLT action buffer was not initialized")
         output = np.asarray(
@@ -686,20 +720,44 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         return output
 
     def _task_rewards(self, n_steps: int, success: bool) -> np.ndarray:
-        values: list[float] = []
+        if n_steps == 0:
+            return np.zeros(0, dtype=np.float32)
         reward_cache = getattr(self.task, "reward_cache", None)
-        if reward_cache is not None:
-            # reward_cache[0] belongs to task.reset; subsequent entries match actions.
-            for reward in list(reward_cache)[1 : n_steps + 1]:
-                array = np.asarray(reward, dtype=np.float32).reshape(-1)
-                if array.size:
-                    values.append(float(array[0]))
-        if len(values) == n_steps and np.isfinite(values).all():
-            return np.asarray(values, dtype=np.float32)
-        fallback = np.zeros(n_steps, dtype=np.float32)
-        if success and n_steps:
-            fallback[-1] = 1.0
-        return fallback
+        if reward_cache is None:
+            error = RLTFeatureError("Active task has no reward_cache")
+            self.fatal_error = error
+            raise error
+        cached = list(reward_cache)
+        # reward_cache[0] belongs to task.reset; subsequent entries match actions.
+        if len(cached) < n_steps + 1:
+            error = RLTFeatureError(
+                f"Reward cache is short: have {max(len(cached) - 1, 0)} "
+                f"action rewards for {n_steps} steps"
+            )
+            self.fatal_error = error
+            raise error
+        values: list[float] = []
+        for step, reward in enumerate(cached[1 : n_steps + 1]):
+            array = np.asarray(reward, dtype=np.float32).reshape(-1)
+            if array.size == 0 or not np.isfinite(array[0]):
+                error = RLTFeatureError(
+                    f"Reward cache entry {step} is empty or non-finite"
+                )
+                self.fatal_error = error
+                raise error
+            values.append(float(array[0]))
+        result = np.asarray(values, dtype=np.float32)
+        if result.shape != (n_steps,) or not np.isfinite(result).all():
+            error = RLTFeatureError("Reward cache produced invalid active-path rewards")
+            self.fatal_error = error
+            raise error
+        if success and float(result.max(initial=0.0)) <= 0.0:
+            error = RLTFeatureError(
+                "Successful rollout has no positive environment reward"
+            )
+            self.fatal_error = error
+            raise error
+        return result
 
     def pop_episode(self, success: bool) -> dict[str, Any]:
         n_steps = int(sum(self.ep_action_counts))
@@ -781,14 +839,71 @@ def _validate_server_features(health: dict[str, Any]) -> None:
         raise RLTFeatureError("The MolmoAct2 server was started with --no_features")
 
 
-def _resolve_resume_checkpoint(args: argparse.Namespace) -> Path | None:
-    """Prefer the shard's latest online checkpoint so watchdog restarts continue."""
+def _resolve_resume_artifacts(args: argparse.Namespace) -> ResumeArtifacts:
+    """Resolve an all-or-none online training resume bundle."""
+    ae_mode = bool(getattr(args, "ae_trainable", False))
+    eval_only = bool(getattr(args, "eval_only", False))
+    explicit_ae_raw = str(getattr(args, "ae_trainable_ckpt", "") or "")
+    explicit_ae = Path(explicit_ae_raw) if explicit_ae_raw else None
+    if explicit_ae is not None and not explicit_ae.is_file():
+        raise FileNotFoundError(f"AE trainable checkpoint not found: {explicit_ae}")
     if args.no_resume:
-        return None
+        return ResumeArtifacts(None, None, explicit_ae if ae_mode else None, None)
     latest = Path(args.out_dir) / "rlt_cf_latest.pt"
-    if latest.is_file():
-        return latest
-    return None
+    replay = Path(args.replay_out) if str(getattr(args, "replay_out", "")) else None
+    ae_path = Path(args.out_dir) / "molmo_ae_lora_latest.pt"
+    ae_replay_raw = str(getattr(args, "ae_image_replay_out", "") or "")
+    ae_replay_path = (
+        Path(ae_replay_raw)
+        if ae_replay_raw
+        else Path(args.out_dir) / "ae_image_replay.npz"
+    )
+    metrics_path = Path(args.out_dir) / "metrics.jsonl"
+    if not latest.is_file():
+        if (
+            ae_mode
+            and eval_only
+            and explicit_ae is None
+            and str(getattr(args, "rlt_ckpt", ""))
+        ):
+            inferred_ae = Path(args.rlt_ckpt).parent / "molmo_ae_lora_latest.pt"
+            if inferred_ae.is_file():
+                explicit_ae = inferred_ae
+        if ae_mode and ae_path.is_file():
+            raise RuntimeError(
+                f"Orphan AE resume artifact without RLT checkpoint: {ae_path}"
+            )
+        if not eval_only and metrics_path.is_file():
+            raise RuntimeError(
+                f"Orphan training metrics without RLT checkpoint: {metrics_path}"
+            )
+        return ResumeArtifacts(None, None, explicit_ae if ae_mode else None, None)
+    if not eval_only and (replay is None or not replay.is_file()):
+        raise RuntimeError(
+            "Refusing partial resume: rlt_cf_latest.pt exists but chunk replay "
+            f"is missing ({replay})"
+        )
+    if ae_mode and explicit_ae is None and not ae_path.is_file():
+        raise RuntimeError(
+            "Refusing partial AE resume: rlt_cf_latest.pt exists but "
+            f"{ae_path.name} is missing"
+        )
+    if ae_mode and not eval_only and not ae_replay_path.is_file():
+        raise RuntimeError(
+            "Refusing partial AE resume: rlt_cf_latest.pt exists but "
+            f"{ae_replay_path.name} is missing"
+        )
+    return ResumeArtifacts(
+        latest,
+        replay if replay is not None and replay.is_file() else None,
+        (explicit_ae or ae_path) if ae_mode else None,
+        ae_replay_path if ae_mode and not eval_only else None,
+    )
+
+
+def _resolve_resume_checkpoint(args: argparse.Namespace) -> Path | None:
+    """Compatibility helper returning the checkpoint from the safe bundle."""
+    return _resolve_resume_artifacts(args).checkpoint
 
 
 def _load_metrics_resume(out_dir: Path) -> dict[str, Any] | None:
@@ -808,9 +923,18 @@ def _load_metrics_resume(out_dir: Path) -> dict[str, Any] | None:
     return last
 
 
-def _load_model(args: argparse.Namespace, device: torch.device) -> MolmoAct2RLTCF:
+def _load_model(
+    args: argparse.Namespace,
+    device: torch.device,
+    *,
+    resume_checkpoint: Path | None = None,
+) -> MolmoAct2RLTCF:
     cf_mode = str(getattr(args, "cf_mode", CF_MODE_RESIDUAL)).lower()
-    resume_ckpt = _resolve_resume_checkpoint(args)
+    resume_ckpt = (
+        _resolve_resume_checkpoint(args)
+        if resume_checkpoint is None
+        else resume_checkpoint
+    )
     if resume_ckpt is not None:
         model = MolmoAct2RLTCF.load(str(resume_ckpt), map_location=device).to(device)
         log.info("Resumed RLT checkpoint %s (cf_mode=%s)", resume_ckpt, model.cf_mode)
@@ -890,6 +1014,7 @@ def _build_eval_policy(
     retain_tokens: bool | None = None,
     ae_backend: Any | None = None,
 ) -> tuple[RLTOnlinePolicy, MolmoAct2PolicyEvalConfig]:
+    eval_only = bool(getattr(args, "eval_only", False))
     exp_config = MolmoAct2PolicyEvalConfig()
     exp_config.policy_config.remote_config = {
         "host": args.server_host,
@@ -907,20 +1032,30 @@ def _build_eval_policy(
         actor_mode=args.actor_mode,
         prefer_server_z=prefer_server_z,
         retain_tokens=(
-            bool(args.tune_token_online)
+            bool(args.tune_token_online) and not eval_only
             if retain_tokens is None
-            else bool(retain_tokens)
+            else bool(retain_tokens) and not eval_only
         ),
         request_timeout_sec=args.server_request_timeout_sec,
-        explore_residual_std=float(getattr(args, "explore_residual_std", 0.02)),
+        explore_residual_std=(
+            0.0
+            if eval_only
+            else float(getattr(args, "explore_residual_std", 0.02))
+        ),
         explore_deploy_std=float(
-            getattr(
+            0.0
+            if eval_only
+            else getattr(
                 args,
                 "explore_deploy_std",
                 getattr(args, "explore_residual_std", 0.02),
             )
         ),
-        explore_warmup_mult=float(getattr(args, "explore_warmup_mult", 1.0)),
+        explore_warmup_mult=(
+            1.0
+            if eval_only
+            else float(getattr(args, "explore_warmup_mult", 1.0))
+        ),
         ae_backend=ae_backend,
     )
     policy._rng = np.random.default_rng(int(getattr(args, "seed", 0)))
@@ -933,38 +1068,135 @@ def _gate_status(
     replay: ChunkReplay,
     valid_episodes: int,
     device: torch.device,
-) -> tuple[bool, float, bool, float]:
-    if args.actor_mode != "rlt":
-        return False, 0.0, False, 0.0
+    *,
+    ae_backend: Any | None = None,
+    image_replay: ImageChunkReplay | None = None,
+    checkpoint_meta: dict[str, Any] | None = None,
+) -> GateStatus:
+    paired_lcb = 0.0
+    q_min_advantage = 0.0
+    guide_advantage = 0.0
+    sensitivity = 0.0
+    healthy = False
+    ae_mode = ae_backend is not None
+    gate_replay: Any = image_replay if ae_mode else replay
     enough_data = (
-        valid_episodes >= args.g_start_episodes
-        and len(replay) >= args.min_replay_chunks
-        and replay.has_both_outcomes()
+        args.actor_mode == "rlt"
+        and valid_episodes >= args.g_start_episodes
+        and gate_replay is not None
+        and len(gate_replay) >= args.min_replay_chunks
+        and gate_replay.has_both_outcomes()
     )
-    if not enough_data:
-        return False, 0.0, False, 0.0
-    batch = replay.sample(args.batch_size, device=device)
-    healthy = critic_is_healthy(model, batch)
-    if not healthy:
-        return False, 0.0, False, 0.0
-    advantage = predicted_deploy_advantage(model, batch)
-    sensitivity = action_sensitivity(
-        model, batch, noise=float(args.gate_sensitivity_noise)
-    )
-    # v12: always require advantage AND sensitivity for residual, joint CF, and AE.
-    # Skipping advantage under --joint_cf deployed negative-adv policies (SR collapse).
-    enabled = (
-        np.isfinite(advantage)
-        and advantage >= float(args.g_min_advantage)
+    if enough_data:
+        batch_size = (
+            int(getattr(args, "ae_batch_size", 2))
+            if ae_mode
+            else int(args.batch_size)
+        )
+        batch = gate_replay.sample(batch_size, device=device)
+        healthy = critic_is_healthy(model, batch)
+        if healthy and ae_mode:
+            ae_metrics = ae_flow_gate_metrics(
+                model,
+                ae_backend,
+                batch,
+                sensitivity_noise=float(args.gate_sensitivity_noise),
+            )
+            paired_lcb = ae_metrics["paired_lcb"]
+            q_min_advantage = ae_metrics["q_min_advantage"]
+            guide_advantage = ae_metrics["guide_advantage"]
+            sensitivity = ae_metrics["sensitivity"]
+        elif healthy and model.is_flow:
+            flow_metrics = flow_gate_metrics(
+                model,
+                batch,
+                sensitivity_noise=float(args.gate_sensitivity_noise),
+            )
+            paired_lcb = flow_metrics["paired_lcb"]
+            q_min_advantage = flow_metrics["q_min_advantage"]
+            guide_advantage = flow_metrics["guide_advantage"]
+            sensitivity = flow_metrics["sensitivity"]
+        elif healthy:
+            paired_lcb = predicted_lcb_advantage(model, batch)
+            q_min_advantage = predicted_deploy_advantage(model, batch)
+            guide_advantage = predicted_guide_advantage(model, batch)
+            sensitivity = action_sensitivity(
+                model,
+                batch,
+                noise=float(args.gate_sensitivity_noise),
+            )
+
+    would_enable = (
+        enough_data
+        and healthy
+        and np.isfinite(paired_lcb)
+        and paired_lcb >= float(args.g_min_advantage)
         and np.isfinite(sensitivity)
         and sensitivity >= float(args.g_min_action_sensitivity)
     )
-    # Residual CF: also require guide-vs-actor advantage when G is trained.
     min_guide_adv = float(getattr(args, "g_min_guide_advantage", 0.0) or 0.0)
-    if enabled and args.use_cf_guide and min_guide_adv > 0.0 and model.guide is not None:
-        guide_adv = predicted_guide_advantage(model, batch)
-        enabled = np.isfinite(guide_adv) and guide_adv >= min_guide_adv
-    return bool(enabled), float(advantage), bool(healthy), float(sensitivity)
+    if (
+        would_enable
+        and args.use_cf_guide
+        and model.guide is not None
+        and min_guide_adv > 0.0
+    ):
+        would_enable = (
+            np.isfinite(guide_advantage)
+            and guide_advantage >= min_guide_adv
+        )
+
+    deploy_policy = str(getattr(args, "deploy_policy", "gated"))
+    deploy_actor = False
+    deploy_guide = False
+    if deploy_policy == "gated":
+        deploy_actor = bool(would_enable)
+        deploy_guide = deploy_actor and args.use_cf_guide and model.guide is not None
+    elif deploy_policy == "checkpoint_gate":
+        source = checkpoint_meta or {}
+        deploy_actor = bool(
+            source.get(
+                "gate_deploy_actor",
+                source.get("deploy_actor", source.get("g_enabled", False)),
+            )
+        )
+        deploy_guide = bool(
+            source.get(
+                "gate_deploy_guide",
+                deploy_actor and args.use_cf_guide,
+            )
+        )
+    elif deploy_policy == "reference":
+        deploy_actor = False
+        deploy_guide = False
+    elif deploy_policy == "actor":
+        deploy_actor = True
+        deploy_guide = False
+    elif deploy_policy == "actor_guide":
+        deploy_actor = True
+        deploy_guide = True
+    else:
+        raise ValueError(f"Unknown deploy policy: {deploy_policy}")
+
+    if args.actor_mode != "rlt":
+        deploy_actor = False
+        deploy_guide = False
+    if deploy_guide and (not args.use_cf_guide or model.guide is None):
+        raise RuntimeError(
+            f"deploy_policy={deploy_policy} requested a guide, but no guide is loaded"
+        )
+    if deploy_guide and not deploy_actor:
+        raise RuntimeError("Guide deployment requires actor deployment")
+    return GateStatus(
+        would_enable=bool(would_enable),
+        deploy_actor=bool(deploy_actor),
+        deploy_guide=bool(deploy_guide),
+        paired_lcb=float(paired_lcb),
+        q_min_advantage=float(q_min_advantage),
+        guide_advantage=float(guide_advantage),
+        critic_health=bool(healthy),
+        sensitivity=float(sensitivity),
+    )
 
 
 def _train_after_episode(
@@ -987,30 +1219,48 @@ def _train_after_episode(
 
     ae_mode = bool(getattr(args, "ae_trainable", False)) and ae_backend is not None
     ae_batch_size = int(getattr(args, "ae_batch_size", 2))
+    if ae_mode and (
+        image_replay is None
+        or len(image_replay) < max(1, ae_batch_size)
+    ):
+        return q_info, actor_info, guide_info, token_info
 
     for _ in range(args.updates_per_episode):
         # RLT uses two critic updates for every actor update.
         for _critic_update in range(2):
-            batch = replay.sample(args.batch_size, device=device)
-            critic_fn = flow_critic_td_step if model.is_flow else critic_td_step
-            q_info = critic_fn(
-                model,
-                optimizers["critic"],
-                batch,
-                gamma=args.gamma,
-                mc_coef=args.mc_coef,
-                cql_coef=args.cql_coef,
-                cql_n_actions=args.cql_n_actions,
-                cql_action_radius=args.cql_action_radius,
-                ref_dropout=args.ref_dropout,
-                rank_coef=args.rank_coef,
-                rank_margin=args.rank_margin,
-                rank_noise=args.rank_noise,
-                far_rank_coef=args.far_rank_coef,
-                far_rank_noise=args.far_rank_noise,
-                shuffle_rank_coef=args.shuffle_rank_coef,
-                target_noise=args.target_noise,
-            )
+            critic_kwargs = {
+                "gamma": args.gamma,
+                "mc_coef": args.mc_coef,
+                "cql_coef": args.cql_coef,
+                "cql_n_actions": args.cql_n_actions,
+                "cql_action_radius": args.cql_action_radius,
+                "ref_dropout": args.ref_dropout,
+                "rank_coef": args.rank_coef,
+                "rank_margin": args.rank_margin,
+                "rank_noise": args.rank_noise,
+                "far_rank_coef": args.far_rank_coef,
+                "far_rank_noise": args.far_rank_noise,
+                "shuffle_rank_coef": args.shuffle_rank_coef,
+                "target_noise": args.target_noise,
+            }
+            if ae_mode:
+                batch = image_replay.sample(ae_batch_size, device=device)
+                q_info = ae_flow_critic_td_step(
+                    model,
+                    ae_backend,
+                    optimizers["critic"],
+                    batch,
+                    **critic_kwargs,
+                )
+            else:
+                batch = replay.sample(args.batch_size, device=device)
+                critic_fn = flow_critic_td_step if model.is_flow else critic_td_step
+                q_info = critic_fn(
+                    model,
+                    optimizers["critic"],
+                    batch,
+                    **critic_kwargs,
+                )
         if args.actor_mode == "rlt":
             if (
                 ae_mode
@@ -1035,9 +1285,6 @@ def _train_after_episode(
                         optimizers["guide"],
                         actor_batch,
                         beta=args.guide_beta,
-                        target_delta_frac=float(
-                            getattr(args, "guide_target_delta_frac", 1.0)
-                        ),
                     )
             else:
                 actor_batch = replay.sample(args.batch_size, device=device)
@@ -1059,14 +1306,6 @@ def _train_after_episode(
                 if args.use_cf_guide:
                     guide_fn = flow_guide_step if model.is_flow else guide_step
                     guide_kwargs = {"beta": args.guide_beta}
-                    if not model.is_flow:
-                        guide_kwargs["target_delta_frac"] = float(
-                            getattr(args, "guide_target_delta_frac", 1.0)
-                        )
-                    else:
-                        guide_kwargs["target_delta_frac"] = float(
-                            getattr(args, "guide_target_delta_frac", 1.0)
-                        )
                     guide_info = guide_fn(
                         model,
                         optimizers["guide"],
@@ -1139,6 +1378,55 @@ def _save_chunk_replay(replay: ChunkReplay, replay_out: str) -> None:
         raise
 
 
+def _save_ae_image_replay(
+    replay: ImageChunkReplay,
+    replay_out: str,
+) -> None:
+    if not replay_out or len(replay) == 0:
+        return
+    path = Path(replay_out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.stem}.tmp.npz")
+
+    def _write() -> None:
+        _cleanup_path(temporary)
+        replay.save_npz(str(temporary))
+        with open(temporary, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+
+    try:
+        _io_retry(f"AE image replay save {path}", _write)
+    except Exception:
+        _cleanup_path(temporary)
+        raise
+
+
+def _save_ae_trainable(
+    ae_backend: MolmoAEBackend,
+    out_dir: Path,
+    env_steps: int,
+) -> None:
+    path = out_dir / "molmo_ae_lora_latest.pt"
+    temporary = path.with_name(f".{path.name}.tmp")
+
+    def _write() -> None:
+        _cleanup_path(temporary)
+        ae_backend.save_trainable(
+            temporary,
+            meta={"env_steps": int(env_steps)},
+        )
+        with open(temporary, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+
+    try:
+        _io_retry(f"AE trainable save {path}", _write)
+    except Exception:
+        _cleanup_path(temporary)
+        raise
+
+
 def _append_metrics_row(metrics_path: Path, row: dict[str, Any]) -> None:
     def _write() -> None:
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1160,6 +1448,9 @@ def _persist_training_state(
     replay: ChunkReplay,
     replay_out: str,
     required: bool,
+    ae_backend: MolmoAEBackend | None = None,
+    ae_image_replay: ImageChunkReplay | None = None,
+    ae_image_replay_out: str = "",
 ) -> Path | None:
     """Checkpoint first, then metrics — so counters never outrun weights.
 
@@ -1190,6 +1481,34 @@ def _persist_training_state(
         if required:
             raise
 
+    if ae_backend is not None:
+        if ae_image_replay is None or not ae_image_replay_out:
+            raise RuntimeError(
+                "AE checkpoint persistence requires its paired image replay"
+            )
+        try:
+            _save_ae_image_replay(ae_image_replay, ae_image_replay_out)
+        except Exception as error:  # noqa: BLE001
+            log.error(
+                "AE image replay save failed after retries (steps=%d): %s",
+                env_steps,
+                error,
+            )
+            if required:
+                raise
+            return None
+        try:
+            _save_ae_trainable(ae_backend, out_dir, env_steps)
+        except Exception as error:  # noqa: BLE001
+            log.error(
+                "AE trainable save failed after retries (steps=%d): %s",
+                env_steps,
+                error,
+            )
+            if required:
+                raise
+            return None
+
     try:
         _append_metrics_row(metrics_path, row)
     except Exception as error:  # noqa: BLE001
@@ -1216,10 +1535,7 @@ def _metrics_row(
     successes: int,
     recent: deque[float],
     start_time: float,
-    g_enabled: bool,
-    g_predicted_advantage: float,
-    critic_healthy: bool,
-    action_sensitivity: float,
+    gate_status: GateStatus,
     replay: ChunkReplay,
     q_info: dict[str, float],
     actor_info: dict[str, float],
@@ -1234,10 +1550,18 @@ def _metrics_row(
         "skipped_episodes": int(skipped_episodes),
         "cumulative_success_rate": successes / max(valid_episodes, 1),
         "window_success_rate": float(np.mean(recent)) if recent else 0.0,
-        "g_enabled": bool(g_enabled),
-        "g_predicted_advantage": float(g_predicted_advantage),
-        "critic_healthy": bool(critic_healthy),
-        "action_sensitivity": float(action_sensitivity),
+        "g_enabled": bool(gate_status.deploy_actor),
+        "g_predicted_advantage": float(gate_status.paired_lcb),
+        "gate_would_enable": bool(gate_status.would_enable),
+        "gate_deploy_actor": bool(gate_status.deploy_actor),
+        "gate_deploy_guide": bool(gate_status.deploy_guide),
+        "gate_paired_lcb": float(gate_status.paired_lcb),
+        "gate_q_min_advantage": float(gate_status.q_min_advantage),
+        "gate_guide_advantage": float(gate_status.guide_advantage),
+        "gate_critic_health": bool(gate_status.critic_health),
+        "gate_sensitivity": float(gate_status.sensitivity),
+        "critic_healthy": bool(gate_status.critic_health),
+        "action_sensitivity": float(gate_status.sensitivity),
         "q_td_loss": float(q_info.get("q_td_loss", 0.0)),
         "q_rank_loss": float(q_info.get("q_rank_loss", 0.0)),
         "q_rank_gap": float(q_info.get("q_rank_gap", 0.0)),
@@ -1246,6 +1570,8 @@ def _metrics_row(
         "actor_adv": float(actor_info.get("actor_adv", 0.0)),
         "ae_grad_norm": float(actor_info.get("ae_grad_norm", 0.0)),
         "guide_adv": float(guide_info.get("guide_adv", 0.0)),
+        "guide_w_norm": float(guide_info.get("w_norm", 0.0)),
+        "guide_target_norm": float(guide_info.get("target_norm", 0.0)),
         "token_recon_loss": float(token_info.get("token_recon_loss", 0.0)),
         "config_name": args.config_name,
         "v_source": str(getattr(args, "v_source", "rlt")),
@@ -1270,29 +1596,47 @@ def train_rlt_online(args: argparse.Namespace) -> None:
 
     if args.assets_dir:
         os.environ["MLSPACES_ASSETS_DIR"] = args.assets_dir
+    eval_only = bool(getattr(args, "eval_only", False))
     device = torch.device(args.device)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if not str(getattr(args, "replay_out", "")):
+        args.replay_out = str(out_dir / "chunk_replay.npz")
+    if (
+        bool(getattr(args, "ae_trainable", False))
+        and not str(getattr(args, "ae_image_replay_out", ""))
+    ):
+        args.ae_image_replay_out = str(out_dir / "ae_image_replay.npz")
     metrics_path = out_dir / "metrics.jsonl"
+    validation_results_path = out_dir / "validation_results.jsonl"
+    validation_summary_path = out_dir / "validation_summary.json"
     tmp_rollouts = (
         Path(args.tmp_rollout_dir)
         / f"rlt_port{args.server_port}_pid{os.getpid()}"
     )
     tmp_rollouts.mkdir(parents=True, exist_ok=True)
 
-    model = _load_model(args, device)
+    resume_artifacts = _resolve_resume_artifacts(args)
+    model = _load_model(
+        args,
+        device,
+        resume_checkpoint=resume_artifacts.checkpoint,
+    )
     ae_backend = None
     image_replay: ImageChunkReplay | None = None
     if bool(getattr(args, "ae_trainable", False)):
         if str(args.cf_mode) != CF_MODE_FLOW:
             raise ValueError("--ae_trainable requires --cf_mode flow")
+        if not bool(getattr(args, "ae_lora", True)):
+            raise ValueError(
+                "--ae_trainable requires AE LoRA so adapter-disabled "
+                "predictions remain a frozen reference"
+            )
         # Plan: RL token frozen; Molmo AE is V.
         args.tune_token_online = False
         model.freeze_token_encoder()
         model.v_source = "molmo_ae"
         args.v_source = "molmo_ae"
-        from molmo_ae_backend import MolmoAEBackend
-
         ae_backend = MolmoAEBackend(
             device=device,
             dtype=torch.bfloat16,
@@ -1304,35 +1648,77 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             feature_mode="tokens",
         )
         ae_backend.rlt = model
+        if resume_artifacts.ae_trainable is not None:
+            ae_meta = ae_backend.load_trainable(resume_artifacts.ae_trainable)
+            model_steps = (getattr(model, "loaded_meta", {}) or {}).get("env_steps")
+            ae_steps = ae_meta.get("env_steps")
+            if (
+                model_steps is not None
+                and ae_steps is not None
+                and int(model_steps) != int(ae_steps)
+            ):
+                raise RuntimeError(
+                    "Refusing mismatched AE/RLT resume artifacts: "
+                    f"RLT env_steps={model_steps}, AE env_steps={ae_steps}"
+                )
+            log.info(
+                "Resumed AE trainable weights %s",
+                resume_artifacts.ae_trainable,
+            )
+        elif (
+            eval_only
+            and int((getattr(model, "loaded_meta", {}) or {}).get("env_steps", 0) or 0) > 0
+        ):
+            raise RuntimeError(
+                "Evaluation of an online AE checkpoint requires its paired "
+                "molmo_ae_lora_latest.pt (use --ae_trainable_ckpt)"
+            )
         # Freeze unused RLT FlowVelocityActor; AE LoRA is the trainable V.
         for p in model.actor.parameters():
             p.requires_grad_(False)
-        image_replay = ImageChunkReplay(
-            max_transitions=int(getattr(args, "ae_image_replay_capacity", 512)),
-            chunk_size=CHUNK_SIZE,
-            action_dim=ACTION_DIM,
-            z_dim=Z_DIM,
-            pos_frac=args.pos_frac,
-            seed=args.seed,
-        )
+        if resume_artifacts.ae_replay is not None:
+            image_replay = ImageChunkReplay.load_npz(
+                str(resume_artifacts.ae_replay),
+                max_transitions=int(
+                    getattr(args, "ae_image_replay_capacity", 512)
+                ),
+                pos_frac=args.pos_frac,
+                seed=args.seed,
+            )
+            log.info(
+                "Resumed AE image replay %s (%d transitions)",
+                resume_artifacts.ae_replay,
+                len(image_replay),
+            )
+        else:
+            image_replay = ImageChunkReplay(
+                max_transitions=int(getattr(args, "ae_image_replay_capacity", 512)),
+                chunk_size=CHUNK_SIZE,
+                action_dim=ACTION_DIM,
+                z_dim=Z_DIM,
+                pos_frac=args.pos_frac,
+                seed=args.seed,
+            )
         log.info(
             "V11_1 AE-as-V enabled: trainable_ae=%d params, token frozen, v_source=molmo_ae",
             sum(p.numel() for p in ae_backend.trainable_parameters()),
         )
 
-    optimizers = build_rlt_optimizers(
-        model,
-        lr_token=args.lr_token,
-        lr_critic=args.lr_critic,
-        lr_actor=args.lr_actor,
-        lr_guide=args.lr_guide,
-        lr_alpha=args.lr_alpha,
-    )
-    if ae_backend is not None:
-        optimizers["actor"] = torch.optim.Adam(
-            ae_backend.trainable_parameters(),
-            lr=float(getattr(args, "lr_ae", args.lr_actor)),
+    optimizers: dict[str, torch.optim.Optimizer] = {}
+    if not eval_only:
+        optimizers = build_rlt_optimizers(
+            model,
+            lr_token=args.lr_token,
+            lr_critic=args.lr_critic,
+            lr_actor=args.lr_actor,
+            lr_guide=args.lr_guide,
+            lr_alpha=args.lr_alpha,
         )
+        if ae_backend is not None:
+            optimizers["actor"] = torch.optim.Adam(
+                ae_backend.trainable_parameters(),
+                lr=float(getattr(args, "lr_ae", args.lr_actor)),
+            )
 
     replay = ChunkReplay(
         max_transitions=args.replay_capacity,
@@ -1352,6 +1738,10 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             )
             log.info("Resumed chunk replay %s (%d transitions)", args.replay_out, len(replay))
         except Exception as error:  # noqa: BLE001
+            if resume_artifacts.checkpoint is not None:
+                raise RuntimeError(
+                    f"Failed to load replay paired with resumed model: {args.replay_out}"
+                ) from error
             log.warning("Failed to resume chunk replay %s: %s", args.replay_out, error)
     token_replay = TokenReplay(
         max_seq=args.token_max_seq,
@@ -1403,15 +1793,21 @@ def train_rlt_online(args: argparse.Namespace) -> None:
     last_actor: dict[str, float] = {}
     last_guide: dict[str, float] = {}
     last_token: dict[str, float] = {}
-    last_g_enabled = False
-    last_g_advantage = 0.0
-    last_critic_healthy = False
-    last_action_sensitivity = 0.0
+    last_gate = GateStatus(False, False, False, 0.0, 0.0, 0.0, False, 0.0)
     last_logged_episode = -1
     warned_missing_tokens = False
 
     resume_row = None if args.no_resume else _load_metrics_resume(out_dir)
+    if (
+        resume_row is None
+        and resume_artifacts.checkpoint is not None
+        and getattr(model, "loaded_meta", None)
+    ):
+        resume_row = dict(model.loaded_meta)
+    checkpoint_gate_meta = dict(getattr(model, "loaded_meta", {}) or {})
     if resume_row is not None:
+        checkpoint_gate_meta.update(resume_row)
+    if resume_row is not None and not eval_only:
         env_steps = int(resume_row.get("env_steps", 0) or 0)
         valid_episodes = int(resume_row.get("valid_episodes", 0) or 0)
         skipped_episodes = int(resume_row.get("skipped_episodes", 0) or 0)
@@ -1445,13 +1841,18 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                 _validate_server_features(health)
                 policy.prepare_model()
 
-        deploy_rlt, gate_advantage, critic_healthy, gate_sens = _gate_status(
-            args, model, replay, valid_episodes, device
+        gate = _gate_status(
+            args,
+            model,
+            replay,
+            valid_episodes,
+            device,
+            ae_backend=ae_backend,
+            image_replay=image_replay,
+            checkpoint_meta=checkpoint_gate_meta,
         )
-        if bool(getattr(args, "force_deploy_rlt", False)) and args.actor_mode == "rlt":
-            deploy_rlt = True
-        policy.enable_rlt = deploy_rlt
-        last_action_sensitivity = gate_sens
+        policy.deploy_actor = gate.deploy_actor
+        policy.deploy_guide = gate.deploy_guide
         model.eval()
 
         episode_idx = shard_start + (cycle % shard_size)
@@ -1486,7 +1887,7 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                     raise policy.fatal_error
 
                 n_steps = int(trajectory["n_steps"])
-                if rollout_ok and n_steps > 0:
+                if rollout_ok and n_steps > 0 and not eval_only:
                     replay.add_episode_chunks(
                         trajectory["zs"],
                         trajectory["proprios"],
@@ -1504,11 +1905,14 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                             proprios=trajectory["proprios"],
                             references=trajectory["references"],
                             executed=trajectory["executed"],
+                            rewards=trajectory["rewards"],
                             masks=trajectory["masks"],
                             external_cams=trajectory["external_cams"],
                             wrist_cams=trajectory["wrist_cams"],
                             instructions=trajectory["instructions"],
                             success=success,
+                            gamma=args.gamma,
+                            episode_id=valid_episodes,
                         )
                     for tokens, mask in trajectory["token_batches"]:
                         token_replay.add(tokens, mask)
@@ -1516,7 +1920,7 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                     if token_overflow > 0:
                         del token_replay.tokens[:token_overflow]
                         del token_replay.masks[:token_overflow]
-            if rollout_ok and n_steps > 0:
+            if rollout_ok and n_steps > 0 and not eval_only:
                 last_q, last_actor, last_guide, last_token = _train_after_episode(
                     args,
                     model,
@@ -1540,6 +1944,20 @@ def train_rlt_online(args: argparse.Namespace) -> None:
 
         if not rollout_ok or n_steps <= 0:
             skipped_episodes += 1
+            if eval_only:
+                _append_metrics_row(
+                    validation_results_path,
+                    {
+                        "episode_idx": int(episode_idx),
+                        "valid": False,
+                        "success": False,
+                        "n_steps": int(n_steps),
+                        "deploy_policy": str(args.deploy_policy),
+                        "gate_would_enable": bool(gate.would_enable),
+                        "gate_deploy_actor": bool(gate.deploy_actor),
+                        "gate_deploy_guide": bool(gate.deploy_guide),
+                    },
+                )
             log.warning(
                 "Skipping invalid episode idx=%d rollout_ok=%s steps=%d skipped=%d",
                 episode_idx,
@@ -1566,15 +1984,21 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         successes += int(success)
         recent.append(float(success))
         # Post-episode gate (metrics + next-episode deploy use the same check).
-        last_g_enabled, last_g_advantage, last_critic_healthy, last_action_sensitivity = _gate_status(
-            args, model, replay, valid_episodes, device
+        last_gate = _gate_status(
+            args,
+            model,
+            replay,
+            valid_episodes,
+            device,
+            ae_backend=ae_backend,
+            image_replay=image_replay,
+            checkpoint_meta=checkpoint_gate_meta,
         )
-        if bool(getattr(args, "force_deploy_rlt", False)) and args.actor_mode == "rlt":
-            last_g_enabled = True
 
         log.info(
             "steps=%d/%d eps=%d idx=%d success=%s ep_steps=%d gate=%s "
-            "lcb=%.5f sens=%.5f q_td=%.5f rank=%.5f actor_adv=%.5f guide_adv=%.5f "
+            "lcb=%.5f qmin=%.5f sens=%.5f q_td=%.5f rank=%.5f "
+            "actor_adv=%.5f guide_adv=%.5f "
             "residual_rms=%.5f dt=%.1fs sr=%.3f",
             env_steps,
             args.target_env_steps,
@@ -1582,9 +2006,10 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             episode_idx,
             success,
             n_steps,
-            last_g_enabled,
-            last_g_advantage,
-            last_action_sensitivity,
+            last_gate.deploy_actor,
+            last_gate.paired_lcb,
+            last_gate.q_min_advantage,
+            last_gate.sensitivity,
             last_q.get("q_td_loss", 0.0),
             last_q.get("q_rank_loss", 0.0),
             last_actor.get("actor_adv", 0.0),
@@ -1593,6 +2018,35 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             time.time() - episode_start,
             successes / max(valid_episodes, 1),
         )
+
+        if eval_only:
+            validation_row = _metrics_row(
+                args,
+                env_steps=env_steps,
+                valid_episodes=valid_episodes,
+                skipped_episodes=skipped_episodes,
+                successes=successes,
+                recent=recent,
+                start_time=start_time,
+                gate_status=last_gate,
+                replay=replay,
+                q_info={},
+                actor_info={},
+                guide_info={},
+                token_info={},
+            )
+            validation_row.update(
+                {
+                    "episode_idx": int(episode_idx),
+                    "valid": True,
+                    "success": bool(success),
+                    "episode_steps": int(n_steps),
+                    "deploy_policy": str(args.deploy_policy),
+                    "eval_only": True,
+                }
+            )
+            _append_metrics_row(validation_results_path, validation_row)
+            continue
 
         should_log = (
             valid_episodes % args.log_every_episodes == 0
@@ -1613,10 +2067,7 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                 successes=successes,
                 recent=recent,
                 start_time=start_time,
-                g_enabled=last_g_enabled,
-                g_predicted_advantage=last_g_advantage,
-                critic_healthy=last_critic_healthy,
-                action_sensitivity=last_action_sensitivity,
+                gate_status=last_gate,
                 replay=replay,
                 q_info=last_q,
                 actor_info=last_actor,
@@ -1634,12 +2085,12 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                 replay=replay,
                 replay_out=args.replay_out,
                 required=False,
+                ae_backend=ae_backend,
+                ae_image_replay=image_replay,
+                ae_image_replay_out=str(
+                    getattr(args, "ae_image_replay_out", "")
+                ),
             )
-            if checkpoint is not None and ae_backend is not None:
-                try:
-                    ae_backend.save_trainable(out_dir / "molmo_ae_lora_latest.pt")
-                except Exception as error:  # noqa: BLE001
-                    log.warning("Failed to save AE LoRA weights: %s", error)
             if checkpoint is None:
                 log.warning(
                     "Skipping metrics bump this cycle; will retry next ckpt cadence "
@@ -1648,6 +2099,9 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                     valid_episodes,
                 )
                 continue
+            checkpoint_gate_meta.clear()
+            checkpoint_gate_meta.update(row)
+            model.loaded_meta = dict(row)
             last_logged_episode = valid_episodes
             log.info(
                 "METRICS config=%s steps=%d sr=%.3f window_sr=%.3f "
@@ -1669,16 +2123,32 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         successes=successes,
         recent=recent,
         start_time=start_time,
-        g_enabled=last_g_enabled,
-        g_predicted_advantage=last_g_advantage,
-        critic_healthy=last_critic_healthy,
-        action_sensitivity=last_action_sensitivity,
+        gate_status=last_gate,
         replay=replay,
         q_info=last_q,
         actor_info=last_actor,
         guide_info=last_guide,
         token_info=last_token,
     )
+    if eval_only:
+        summary = {
+            **final_row,
+            "eval_only": True,
+            "deploy_policy": str(args.deploy_policy),
+            "stopped_by_signal": bool(_STOP_REQUESTED),
+            "validation_results_path": str(validation_results_path),
+        }
+        _io_retry(
+            f"validation summary in {out_dir}",
+            lambda: validation_summary_path.write_text(
+                json.dumps(summary, indent=2) + "\n",
+                encoding="utf-8",
+            ),
+        )
+        shutil.rmtree(tmp_rollouts, ignore_errors=True)
+        log.info("Validation done: %s", json.dumps(summary))
+        return
+
     checkpoint = _persist_training_state(
         model=model,
         out_dir=out_dir,
@@ -1688,6 +2158,9 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         replay=replay,
         replay_out=args.replay_out,
         required=False,
+        ae_backend=ae_backend,
+        ae_image_replay=image_replay,
+        ae_image_replay_out=str(getattr(args, "ae_image_replay_out", "")),
     )
     if checkpoint is None:
         checkpoint = out_dir / "rlt_cf_latest.pt"
@@ -1809,17 +2282,25 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--g_start_episodes", type=int, default=40)
     parser.add_argument(
-        "--force_deploy_rlt",
-        action="store_true",
-        help="Always execute RLT actor/guide (eval / ignore gate)",
+        "--deploy_policy",
+        choices=["gated", "checkpoint_gate", "reference", "actor", "actor_guide"],
+        default="gated",
+        help=(
+            "Deployment selection: production gate, saved gate decision, frozen "
+            "reference, trainable actor, or trainable actor plus guide."
+        ),
     )
     parser.add_argument(
-        "--joint_cf",
+        "--force_deploy_rlt",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--eval_only",
         action="store_true",
         help=(
-            "Paper-faithful joint CF: trainable FlowVelocityActor v_θ with G_φ; "
-            "after warmup deploy guided ODE when critic sensitivity is healthy "
-            "(skip g_min_advantage threshold)."
+            "Run validation rollouts without exploration, replay/training updates, "
+            "or training-artifact writes."
         ),
     )
     parser.add_argument(
@@ -1841,12 +2322,27 @@ def parse_args() -> argparse.Namespace:
         "--no_ae_lora",
         dest="ae_lora",
         action="store_false",
-        help="Full AE finetune instead of LoRA (more VRAM)",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--ae_lora_rank", type=int, default=16)
     parser.add_argument("--ae_lora_alpha", type=int, default=32)
+    parser.add_argument(
+        "--ae_trainable_ckpt",
+        type=str,
+        default="",
+        help=(
+            "Explicit AE LoRA checkpoint for eval-only runs. If omitted, "
+            "infer molmo_ae_lora_latest.pt beside --rlt_ckpt."
+        ),
+    )
     parser.add_argument("--ae_batch_size", type=int, default=2)
     parser.add_argument("--ae_image_replay_capacity", type=int, default=512)
+    parser.add_argument(
+        "--ae_image_replay_out",
+        type=str,
+        default="",
+        help="Persisted AE image replay path (defaults under out_dir).",
+    )
     parser.add_argument("--lr_ae", type=float, default=1e-4)
     parser.add_argument("--g_min_advantage", type=float, default=0.003)
     parser.add_argument(
@@ -1911,7 +2407,7 @@ def parse_args() -> argparse.Namespace:
         "--guide_target_delta_frac",
         type=float,
         default=1.0,
-        help="Residual guide distill RMS as a fraction of max_delta (v11: 1.0)",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--target_divergence", type=float, default=0.0025)
     parser.add_argument("--lr_token", type=float, default=1e-4)
@@ -1931,12 +2427,34 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
 
     if args.ae_trainable:
+        if not args.ae_lora:
+            parser.error(
+                "--ae_trainable requires LoRA so adapter-disabled reference "
+                "predictions stay frozen"
+            )
         args.tune_token_online = False
         args.cf_mode = CF_MODE_FLOW
-        args.joint_cf = True
         args.v_source = "molmo_ae"
     else:
         args.v_source = "rlt"
+
+    if args.force_deploy_rlt:
+        log.warning(
+            "--force_deploy_rlt is deprecated; use --deploy_policy actor_guide"
+        )
+        if args.deploy_policy != "gated":
+            parser.error(
+                "--force_deploy_rlt cannot be combined with an explicit --deploy_policy"
+            )
+        args.deploy_policy = "actor_guide" if args.use_cf_guide else "actor"
+    if args.deploy_policy == "actor_guide" and not args.use_cf_guide:
+        parser.error("--deploy_policy actor_guide requires --use_cf_guide")
+    if args.eval_only:
+        args.explore_residual_std = 0.0
+        args.explore_deploy_std = 0.0
+        args.explore_warmup_mult = 1.0
+        args.updates_per_episode = 0
+        args.tune_token_online = False
 
     if args.target_env_steps <= 0:
         parser.error("--target_env_steps must be positive")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
@@ -13,8 +13,12 @@ from rlt_models import (
     bootstrap_scale,
     chunk_return,
     common_scale_normalize,
-    normalized_grad_target,
 )
+
+VelocityProvider = Callable[
+    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+    torch.Tensor,
+]
 
 
 def build_rlt_optimizers(
@@ -79,6 +83,41 @@ def _batch_state(
     )
 
 
+def stochastic_target_critic_gradient(
+    model: MolmoAct2RLTCF,
+    state: torch.Tensor,
+    actions: torch.Tensor,
+    *,
+    t: torch.Tensor | None = None,
+    member: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Sample one target critic per example and return common-scale z targets."""
+    action_leaf = actions.detach().requires_grad_(True)
+    qs = model.q_chunk(
+        state.detach(),
+        action_leaf,
+        target=True,
+        t=t,
+    )
+    batch_size = action_leaf.shape[0]
+    if member is None:
+        member = torch.randint(
+            0,
+            qs.shape[0],
+            (batch_size,),
+            device=action_leaf.device,
+        )
+    else:
+        member = member.to(device=action_leaf.device, dtype=torch.long)
+        if member.shape != (batch_size,):
+            raise ValueError(
+                f"member must have shape ({batch_size},), got {tuple(member.shape)}"
+            )
+    selected = qs[member, torch.arange(batch_size, device=action_leaf.device)].sum()
+    grad = torch.autograd.grad(selected, action_leaf, retain_graph=False)[0].detach()
+    return common_scale_normalize(grad.reshape(batch_size, -1))
+
+
 def critic_td_step(
     model: MolmoAct2RLTCF,
     opt: torch.optim.Optimizer,
@@ -112,7 +151,7 @@ def critic_td_step(
             next_state,
             next_ref,
             deterministic=True,
-            apply_guide=False,
+            apply_guide=model.guide is not None,
             reference_present=present,
         )
         # TD3-style target policy smoothing so bootstrap sees nearby actions.
@@ -243,8 +282,11 @@ def guide_step(
     batch: dict[str, torch.Tensor],
     *,
     beta: float = 0.05,
-    target_delta_frac: float = 1.0,
+    target_delta_frac: float | None = None,
 ) -> dict[str, float]:
+    # Deprecated compatibility argument. ConsensusFlow learns raw W against z;
+    # deployment bounding, not a fixed training magnitude, determines delta.
+    del beta, target_delta_frac
     if model.guide is None:
         return {"guide_loss": 0.0, "guide_adv": 0.0}
     model.train()
@@ -253,38 +295,34 @@ def guide_step(
         ref = model.normalize_action(batch["reference_actions"])
         actor_mean, ainfo = model.actor_chunk(state, ref, deterministic=True, apply_guide=False)
 
-    # Build normalized ensemble gradient target around the actor mean.
-    grads = []
-    for head in model.critic.critics:
-        a = actor_mean.detach().requires_grad_(True)
-        flat = a.reshape(a.shape[0], -1)
-        q = head(state.detach(), flat)
-        g = torch.autograd.grad(q.sum(), a, retain_graph=False)[0]
-        grads.append(g.detach())
-    target = normalized_grad_target(grads)
+    # One stochastic target-critic member per example avoids opposed-member
+    # cancellation while preserving the common-scale target magnitude.
+    target = stochastic_target_critic_gradient(
+        model,
+        state,
+        actor_mean,
+    )
 
+    w_flat = model.guide.raw_w(state.detach(), ref)
     _guided_ref, g_delta = model.guide.guide(
         state.detach(), ref, actor_delta=ainfo["actor_delta"]
     )
     # Additive composition: guide rides on top of the actor residual.
     composed = actor_mean.detach() + g_delta
-    # Distill direction *and* magnitude into a fraction of the residual ball.
-    # Pure cosine is scale-invariant and left G near zero-init in v8.
-    t_flat = target.reshape(target.shape[0], -1)
-    t_unit = t_flat / t_flat.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-    max_delta = float(getattr(model.guide, "max_delta", model.max_delta))
-    target_rms = float(target_delta_frac) * max_delta
-    target_delta = (t_unit * target_rms).reshape_as(g_delta)
-    distill = F.mse_loss(g_delta, target_delta)
+    distill = F.mse_loss(w_flat, target)
     align = 1.0 - F.cosine_similarity(
-        g_delta.reshape(g_delta.shape[0], -1), t_unit, dim=-1
+        w_flat, target, dim=-1
     ).mean()
-    q = model.q_min_chunk(state.detach(), composed)
     with torch.no_grad():
+        q = model.q_min_chunk(state.detach(), composed)
         base_q = model.q_min_chunk(state.detach(), actor_mean.detach())
     adv = q - base_q
     mag = (g_delta**2).mean()
-    loss = distill - adv.mean() + float(beta) * mag
+    # The conditional-moment identity is the population optimum of the pure
+    # squared teacher loss E||W-z_J||². Direct Q maximization or a magnitude
+    # penalty on G changes that optimum, so advantage and magnitude are
+    # diagnostics only.
+    loss = distill
     opt.zero_grad(set_to_none=True)
     loss.backward()
     nn.utils.clip_grad_norm_(model.guide.parameters(), 1.0)
@@ -296,6 +334,8 @@ def guide_step(
         "guide_distill": float(distill.detach()),
         "guide_mse": float(mag.detach()),
         "guide_delta_rms": float(mag.detach().sqrt()),
+        "w_norm": float(w_flat.norm(dim=-1).mean().detach()),
+        "target_norm": float(target.norm(dim=-1).mean().detach()),
     }
 
 
@@ -417,6 +457,7 @@ def _flow_reverse_state(
     reference_n: torch.Tensor,
     *,
     apply_guide: bool = True,
+    velocity_provider: VelocityProvider | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Reverse-integrate from (a,1) → (x^t, t) for critic training states."""
     b = state.shape[0]
@@ -436,8 +477,9 @@ def _flow_reverse_state(
     t = torch.ones(b, 1, device=device, dtype=dtype)
     s = state.detach()
     ref = reference_n.detach()
+    provider = model.flow_velocity if velocity_provider is None else velocity_provider
     for _ in range(model.flow_steps):
-        v = model.flow_velocity(s, x, t, ref)
+        v = provider(s, x, t, ref)
         g = torch.zeros_like(v)
         if apply_guide and model.guide is not None:
             g, _, _ = model.guide.guidance(s, x, t, v.detach())
@@ -446,6 +488,224 @@ def _flow_reverse_state(
         t = t - step.view(b, 1)
     t = t.clamp(0.0, 1.0)
     return x.detach(), t.detach()
+
+
+def _ae_batch_contexts(
+    model: MolmoAct2RLTCF,
+    ae_backend: Any,
+    batch: dict[str, Any],
+    *,
+    next_state: bool = False,
+) -> list[Any | None]:
+    prefix = "next_" if next_state else ""
+    external = batch[f"{prefix}external_cam"]
+    wrist = batch[f"{prefix}wrist_cam"]
+    instructions = batch[f"{prefix}instruction"]
+    proprio = batch[f"{prefix}proprio"]
+    terminal = batch.get("terminal")
+    contexts: list[Any | None] = []
+    for i in range(len(external)):
+        if next_state and terminal is not None and bool(terminal[i].detach().cpu().item() > 0.5):
+            contexts.append(None)
+            continue
+        ctx, _ = ae_backend.encode_context(
+            external[i],
+            wrist[i],
+            str(instructions[i]),
+            proprio[i].detach().float().cpu().numpy(),
+            action_horizon=int(model.chunk_size),
+        )
+        contexts.append(ctx)
+    return contexts
+
+
+def _ae_velocity_provider(
+    model: MolmoAct2RLTCF,
+    ae_backend: Any,
+    contexts: list[Any | None],
+) -> VelocityProvider:
+    std = model.action_std.detach().clamp_min(1e-6)
+
+    def velocity(
+        _state: torch.Tensor,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        _reference: torch.Tensor,
+    ) -> torch.Tensor:
+        x_raw = model.denormalize_action(x_t)
+        rows: list[torch.Tensor] = []
+        for i, context in enumerate(contexts):
+            if context is None:
+                rows.append(torch.zeros_like(x_raw[i : i + 1]))
+                continue
+            row = ae_backend.velocity(context, x_raw[i : i + 1], t[i : i + 1])
+            rows.append(row.to(device=x_t.device, dtype=x_t.dtype))
+        return torch.cat(rows, dim=0) / std.to(device=x_t.device, dtype=x_t.dtype)
+
+    return velocity
+
+
+def _flow_endpoint_with_provider(
+    model: MolmoAct2RLTCF,
+    state: torch.Tensor,
+    reference_n: torch.Tensor,
+    velocity_provider: VelocityProvider,
+    *,
+    apply_guide: bool,
+    x0: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Integrate the same velocity/guidance field used by reverse states."""
+    s = state.detach()
+    ref = reference_n.detach()
+    x = torch.randn_like(ref) if x0 is None else x0
+    b = x.shape[0]
+    dt = 1.0 / float(model.flow_steps)
+    for i in range(model.flow_steps):
+        t = torch.full(
+            (b, 1),
+            i / float(model.flow_steps),
+            device=x.device,
+            dtype=x.dtype,
+        )
+        v = velocity_provider(s, x, t, ref)
+        g = torch.zeros_like(v)
+        if apply_guide and model.guide is not None:
+            g, _, _ = model.guide.guidance(s, x, t, v.detach())
+        x = x + (v + g) * dt
+    return x
+
+
+def ae_flow_gate_metrics(
+    model: MolmoAct2RLTCF,
+    ae_backend: Any,
+    batch: dict[str, Any],
+    *,
+    sensitivity_noise: float = 0.03,
+) -> dict[str, float]:
+    """Gate diagnostics from actual trainable-AE flow predictions on images."""
+    if not model.is_flow:
+        raise RuntimeError("ae_flow_gate_metrics requires cf_mode=flow")
+    model.eval()
+    ae_backend.eval()
+    with torch.no_grad():
+        state = _batch_state(model, batch, detach_token=True, use_target=False)
+        reference = model.normalize_action(batch["reference_actions"])
+        contexts = _ae_batch_contexts(model, ae_backend, batch)
+        provider = _ae_velocity_provider(model, ae_backend, contexts)
+        x0_raw = torch.randn_like(batch["reference_actions"])
+        x0 = model.normalize_action(x0_raw)
+        actor = _flow_endpoint_with_provider(
+            model,
+            state,
+            reference,
+            provider,
+            apply_guide=False,
+            x0=x0,
+        )
+        guided = actor
+        if model.guide is not None:
+            guided = _flow_endpoint_with_provider(
+                model,
+                state,
+                reference,
+                provider,
+                apply_guide=True,
+                x0=x0,
+            )
+        deploy = guided if model.guide is not None else actor
+        t1 = torch.ones(
+            deploy.shape[0],
+            1,
+            device=deploy.device,
+            dtype=deploy.dtype,
+        )
+        qs_deploy = model.q_chunk(state, deploy, t=t1)
+        qs_reference = model.q_chunk(state, reference, t=t1)
+        paired = qs_deploy - qs_reference
+        paired_lcb = paired.mean(dim=0) - paired.std(dim=0, unbiased=False)
+        q_min_advantage = (
+            model.q_min_chunk(state, deploy, t=t1)
+            - model.q_min_chunk(state, reference, t=t1)
+        )
+        guide_advantage = deploy.new_zeros(deploy.shape[0])
+        if model.guide is not None:
+            guide_advantage = (
+                model.q_min_chunk(state, guided, t=t1)
+                - model.q_min_chunk(state, actor, t=t1)
+            )
+        perturbed = deploy + float(sensitivity_noise) * torch.randn_like(deploy)
+        sensitivity = (
+            model.q_min_chunk(state, deploy, t=t1)
+            - model.q_min_chunk(state, perturbed, t=t1)
+        ).abs()
+    return {
+        "paired_lcb": float(paired_lcb.mean().detach()),
+        "q_min_advantage": float(q_min_advantage.mean().detach()),
+        "guide_advantage": float(guide_advantage.mean().detach()),
+        "sensitivity": float(sensitivity.mean().detach()),
+    }
+
+
+def flow_gate_metrics(
+    model: MolmoAct2RLTCF,
+    batch: dict[str, torch.Tensor],
+    *,
+    sensitivity_noise: float = 0.03,
+) -> dict[str, float]:
+    """Gate diagnostics for lightweight flow using one paired source-noise draw."""
+    if not model.is_flow:
+        raise RuntimeError("flow_gate_metrics requires cf_mode=flow")
+    model.eval()
+    with torch.no_grad():
+        state = _batch_state(model, batch, detach_token=True, use_target=False)
+        reference = model.normalize_action(batch["reference_actions"])
+        x0 = torch.randn_like(reference)
+        actor, _ = model.flow_sample(
+            state,
+            reference,
+            apply_guide=False,
+            x0=x0,
+        )
+        guided = actor
+        if model.guide is not None:
+            guided, _ = model.flow_sample(
+                state,
+                reference,
+                apply_guide=True,
+                x0=x0,
+            )
+        deploy = guided if model.guide is not None else actor
+        t1 = torch.ones(
+            deploy.shape[0],
+            1,
+            device=deploy.device,
+            dtype=deploy.dtype,
+        )
+        qs_deploy = model.q_chunk(state, deploy, t=t1)
+        qs_reference = model.q_chunk(state, reference, t=t1)
+        paired = qs_deploy - qs_reference
+        paired_lcb = paired.mean(dim=0) - paired.std(dim=0, unbiased=False)
+        q_min_advantage = (
+            model.q_min_chunk(state, deploy, t=t1)
+            - model.q_min_chunk(state, reference, t=t1)
+        )
+        guide_advantage = deploy.new_zeros(deploy.shape[0])
+        if model.guide is not None:
+            guide_advantage = (
+                model.q_min_chunk(state, guided, t=t1)
+                - model.q_min_chunk(state, actor, t=t1)
+            )
+        perturbed = deploy + float(sensitivity_noise) * torch.randn_like(deploy)
+        sensitivity = (
+            model.q_min_chunk(state, deploy, t=t1)
+            - model.q_min_chunk(state, perturbed, t=t1)
+        ).abs()
+    return {
+        "paired_lcb": float(paired_lcb.mean().detach()),
+        "q_min_advantage": float(q_min_advantage.mean().detach()),
+        "guide_advantage": float(guide_advantage.mean().detach()),
+        "sensitivity": float(sensitivity.mean().detach()),
+    }
 
 
 def flow_critic_td_step(
@@ -501,7 +761,7 @@ def flow_critic_td_step(
             next_state,
             next_ref,
             deterministic=True,
-            apply_guide=False,
+            apply_guide=model.guide is not None,
             reference_present=present,
         )
         if target_noise > 0.0:
@@ -578,6 +838,173 @@ def flow_critic_td_step(
         "q_std": float(qs_end.std(unbiased=False).detach()),
         "q_target": float(y_td.mean().detach()),
         "flow_t_mean": float(t.mean().detach()),
+    }
+
+
+def ae_flow_critic_td_step(
+    model: MolmoAct2RLTCF,
+    ae_backend: Any,
+    opt: torch.optim.Optimizer,
+    batch: dict[str, Any],
+    *,
+    gamma: float = 0.99,
+    mc_coef: float = 0.1,
+    cql_coef: float = 0.1,
+    cql_n_actions: int = 4,
+    cql_action_radius: float = 0.2,
+    ref_dropout: float = 0.5,
+    rank_coef: float = 1.0,
+    rank_margin: float = 0.05,
+    rank_noise: float = 0.08,
+    far_rank_coef: float = 0.5,
+    far_rank_noise: float = 0.35,
+    shuffle_rank_coef: float = 0.5,
+    target_noise: float = 0.02,
+) -> dict[str, float]:
+    """Flow critic TD whose reverse and bootstrap fields come from Molmo AE."""
+    del ref_dropout
+    if not model.is_flow:
+        raise RuntimeError("ae_flow_critic_td_step requires cf_mode=flow")
+    model.train()
+    ae_backend.eval()
+    detach_token = not model.tune_token_online
+    state = _batch_state(model, batch, detach_token=detach_token, use_target=False)
+    actions = model.normalize_action(batch["executed_actions"])
+    reference = model.normalize_action(batch["reference_actions"])
+    contexts = _ae_batch_contexts(model, ae_backend, batch)
+    provider = _ae_velocity_provider(model, ae_backend, contexts)
+
+    with torch.no_grad():
+        next_state = _batch_state(
+            model,
+            batch,
+            next_state=True,
+            detach_token=True,
+            use_target=True,
+        )
+        next_reference = model.normalize_action(batch["next_reference_actions"])
+        next_contexts = _ae_batch_contexts(
+            model,
+            ae_backend,
+            batch,
+            next_state=True,
+        )
+        next_provider = _ae_velocity_provider(model, ae_backend, next_contexts)
+        next_x0_raw = torch.randn_like(batch["next_reference_actions"])
+        next_x0 = model.normalize_action(next_x0_raw)
+        next_action = _flow_endpoint_with_provider(
+            model,
+            next_state,
+            next_reference,
+            next_provider,
+            apply_guide=model.guide is not None,
+            x0=next_x0,
+        )
+        terminal_mask = batch["terminal"].reshape(-1, 1, 1) > 0.5
+        next_action = torch.where(terminal_mask, torch.zeros_like(next_action), next_action)
+        if target_noise > 0.0:
+            next_action = (
+                next_action + float(target_noise) * torch.randn_like(next_action)
+            ).clamp(-2.0, 2.0)
+        t1 = torch.ones(
+            next_action.shape[0],
+            1,
+            device=next_action.device,
+            dtype=next_action.dtype,
+        )
+        q_next = model.q_min_chunk(
+            next_state,
+            next_action,
+            target=True,
+            t=t1,
+        )
+        boot = bootstrap_scale(
+            gamma,
+            model.chunk_size,
+            batch["action_mask"],
+            batch["terminal"],
+        )
+        r_sum = chunk_return(batch["rewards"], gamma, batch["action_mask"])
+        y_td = (r_sum + boot * q_next).clamp(0.0, 1.0)
+        y_mc = batch["mc_return"].clamp(0.0, 1.0)
+        x_t, t = _flow_reverse_state(
+            model,
+            state,
+            actions,
+            reference,
+            apply_guide=model.guide is not None,
+            velocity_provider=provider,
+        )
+
+    qs = model.q_chunk(state, x_t, t=t)
+    td = ((qs - y_td.unsqueeze(0)) ** 2).mean()
+    t_end = torch.ones(
+        actions.shape[0],
+        1,
+        device=actions.device,
+        dtype=actions.dtype,
+    )
+    qs_end = model.q_chunk(state, actions, t=t_end)
+    td = td + ((qs_end - y_td.unsqueeze(0)) ** 2).mean()
+    mc = ((qs - y_mc.unsqueeze(0)) ** 2).mean()
+    mc = mc + ((qs_end - y_mc.unsqueeze(0)) ** 2).mean()
+    cql, cql_info = model.critic.cql_penalty(
+        state.detach() if detach_token else state,
+        x_t.reshape(x_t.shape[0], -1).detach(),
+        t,
+        n_actions=cql_n_actions,
+        coef=cql_coef,
+        action_radius=cql_action_radius,
+        far_scale=1.0,
+    )
+
+    rank = actions.new_zeros(())
+    q_gap = actions.new_zeros(())
+    weight = y_mc.detach().clamp(0.0, 1.0)
+    q_pos = model.q_min_chunk(state, actions, t=t_end)
+    if rank_coef > 0.0 and rank_noise > 0.0:
+        action_neg = actions.detach() + float(rank_noise) * torch.randn_like(actions)
+        q_neg = model.q_min_chunk(state, action_neg, t=t_end)
+        rank = rank + float(rank_coef) * (
+            F.relu(q_neg - q_pos + float(rank_margin)) * weight
+        ).mean()
+        q_gap = q_gap + (q_pos - q_neg).detach().mean()
+    if far_rank_coef > 0.0 and far_rank_noise > 0.0:
+        action_far = actions.detach() + float(far_rank_noise) * torch.randn_like(actions)
+        q_far = model.q_min_chunk(state, action_far, t=t_end)
+        rank = rank + float(far_rank_coef) * (
+            F.relu(q_far - q_pos + float(rank_margin)) * weight
+        ).mean()
+        q_gap = q_gap + (q_pos - q_far).detach().mean()
+    if shuffle_rank_coef > 0.0 and actions.shape[0] > 1:
+        perm = torch.randperm(actions.shape[0], device=actions.device)
+        action_shuffled = actions.detach()[perm]
+        q_shuffled = model.q_min_chunk(state, action_shuffled, t=t_end)
+        rank = rank + float(shuffle_rank_coef) * (
+            F.relu(q_shuffled - q_pos + float(rank_margin)) * weight
+        ).mean()
+        q_gap = q_gap + (q_pos - q_shuffled).detach().mean()
+
+    loss = td + float(mc_coef) * mc + cql + rank
+    opt.zero_grad(set_to_none=True)
+    loss.backward()
+    params = list(model.critic.parameters())
+    if model.tune_token_online:
+        params += list(model.token_ae.encoder.parameters())
+    nn.utils.clip_grad_norm_(params, 1.0)
+    opt.step()
+    model.soft_update_targets(0.005)
+    return {
+        "q_td_loss": float(td.detach()),
+        "q_mc_loss": float(mc.detach()),
+        "cql_loss": float(cql_info["cql_loss"]),
+        "q_rank_loss": float(rank.detach()),
+        "q_rank_gap": float(q_gap.detach()),
+        "q_mean": float(qs_end.mean().detach()),
+        "q_std": float(qs_end.std(unbiased=False).detach()),
+        "q_target": float(y_td.mean().detach()),
+        "flow_t_mean": float(t.mean().detach()),
+        "v_source": 1.0,
     }
 
 
@@ -731,24 +1158,13 @@ def ae_flow_actor_step(
     model.train()
     ae_backend.train(True)
 
-    external = batch["external_cam"]  # list[np.ndarray] length B
-    wrist = batch["wrist_cam"]
-    instructions = batch["instruction"]
     b = int(batch["executed_actions"].shape[0])
     device = batch["executed_actions"].device
 
     with torch.no_grad():
         state = _batch_state(model, batch, detach_token=True, use_target=False)
-        contexts = []
-        for i in range(b):
-            ctx, _feats = ae_backend.encode_context(
-                external[i],
-                wrist[i],
-                str(instructions[i]),
-                batch["proprio"][i].detach().float().cpu().numpy(),
-                action_horizon=int(model.chunk_size),
-            )
-            contexts.append(ctx)
+        contexts = _ae_batch_contexts(model, ae_backend, batch)
+    velocity_provider = _ae_velocity_provider(model, ae_backend, contexts)
 
     a_data_raw = batch["executed_actions"].to(device=device, dtype=torch.float32)
     a_ref_raw = batch["reference_actions"].to(device=device, dtype=torch.float32)
@@ -763,15 +1179,9 @@ def ae_flow_actor_step(
     x_t_raw = (1.0 - t.view(b, 1, 1)) * x0_raw + t.view(b, 1, 1) * a_bc_raw
     target_v_raw = a_bc_raw - x0_raw
 
-    # Per-sample AE velocity (distinct KV contexts); stack for Q/BC.
-    v_raw_rows = []
-    for i in range(b):
-        v_i = ae_backend.velocity(contexts[i], x_t_raw[i : i + 1], t[i : i + 1])
-        v_raw_rows.append(v_i)
-    v_raw = torch.cat(v_raw_rows, dim=0)
     std = model.action_std.to(device=device, dtype=torch.float32).clamp_min(1e-6)
-    v_n = v_raw / std
     x_t = model.normalize_action(x_t_raw)
+    v_n = velocity_provider(state, x_t, t, a_ref)
     target_v = target_v_raw / std
     bc = (((v_n - target_v.detach()) * mask) ** 2).sum() / mask.sum().clamp_min(1.0) / v_n.shape[-1]
 
@@ -791,29 +1201,20 @@ def ae_flow_actor_step(
     adv = q_look - q_base
 
     n_aux = max(1, min(int(endpoint_aux_steps), int(model.flow_steps)))
-    x_end_raw = x_t_raw
+    x_end = x_t
     t_end = t
     for _ in range(n_aux):
-        v_rows = [
-            ae_backend.velocity(contexts[i], x_end_raw[i : i + 1], t_end[i : i + 1])
-            for i in range(b)
-        ]
-        v_i_raw = torch.cat(v_rows, dim=0)
-        v_i = v_i_raw / std
-        x_end_n = model.normalize_action(x_end_raw)
+        v_i = velocity_provider(state, x_end, t_end, a_ref)
         g_i = torch.zeros_like(v_i)
         if model.guide is not None:
-            g_i, _, _ = model.guide.guidance(state, x_end_n.detach(), t_end, v_i.detach())
+            g_i, _, _ = model.guide.guidance(state, x_end.detach(), t_end, v_i.detach())
             g_i = g_i.detach()
         dt_i = torch.minimum(
             torch.full_like(t_end, 1.0 / float(model.flow_steps)),
             1.0 - t_end,
         )
-        # Integrate in raw space: Δx_raw = (v_raw + g_raw) dt
-        g_raw = g_i * std
-        x_end_raw = x_end_raw + (v_i_raw + g_raw) * dt_i.view(b, 1, 1)
+        x_end = x_end + (v_i + g_i) * dt_i.view(b, 1, 1)
         t_end = (t_end + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
-    x_end = model.normalize_action(x_end_raw)
     q_end = model.q_chunk(state, x_end, t=t_end).mean(dim=0)
 
     residual_mse = (
@@ -864,21 +1265,17 @@ def ae_flow_guide_step(
     *,
     beta: float = 0.05,
     distill_coef: float = 1.0,
-    target_delta_frac: float = 1.0,
+    target_delta_frac: float | None = None,
 ) -> dict[str, float]:
     """CF guide distill with base velocity from MolmoAct AE (detached)."""
+    del beta, target_delta_frac
     if model.guide is None:
         return {"guide_loss": 0.0, "guide_adv": 0.0}
     if not model.is_flow:
-        return guide_step(
-            model, opt, batch, beta=beta, target_delta_frac=target_delta_frac
-        )
+        return guide_step(model, opt, batch, beta=beta)
     model.train()
     ae_backend.eval()
 
-    external = batch["external_cam"]
-    wrist = batch["wrist_cam"]
-    instructions = batch["instruction"]
     b = int(batch["reference_actions"].shape[0])
     device = batch["reference_actions"].device
 
@@ -886,45 +1283,26 @@ def ae_flow_guide_step(
         state = _batch_state(model, batch, detach_token=True, use_target=False)
         a1_raw = batch["reference_actions"].to(device=device, dtype=torch.float32)
         a1 = model.normalize_action(a1_raw)
-        contexts = []
-        for i in range(b):
-            ctx, _ = ae_backend.encode_context(
-                external[i],
-                wrist[i],
-                str(instructions[i]),
-                batch["proprio"][i].detach().float().cpu().numpy(),
-                action_horizon=int(model.chunk_size),
-            )
-            contexts.append(ctx)
+        contexts = _ae_batch_contexts(model, ae_backend, batch)
+    velocity_provider = _ae_velocity_provider(model, ae_backend, contexts)
 
     x0_raw = torch.randn_like(a1_raw)
     t = 0.5 + 0.5 * torch.rand(b, 1, device=device, dtype=torch.float32)
     x_t_raw = ((1.0 - t.view(b, 1, 1)) * x0_raw + t.view(b, 1, 1) * a1_raw).detach()
     x_t = model.normalize_action(x_t_raw).detach().requires_grad_(True)
 
-    member = torch.randint(0, model.n_critics, (b,), device=device)
-    flat = x_t.reshape(b, -1)
-    qs = model.target_critic(state.detach(), flat, t)
-    q_sel = qs[member, torch.arange(b, device=device)].sum()
-    grad = torch.autograd.grad(q_sel, x_t, retain_graph=False)[0].detach()
-    target = common_scale_normalize(grad.reshape(b, -1))
+    target = stochastic_target_critic_gradient(
+        model,
+        state,
+        x_t,
+        t=t,
+    )
 
-    std = model.action_std.to(device=device, dtype=torch.float32).clamp_min(1e-6)
     with torch.no_grad():
-        v_rows = [
-            ae_backend.velocity(contexts[i], x_t_raw[i : i + 1], t[i : i + 1])
-            for i in range(b)
-        ]
-        v_raw = torch.cat(v_rows, dim=0)
-        v = (v_raw / std).detach()
+        v = velocity_provider(state, x_t.detach(), t, a1).detach()
 
     g_chunk, w_flat, diag = model.guide.guidance(state.detach(), x_t.detach(), t, v)
-    # v12: magnitude-aware distill (mirror residual target_delta_frac).
-    t_unit = target / target.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-    guide_coef = float(getattr(model.guide, "guidance_coef", model.guidance_coef))
-    target_rms = float(target_delta_frac) * guide_coef
-    target_g = (t_unit * target_rms * t).reshape_as(g_chunk)
-    distill = F.mse_loss(g_chunk, target_g)
+    distill = F.mse_loss(w_flat, target)
 
     dt = torch.minimum(
         torch.full_like(t, 1.0 / float(model.flow_steps)),
@@ -933,12 +1311,12 @@ def ae_flow_guide_step(
     x_guided = x_t.detach() + (v + g_chunk) * dt.view(b, 1, 1)
     x_base = x_t.detach() + v * dt.view(b, 1, 1)
     t_plus = (t + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
-    q_g = model.q_min_chunk(state.detach(), x_guided, t=t_plus)
     with torch.no_grad():
+        q_g = model.q_min_chunk(state.detach(), x_guided, t=t_plus)
         q_b = model.q_min_chunk(state.detach(), x_base, t=t_plus)
     adv = q_g - q_b
     mag = (g_chunk**2).mean()
-    loss = float(distill_coef) * distill - adv.mean() + float(beta) * mag
+    loss = float(distill_coef) * distill
     opt.zero_grad(set_to_none=True)
     loss.backward()
     nn.utils.clip_grad_norm_(model.guide.parameters(), 1.0)
@@ -949,6 +1327,7 @@ def ae_flow_guide_step(
         "guide_distill": float(distill.detach()),
         "guide_mse": float(mag.detach()),
         "w_norm": float(w_flat.norm(dim=-1).mean().detach()),
+        "target_norm": float(target.norm(dim=-1).mean().detach()),
     }
     for k, v_t in diag.items():
         out[f"guide_{k}"] = float(v_t.detach()) if torch.is_tensor(v_t) else float(v_t)
@@ -962,15 +1341,14 @@ def flow_guide_step(
     *,
     beta: float = 0.05,
     distill_coef: float = 1.0,
-    target_delta_frac: float = 1.0,
+    target_delta_frac: float | None = None,
 ) -> dict[str, float]:
-    """Distill ∇_x Q into G_φ with residual-style magnitude target (v12)."""
+    """Distill stochastic target-critic gradients into raw W."""
+    del beta, target_delta_frac
     if model.guide is None:
         return {"guide_loss": 0.0, "guide_adv": 0.0}
     if not model.is_flow:
-        return guide_step(
-            model, opt, batch, beta=beta, target_delta_frac=target_delta_frac
-        )
+        return guide_step(model, opt, batch, beta=beta)
     model.train()
     with torch.no_grad():
         state = _batch_state(model, batch, detach_token=True, use_target=False)
@@ -980,23 +1358,16 @@ def flow_guide_step(
     # Bias BC times toward the endpoint where the fixed critic is informative.
     t = 0.5 + 0.5 * torch.rand(b, 1, device=a1.device, dtype=a1.dtype)
     x_t = ((1.0 - t.view(b, 1, 1)) * x0 + t.view(b, 1, 1) * a1).detach().requires_grad_(True)
-    # Sample one target critic member per batch element.
-    member = torch.randint(0, model.n_critics, (b,), device=a1.device)
-    flat = x_t.reshape(b, -1)
-    qs = model.target_critic(state.detach(), flat, t)  # (E,B)
-    q_sel = qs[member, torch.arange(b, device=a1.device)].sum()
-    grad = torch.autograd.grad(q_sel, x_t, retain_graph=False)[0].detach()
-    g_flat = grad.reshape(b, -1)
-    target = common_scale_normalize(g_flat)
+    target = stochastic_target_critic_gradient(
+        model,
+        state,
+        x_t,
+        t=t,
+    )
 
     v = model.flow_velocity(state.detach(), x_t.detach(), t, a1).detach()
     g_chunk, w_flat, diag = model.guide.guidance(state.detach(), x_t.detach(), t, v)
-    # Magnitude-aware distill: match direction × (frac * guidance_coef * t).
-    t_unit = target / target.norm(dim=-1, keepdim=True).clamp_min(1e-6)
-    guide_coef = float(getattr(model.guide, "guidance_coef", model.guidance_coef))
-    target_rms = float(target_delta_frac) * guide_coef
-    target_g = (t_unit * target_rms * t).reshape_as(g_chunk)
-    distill = F.mse_loss(g_chunk, target_g)
+    distill = F.mse_loss(w_flat, target)
 
     dt = torch.minimum(
         torch.full_like(t, 1.0 / float(model.flow_steps)),
@@ -1005,12 +1376,12 @@ def flow_guide_step(
     x_guided = x_t.detach() + (v + g_chunk) * dt.view(b, 1, 1)
     x_base = x_t.detach() + v * dt.view(b, 1, 1)
     t_plus = (t + 1.0 / float(model.flow_steps)).clamp(0.0, 1.0)
-    q_g = model.q_min_chunk(state.detach(), x_guided, t=t_plus)
     with torch.no_grad():
+        q_g = model.q_min_chunk(state.detach(), x_guided, t=t_plus)
         q_b = model.q_min_chunk(state.detach(), x_base, t=t_plus)
     adv = q_g - q_b
     mag = (g_chunk**2).mean()
-    loss = float(distill_coef) * distill - adv.mean() + float(beta) * mag
+    loss = float(distill_coef) * distill
     opt.zero_grad(set_to_none=True)
     loss.backward()
     nn.utils.clip_grad_norm_(model.guide.parameters(), 1.0)
@@ -1021,6 +1392,7 @@ def flow_guide_step(
         "guide_distill": float(distill.detach()),
         "guide_mse": float(mag.detach()),
         "w_norm": float(w_flat.norm(dim=-1).mean().detach()),
+        "target_norm": float(target.norm(dim=-1).mean().detach()),
     }
     for k, v_t in diag.items():
         out[f"guide_{k}"] = float(v_t.detach()) if torch.is_tensor(v_t) else float(v_t)
