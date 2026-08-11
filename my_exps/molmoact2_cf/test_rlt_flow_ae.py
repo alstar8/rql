@@ -39,7 +39,9 @@ from train_rlt_online import (
     RLTFeatureError,
     RLTOnlinePolicy,
     _gate_status,
+    _parse_snapshot_episodes,
     _resolve_resume_artifacts,
+    _save_eval_snapshot,
     parse_args,
 )
 
@@ -469,6 +471,37 @@ def test_eval_infers_ae_checkpoint_beside_rlt_checkpoint():
         assert artifacts.replay is None
         assert artifacts.ae_trainable == ae_path
         assert artifacts.ae_replay is None
+
+
+def test_eval_snapshot_is_immutable_and_keeps_gate_meta():
+    model = _small_model(flow=False, guide=True)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        out_dir = Path(temp_dir)
+        snapshot = _save_eval_snapshot(
+            model,
+            None,
+            out_dir,
+            valid_episodes=100,
+            env_steps=1234,
+            meta={"gate_deploy_actor": True, "gate_deploy_guide": True},
+        )
+        checkpoint = snapshot / "rlt_cf.pt"
+        first_mtime = checkpoint.stat().st_mtime_ns
+        second = _save_eval_snapshot(
+            model,
+            None,
+            out_dir,
+            valid_episodes=100,
+            env_steps=9999,
+            meta={"gate_deploy_actor": False},
+        )
+        second_mtime = checkpoint.stat().st_mtime_ns
+        restored = MolmoAct2RLTCF.load(str(checkpoint))
+    assert second == snapshot
+    assert second_mtime == first_mtime
+    assert restored.loaded_meta["valid_episodes"] == 100
+    assert restored.loaded_meta["gate_deploy_actor"] is True
+    assert _parse_snapshot_episodes("0, 100,100,400") == {0, 100, 400}
 
 
 def _gate_args(policy: str) -> SimpleNamespace:

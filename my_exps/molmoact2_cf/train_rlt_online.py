@@ -248,6 +248,19 @@ class ResumeArtifacts:
     ae_replay: Path | None
 
 
+def _parse_snapshot_episodes(raw: str) -> set[int]:
+    episodes: set[int] = set()
+    for token in str(raw or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        value = int(token)
+        if value < 0:
+            raise ValueError("snapshot episodes must be non-negative")
+        episodes.add(value)
+    return episodes
+
+
 def _request_stop(signum: int, _frame: Any) -> None:
     global _STOP_REQUESTED
     _STOP_REQUESTED = True
@@ -1427,6 +1440,56 @@ def _save_ae_trainable(
         raise
 
 
+def _save_eval_snapshot(
+    model: MolmoAct2RLTCF,
+    ae_backend: MolmoAEBackend | None,
+    out_dir: Path,
+    valid_episodes: int,
+    env_steps: int,
+    meta: dict[str, Any],
+) -> Path:
+    """Save an immutable evaluation bundle at a requested episode milestone."""
+    snapshot_dir = out_dir / "snapshots" / f"ep_{int(valid_episodes):06d}"
+    required = [snapshot_dir / "rlt_cf.pt", snapshot_dir / "snapshot.json"]
+    if ae_backend is not None:
+        required.append(snapshot_dir / "molmo_ae_lora.pt")
+    if snapshot_dir.exists():
+        if all(path.is_file() for path in required):
+            return snapshot_dir
+        raise RuntimeError(f"Refusing partial evaluation snapshot: {snapshot_dir}")
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_meta = {
+        **meta,
+        "snapshot": True,
+        "valid_episodes": int(valid_episodes),
+        "env_steps": int(env_steps),
+    }
+    rlt_path = snapshot_dir / "rlt_cf.pt"
+    _atomic_model_save(model, rlt_path, snapshot_meta)
+    if ae_backend is not None:
+        ae_path = snapshot_dir / "molmo_ae_lora.pt"
+        temporary = ae_path.with_name(f".{ae_path.name}.tmp")
+        _cleanup_path(temporary)
+        ae_backend.save_trainable(
+            temporary,
+            meta={
+                "valid_episodes": int(valid_episodes),
+                "env_steps": int(env_steps),
+            },
+        )
+        with open(temporary, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, ae_path)
+    manifest_path = snapshot_dir / "snapshot.json"
+    temporary_manifest = manifest_path.with_name(f".{manifest_path.name}.tmp")
+    temporary_manifest.write_text(
+        json.dumps(snapshot_meta, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary_manifest, manifest_path)
+    return snapshot_dir
+
+
 def _append_metrics_row(metrics_path: Path, row: dict[str, Any]) -> None:
     def _write() -> None:
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1823,6 +1886,33 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             successes,
         )
 
+    snapshot_episodes = _parse_snapshot_episodes(
+        str(getattr(args, "snapshot_episodes", ""))
+    )
+    if not eval_only and valid_episodes in snapshot_episodes:
+        startup_snapshot_meta = {
+            **checkpoint_gate_meta,
+            "config_name": str(args.config_name),
+            "gate_would_enable": bool(
+                checkpoint_gate_meta.get("gate_would_enable", False)
+            ),
+            "gate_deploy_actor": bool(
+                checkpoint_gate_meta.get("gate_deploy_actor", False)
+            ),
+            "gate_deploy_guide": bool(
+                checkpoint_gate_meta.get("gate_deploy_guide", False)
+            ),
+        }
+        snapshot_dir = _save_eval_snapshot(
+            model,
+            ae_backend,
+            out_dir,
+            valid_episodes,
+            env_steps,
+            startup_snapshot_meta,
+        )
+        log.info("Evaluation snapshot ready: %s", snapshot_dir)
+
     while (
         not _STOP_REQUESTED
         and env_steps < args.target_env_steps
@@ -2102,6 +2192,16 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             checkpoint_gate_meta.clear()
             checkpoint_gate_meta.update(row)
             model.loaded_meta = dict(row)
+            if valid_episodes in snapshot_episodes:
+                snapshot_dir = _save_eval_snapshot(
+                    model,
+                    ae_backend,
+                    out_dir,
+                    valid_episodes,
+                    env_steps,
+                    row,
+                )
+                log.info("Evaluation snapshot ready: %s", snapshot_dir)
             last_logged_episode = valid_episodes
             log.info(
                 "METRICS config=%s steps=%d sr=%.3f window_sr=%.3f "
@@ -2226,6 +2326,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=10,
         help="Checkpoint/metrics cadence for crash recovery (watchdog resumes).",
+    )
+    parser.add_argument(
+        "--snapshot_episodes",
+        type=str,
+        default="",
+        help="Comma-separated valid-episode milestones for immutable eval bundles.",
     )
     parser.add_argument("--window_episodes", type=int, default=100)
     parser.add_argument("--replay_out", type=str, default="")
@@ -2462,6 +2568,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--log_every_episodes must be positive")
     if args.ckpt_every_episodes <= 0:
         parser.error("--ckpt_every_episodes must be positive")
+    try:
+        _parse_snapshot_episodes(args.snapshot_episodes)
+    except ValueError as error:
+        parser.error(str(error))
     if args.updates_per_episode < 0:
         parser.error("--updates_per_episode cannot be negative")
     if args.batch_size <= 0 or args.token_batch_size <= 0:
