@@ -35,9 +35,15 @@ belongs_to_run() {
   [[ -r "${environ}" ]] || return 1
   local entry
   while IFS= read -r entry; do
-    if [[ "${entry}" == "RLT_CF_V4_RUN_DIR=${RUN_DIR}" ]]; then
-      return 0
-    fi
+    case "${entry}" in
+      "RLT_CF_V4_RUN_DIR=${RUN_DIR}"|\
+      "RLT_CF_V13_RUN_DIR=${RUN_DIR}"|\
+      "RLT_CF_V14_RUN_DIR=${RUN_DIR}"|\
+      "RLT_CF_V15_RUN_DIR=${RUN_DIR}"|\
+      "RLT_CF_V16_RUN_DIR=${RUN_DIR}")
+        return 0
+        ;;
+    esac
   done < <(tr '\0' '\n' < "${environ}")
   return 1
 }

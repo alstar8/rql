@@ -1,10 +1,11 @@
 """Generate and validate the controlled ProcTHOR house-0 kettle benchmark.
 
-The default output is a 6 x 4 train Cartesian product and a disjoint 3 x 4
-validation Cartesian product. Kettle poses are sampled with
-``place_object_near`` on the kettle's anchor support. Robot states are sampled
-with ``CPUMujocoEnv.place_robot_near``. Every Cartesian pair is replayed and
-checked for robot collision and non-colliding grasps before it is frozen.
+The default output contains six train kettle positions with four robot states
+sampled separately for each kettle, plus three held-out validation kettle
+positions with four separately conditioned robot states each. Kettle poses are
+sampled with ``place_object_near`` on the anchor support. Robot states are
+sampled with ``CPUMujocoEnv.place_robot_near`` at their conditioning kettle.
+Every final pose pair is replayed, checked, and frozen.
 
 Generation intentionally does not run a policy rollout or MolmoAct2 inference.
 Use ``--validate-only`` for a simulation-free schema and invariant check.
@@ -26,6 +27,7 @@ import pickle
 import shutil
 import subprocess
 import sys
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -93,16 +95,21 @@ DEFAULT_N_VAL = DEFAULT_VAL_KETTLE_COUNT * DEFAULT_ROBOT_COUNT_PER_SPLIT
 # unambiguous.
 KETTLE_XY_DEDUP_M = 0.045
 KETTLE_YAW_DEDUP_RAD = math.radians(10.0)
-ROBOT_XY_DEDUP_M = 0.12
-ROBOT_YAW_DEDUP_RAD = math.radians(10.0)
+ROBOT_XY_DEDUP_M = 0.04
+ROBOT_YAW_DEDUP_RAD = math.radians(3.0)
+ROBOT_FALLBACK_XY_DEDUP_M = 0.01
+ROBOT_FALLBACK_YAW_DEDUP_RAD = math.radians(0.5)
 
 KETTLE_PLACEMENT_MIN_RADIUS_M = 0.025
 KETTLE_PLACEMENT_MAX_RADIUS_M = 0.18
 KETTLE_PLACEMENT_ATTEMPTS = 200
-ROBOT_SAMPLE_RADIUS_RANGE_M = (0.38, 0.50)
+ROBOT_SAMPLE_RADIUS_RANGE_M = (0.52, 0.68)
 ROBOT_REPLAY_MAX_DISTANCE_M = 0.70
 MAX_CANDIDATE_ATTEMPTS = 160
+ROBOT_PRIMARY_ATTEMPTS = 24
+ROBOT_MAX_ATTEMPTS_PER_STATE = 64
 POSE_ATOL = 1e-7
+ROBOT_REPLAY_ATOL = 1e-5
 POSE_HASH_DECIMALS = 8
 
 DEFAULT_OUTPUT_ROOT = _HERE / "runs" / "benchmarks" / BENCHMARK_ID
@@ -227,6 +234,20 @@ def robot_state_hash(
     )
 
 
+def robot_qpos_matches(
+    first: dict[str, list[float]],
+    second: dict[str, list[float]],
+    *,
+    atol: float = ROBOT_REPLAY_ATOL,
+) -> bool:
+    if set(first) != set(second):
+        return False
+    return all(
+        np.allclose(first[key], second[key], atol=atol, rtol=0.0)
+        for key in first
+    )
+
+
 def derive_seed(master_seed: int, *labels: object) -> int:
     """Derive a stable positive 31-bit seed without relying on Python hash()."""
 
@@ -286,18 +307,18 @@ def build_pair_layout(
     max_kettle_count: int,
     max_robot_count: int,
 ) -> list[PairIndex]:
-    """Build a deterministic full grid or prefix for small smoke generation."""
+    """Build the deterministic grouped layout or its smoke prefix."""
 
     max_episodes = max_kettle_count * max_robot_count
     if not 1 <= n_episodes <= max_episodes:
         raise ValueError(f"n_episodes must be in [1, {max_episodes}], got {n_episodes}")
-    full_grid = [
+    grouped_layout = [
         PairIndex(kettle_index, robot_index)
         for kettle_index, robot_index in itertools.product(
             range(max_kettle_count), range(max_robot_count)
         )
     ]
-    return full_grid[:n_episodes]
+    return grouped_layout[:n_episodes]
 
 
 def required_axis_counts(layout: list[PairIndex]) -> tuple[int, int]:
@@ -305,6 +326,20 @@ def required_axis_counts(layout: list[PairIndex]) -> tuple[int, int]:
         max(pair.kettle_index for pair in layout) + 1,
         max(pair.robot_index for pair in layout) + 1,
     )
+
+
+def conditional_robot_requirements(
+    layout: list[PairIndex],
+) -> dict[int, list[int]]:
+    """Return robot-state indices required separately for each kettle."""
+
+    requirements: dict[int, list[int]] = defaultdict(list)
+    for pair in layout:
+        requirements[pair.kettle_index].append(pair.robot_index)
+    return {
+        kettle_index: sorted(robot_indices)
+        for kettle_index, robot_indices in sorted(requirements.items())
+    }
 
 
 def find_anchor_benchmark(anchor_override: Path | None = None) -> Path:
@@ -408,7 +443,7 @@ def active_v12_processes() -> list[str]:
 
 
 class ControlledHouse0KettleSampler(PickTaskSampler):
-    """PickTaskSampler that samples API-backed factors and replays their cross product."""
+    """PickTaskSampler for API-backed kettle-conditioned robot pose pairs."""
 
     def __init__(self, config: FrankaPickDroidMiniBench, anchor: EpisodeSpec) -> None:
         self.anchor = anchor
@@ -419,6 +454,9 @@ class ControlledHouse0KettleSampler(PickTaskSampler):
             for key, value in anchor.robot.init_qpos.items()
             if len(value) > 0
         }
+        self.anchor_robot_base_pose = copy.deepcopy(
+            anchor.task["robot_base_pose"]
+        )
         self.base_init_qpos_noise_range = copy.deepcopy(
             config.robot_config.init_qpos_noise_range
         )
@@ -462,14 +500,14 @@ class ControlledHouse0KettleSampler(PickTaskSampler):
         return metadata
 
     def randomize_scene(self, env: Any, robot_view: Any) -> None:
-        if self.request.robot_init_qpos is None:
+        if self.request.mode == "sample_robot":
             self.config.robot_config.init_qpos = copy.deepcopy(self.anchor_init_qpos)
             self.config.robot_config.init_qpos_noise_range = copy.deepcopy(
                 self.base_init_qpos_noise_range
             )
         else:
             self.config.robot_config.init_qpos = copy.deepcopy(
-                self.request.robot_init_qpos
+                self.request.robot_init_qpos or self.anchor_init_qpos
             )
             self.config.robot_config.init_qpos_noise_range = None
 
@@ -518,7 +556,7 @@ class ControlledHouse0KettleSampler(PickTaskSampler):
         self.candidate_objects = target_candidates
 
     def _sample_and_place_robot(self, env: Any) -> None:
-        if self.request.mode != "replay_pair":
+        if self.request.mode == "sample_robot":
             super()._sample_and_place_robot(env)
             self.last_robot_collision_free = not env.check_robot_collision_in_current_pose(
                 "robot_0/"
@@ -527,7 +565,13 @@ class ControlledHouse0KettleSampler(PickTaskSampler):
                 raise RobotPlacementError("place_robot_near returned a colliding robot state")
             return
 
-        if self.request.robot_base_pose is None or self.request.robot_init_qpos is None:
+        if self.request.mode == "sample_kettle":
+            robot_base_pose = self.anchor_robot_base_pose
+            robot_init_qpos = self.anchor_init_qpos
+        else:
+            robot_base_pose = self.request.robot_base_pose
+            robot_init_qpos = self.request.robot_init_qpos
+        if robot_base_pose is None or robot_init_qpos is None:
             raise ValueError("replay_pair requires robot_base_pose and robot_init_qpos")
 
         task_config = self.config.task_config
@@ -536,8 +580,8 @@ class ControlledHouse0KettleSampler(PickTaskSampler):
         start_pose = pose_mat_to_7d(pickup_obj.pose)
         robot_view = env.current_robot.robot_view
         robot_view.base.pose = pos_quat_to_pose_mat(
-            self.request.robot_base_pose[:3],
-            self.request.robot_base_pose[3:],
+            robot_base_pose[:3],
+            robot_base_pose[3:],
         )
         mujoco.mj_forward(env.current_model, env.current_data)
 
@@ -547,7 +591,7 @@ class ControlledHouse0KettleSampler(PickTaskSampler):
         if not self.last_robot_collision_free:
             raise RobotPlacementError("Replayed robot state collides with the scene")
 
-        robot_xy = np.asarray(self.request.robot_base_pose[:2], dtype=float)
+        robot_xy = np.asarray(robot_base_pose[:2], dtype=float)
         kettle_xy = np.asarray(start_pose[:2], dtype=float)
         robot_kettle_distance = float(np.linalg.norm(robot_xy - kettle_xy))
         if not 0.0 < robot_kettle_distance < ROBOT_REPLAY_MAX_DISTANCE_M:
@@ -562,7 +606,7 @@ class ControlledHouse0KettleSampler(PickTaskSampler):
         env.current_robot.compute_control()
 
         task_config.pickup_obj_start_pose = start_pose.tolist()
-        task_config.robot_base_pose = copy.deepcopy(self.request.robot_base_pose)
+        task_config.robot_base_pose = copy.deepcopy(robot_base_pose)
         goal_pose = start_pose.copy()
         goal_pose[2] += GOAL_Z_OFFSET_M
         task_config.pickup_obj_goal_pose = goal_pose.tolist()
@@ -631,6 +675,7 @@ def build_generation_config(
     sampler_config.max_tasks = math.inf
     sampler_config.check_robot_placement_visibility = True
     sampler_config.base_pose_sampling_radius_range = ROBOT_SAMPLE_RADIUS_RANGE_M
+    sampler_config.robot_placement_exclusion_threshold = ROBOT_XY_DEDUP_M
     sampler_config.randomize_lighting = False
     sampler_config.randomize_textures = False
     sampler_config.randomize_textures_all = False
@@ -700,6 +745,10 @@ def sample_once(
 ) -> SampleOutcome:
     sampler.configure(request)
     sampler.seed_task_sampling(seed)
+    # Candidate-level placement failures are expected in this controlled
+    # search. They must not permanently blacklist the single fixed asset.
+    sampler._dynamic_blacklist.clear()
+    sampler._asset_failure_counts.clear()
     task: PickTask | None = None
     try:
         sampled_task = sampler.sample_task(house_index=HOUSE_INDEX)
@@ -841,151 +890,195 @@ def _collect_robot_candidates(
     anchor: EpisodeSpec,
     anchor_dir: Path,
     master_seed: int,
-    train_count: int,
-    val_count: int,
-    kettle_candidates: list[dict[str, Any]],
+    train_layout: list[PairIndex],
+    val_layout: list[PairIndex],
+    train_kettles: list[dict[str, Any]],
+    val_kettles: list[dict[str, Any]],
     generation_log: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    accepted: list[dict[str, Any]] = []
-    total_count = train_count + val_count
-    reference_kettle_pose = sampler.anchor_kettle_pose
-    sampler.used_robot_positions[TARGET_OBJECT] = []
+    accepted_by_split: dict[str, list[dict[str, Any]]] = {
+        "train": [],
+        "val": [],
+    }
+    all_state_hashes: set[str] = set()
+    split_inputs = (
+        ("train", train_layout, train_kettles),
+        ("val", val_layout, val_kettles),
+    )
 
-    for candidate_index in range(total_count):
-        split = "train" if candidate_index < train_count else "val"
-        split_index = candidate_index if split == "train" else candidate_index - train_count
-        candidate_id = f"{split}_r{split_index:02d}"
-        for attempt in range(MAX_CANDIDATE_ATTEMPTS):
-            sampler.used_robot_positions[TARGET_OBJECT] = [
-                np.asarray(candidate["base_pose"][:3], dtype=float)
-                for candidate in accepted
-            ]
-            seed = derive_seed(master_seed, "robot", candidate_index, attempt)
-            try:
-                outcome = sample_once(
-                    sampler,
-                    SamplingRequest(
-                        mode="sample_robot",
-                        kettle_pose=reference_kettle_pose,
-                    ),
-                    seed,
-                    anchor,
-                    anchor_dir,
-                    freeze_episode=False,
-                )
-                distinct, reason = pose_is_distinct(
-                    outcome.robot_base_pose,
-                    [candidate["base_pose"] for candidate in accepted],
-                    ROBOT_XY_DEDUP_M,
-                    ROBOT_YAW_DEDUP_RAD,
-                )
-                if not distinct:
-                    generation_log.append(
-                        _attempt_log(
-                            "robot_candidate",
-                            seed,
-                            False,
-                            reason,
-                            candidate_id=candidate_id,
-                            attempt=attempt,
-                            base_pose=outcome.robot_base_pose,
-                        )
+    for split, layout, kettles in split_inputs:
+        requirements = conditional_robot_requirements(layout)
+        for kettle_index, robot_indices in requirements.items():
+            kettle = kettles[kettle_index]
+            accepted_group: list[dict[str, Any]] = []
+            for robot_index in robot_indices:
+                candidate_id = f"{split}_k{kettle_index:02d}_r{robot_index:02d}"
+                rejection_reasons: list[str] = []
+                for attempt in range(ROBOT_MAX_ATTEMPTS_PER_STATE):
+                    fallback = attempt >= ROBOT_PRIMARY_ATTEMPTS
+                    xy_threshold = (
+                        ROBOT_FALLBACK_XY_DEDUP_M if fallback else ROBOT_XY_DEDUP_M
                     )
-                    continue
-
-                init_qpos_hash = stable_hash(outcome.robot_init_qpos)
-                if init_qpos_hash in {
-                    candidate["init_qpos_hash"] for candidate in accepted
-                }:
-                    generation_log.append(
-                        _attempt_log(
-                            "robot_candidate",
-                            seed,
-                            False,
-                            "init_qpos_dedup: identical robot joint initialization",
-                            candidate_id=candidate_id,
-                            attempt=attempt,
-                        )
+                    yaw_threshold = (
+                        ROBOT_FALLBACK_YAW_DEDUP_RAD
+                        if fallback
+                        else ROBOT_YAW_DEDUP_RAD
                     )
-                    continue
-
-                cross_validations = []
-                for kettle in kettle_candidates:
-                    replay_seed = derive_seed(
+                    sampler.config.task_sampler_config.robot_placement_exclusion_threshold = (
+                        xy_threshold
+                    )
+                    sampler.used_robot_positions[TARGET_OBJECT] = [
+                        np.asarray(candidate["base_pose"][:3], dtype=float)
+                        for candidate in accepted_group
+                    ]
+                    seed = derive_seed(
                         master_seed,
-                        "robot_cross_validation",
-                        candidate_index,
+                        "conditional_robot",
+                        split,
+                        kettle_index,
+                        robot_index,
                         attempt,
-                        kettle["id"],
                     )
-                    replay = sample_once(
-                        sampler,
-                        SamplingRequest(
-                            mode="replay_pair",
-                            kettle_pose=kettle["pose"],
-                            robot_base_pose=outcome.robot_base_pose,
-                            robot_init_qpos=outcome.robot_init_qpos,
-                        ),
-                        replay_seed,
-                        anchor,
-                        anchor_dir,
-                        freeze_episode=False,
-                    )
-                    cross_validations.append(
-                        {
-                            "kettle_id": kettle["id"],
-                            "seed": replay_seed,
-                            "feasible_grasp_count": replay.feasible_grasp_count,
+                    try:
+                        outcome = sample_once(
+                            sampler,
+                            SamplingRequest(
+                                mode="sample_robot",
+                                kettle_pose=kettle["pose"],
+                            ),
+                            seed,
+                            anchor,
+                            anchor_dir,
+                            freeze_episode=False,
+                        )
+                        distinct, reason = pose_is_distinct(
+                            outcome.robot_base_pose,
+                            [candidate["base_pose"] for candidate in accepted_group],
+                            xy_threshold,
+                            yaw_threshold,
+                        )
+                        if not distinct:
+                            rejection_reasons.append(reason or "robot_base_dedup")
+                            generation_log.append(
+                                _attempt_log(
+                                    "conditional_robot_candidate",
+                                    seed,
+                                    False,
+                                    reason,
+                                    candidate_id=candidate_id,
+                                    conditioning_kettle_id=kettle["id"],
+                                    attempt=attempt,
+                                    fallback_thresholds=fallback,
+                                    base_pose=outcome.robot_base_pose,
+                                )
+                            )
+                            continue
+
+                        state_hash = robot_state_hash(
+                            outcome.robot_base_pose,
+                            outcome.robot_init_qpos,
+                        )
+                        if state_hash in all_state_hashes:
+                            reason = (
+                                "robot_state_dedup: full base+init-qpos state already accepted"
+                            )
+                            rejection_reasons.append(reason)
+                            generation_log.append(
+                                _attempt_log(
+                                    "conditional_robot_candidate",
+                                    seed,
+                                    False,
+                                    reason,
+                                    candidate_id=candidate_id,
+                                    conditioning_kettle_id=kettle["id"],
+                                    attempt=attempt,
+                                    fallback_thresholds=fallback,
+                                )
+                            )
+                            continue
+
+                        candidate = {
+                            "id": candidate_id,
+                            "pair_id": f"{split}_k{kettle_index:02d}_r{robot_index:02d}",
+                            "split": split,
+                            "kettle_index": kettle_index,
+                            "robot_index": robot_index,
+                            "conditioning_kettle_id": kettle["id"],
+                            "conditioning_kettle_pose_hash": kettle["pose_hash"],
+                            "seed": seed,
+                            "sampling_attempt": attempt,
+                            "base_pose": outcome.robot_base_pose,
+                            "base_pose_hash": pose_hash(outcome.robot_base_pose),
+                            "yaw_rad": yaw_from_pose(outcome.robot_base_pose),
+                            "init_qpos": outcome.robot_init_qpos,
+                            "init_qpos_hash": stable_hash(outcome.robot_init_qpos),
+                            "robot_state_hash": state_hash,
+                            "conditioned_pair_hash": stable_hash(
+                                {
+                                    "kettle_pose": kettle["pose"],
+                                    "robot_base_pose": outcome.robot_base_pose,
+                                    "robot_init_qpos": outcome.robot_init_qpos,
+                                }
+                            ),
+                            "dedup_xy_threshold_m": xy_threshold,
+                            "dedup_yaw_threshold_rad": yaw_threshold,
+                            "fallback_thresholds_used": fallback,
+                            "feasible_grasp_count": outcome.feasible_grasp_count,
                             "robot_collision_free": True,
+                            "camera_visibility_check_enabled": True,
                         }
+                        accepted_group.append(candidate)
+                        accepted_by_split[split].append(candidate)
+                        all_state_hashes.add(state_hash)
+                        generation_log.append(
+                            _attempt_log(
+                                "conditional_robot_candidate",
+                                seed,
+                                True,
+                                candidate_id=candidate_id,
+                                conditioning_kettle_id=kettle["id"],
+                                attempt=attempt,
+                                fallback_thresholds=fallback,
+                                base_pose=outcome.robot_base_pose,
+                                init_qpos=outcome.robot_init_qpos,
+                                feasible_grasp_count=outcome.feasible_grasp_count,
+                            )
+                        )
+                        break
+                    except Exception as error:
+                        reason = f"{type(error).__name__}: {error}"
+                        rejection_reasons.append(reason)
+                        generation_log.append(
+                            _attempt_log(
+                                "conditional_robot_candidate",
+                                seed,
+                                False,
+                                reason,
+                                candidate_id=candidate_id,
+                                conditioning_kettle_id=kettle["id"],
+                                attempt=attempt,
+                                fallback_thresholds=fallback,
+                            )
+                        )
+                else:
+                    reason_counts = Counter(
+                        reason.split(":", 1)[0] for reason in rejection_reasons
+                    )
+                    recent = rejection_reasons[-5:]
+                    accepted_ids = [candidate["id"] for candidate in accepted_group]
+                    raise RuntimeError(
+                        f"Unable to generate {candidate_id} conditioned on {kettle['id']} "
+                        f"after {ROBOT_MAX_ATTEMPTS_PER_STATE} attempts "
+                        f"({ROBOT_PRIMARY_ATTEMPTS} primary, "
+                        f"{ROBOT_MAX_ATTEMPTS_PER_STATE - ROBOT_PRIMARY_ATTEMPTS} "
+                        f"fallback); accepted group states={accepted_ids}; "
+                        f"rejection categories={dict(reason_counts)}; recent={recent}"
                     )
 
-                candidate = {
-                    "id": candidate_id,
-                    "split": split,
-                    "index": split_index,
-                    "seed": seed,
-                    "base_pose": outcome.robot_base_pose,
-                    "base_pose_hash": pose_hash(outcome.robot_base_pose),
-                    "yaw_rad": yaw_from_pose(outcome.robot_base_pose),
-                    "init_qpos": outcome.robot_init_qpos,
-                    "init_qpos_hash": init_qpos_hash,
-                    "robot_state_hash": robot_state_hash(
-                        outcome.robot_base_pose,
-                        outcome.robot_init_qpos,
-                    ),
-                    "cross_validations": cross_validations,
-                }
-                accepted.append(candidate)
-                generation_log.append(
-                    _attempt_log(
-                        "robot_candidate",
-                        seed,
-                        True,
-                        candidate_id=candidate_id,
-                        attempt=attempt,
-                        base_pose=outcome.robot_base_pose,
-                        init_qpos=outcome.robot_init_qpos,
-                        cross_validations=cross_validations,
-                    )
-                )
-                break
-            except Exception as error:
-                generation_log.append(
-                    _attempt_log(
-                        "robot_candidate",
-                        seed,
-                        False,
-                        f"{type(error).__name__}: {error}",
-                        candidate_id=candidate_id,
-                        attempt=attempt,
-                    )
-                )
-        else:
-            raise RuntimeError(
-                f"Unable to generate {candidate_id} after {MAX_CANDIDATE_ATTEMPTS} attempts"
-            )
-    return accepted[:train_count], accepted[train_count:]
+    sampler.config.task_sampler_config.robot_placement_exclusion_threshold = (
+        ROBOT_XY_DEDUP_M
+    )
+    return accepted_by_split["train"], accepted_by_split["val"]
 
 
 def _non_kettle_scene(
@@ -1069,10 +1162,18 @@ def _build_split(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     episodes = []
     episode_manifest = []
+    robots_by_pair = {
+        (robot["kettle_index"], robot["robot_index"]): robot for robot in robots
+    }
     for episode_index, pair in enumerate(layout):
         kettle = kettles[pair.kettle_index]
-        robot = robots[pair.robot_index]
+        robot = robots_by_pair[(pair.kettle_index, pair.robot_index)]
         pair_id = f"{split}_{pair.pair_id}"
+        if robot["conditioning_kettle_id"] != kettle["id"]:
+            raise RuntimeError(
+                f"{robot['id']} is conditioned on {robot['conditioning_kettle_id']}, "
+                f"not {kettle['id']}"
+            )
         seed = derive_seed(master_seed, "episode", split, pair.kettle_index, pair.robot_index)
         outcome = sample_once(
             sampler,
@@ -1099,7 +1200,8 @@ def _build_split(
             "split": split,
             "pair_id": pair_id,
             "kettle_pose_id": kettle["id"],
-            "robot_pose_id": robot["id"],
+            "robot_state_id": robot["id"],
+            "robot_conditioning_kettle_id": robot["conditioning_kettle_id"],
             "kettle_pose_hash": pose_hash(start_pose),
             "robot_base_pose_hash": pose_hash(base_pose),
             "robot_state_hash": robot_state_hash(base_pose, init_qpos),
@@ -1114,7 +1216,8 @@ def _build_split(
             "pair_id": pair_id,
             "seed": seed,
             "kettle_pose_id": kettle["id"],
-            "robot_pose_id": robot["id"],
+            "robot_state_id": robot["id"],
+            "robot_conditioning_kettle_id": robot["conditioning_kettle_id"],
             "pickup_obj_start_pose": start_pose,
             "pickup_obj_goal_pose": goal_pose,
             "robot_base_pose": base_pose,
@@ -1148,7 +1251,7 @@ def _build_split(
                 episode_index=episode_index,
                 pair_id=pair_id,
                 kettle_pose_id=kettle["id"],
-                robot_pose_id=robot["id"],
+                robot_state_id=robot["id"],
                 feasible_grasp_count=outcome.feasible_grasp_count,
             )
         )
@@ -1159,14 +1262,22 @@ def _layout_manifest(
     split: str,
     layout: list[PairIndex],
     kettle_count: int,
-    robot_count: int,
 ) -> dict[str, Any]:
+    requirements = conditional_robot_requirements(layout)
     return {
         "split": split,
         "n_episodes": len(layout),
         "kettle_pose_count": kettle_count,
-        "robot_pose_count": robot_count,
-        "complete_cartesian": len(layout) == kettle_count * robot_count,
+        "conditional_robot_state_count": len(layout),
+        "sampling_design": "robot states sampled separately per conditioning kettle",
+        "conditioning_groups": [
+            {
+                "kettle_index": kettle_index,
+                "required_robot_indices": robot_indices,
+                "robot_state_count": len(robot_indices),
+            }
+            for kettle_index, robot_indices in requirements.items()
+        ],
         "pairs": [
             {
                 "pair_id": f"{split}_{pair.pair_id}",
@@ -1205,8 +1316,8 @@ def generate_benchmark(
         DEFAULT_VAL_KETTLE_COUNT,
         DEFAULT_ROBOT_COUNT_PER_SPLIT,
     )
-    train_kettle_count, train_robot_count = required_axis_counts(train_layout)
-    val_kettle_count, val_robot_count = required_axis_counts(val_layout)
+    train_kettle_count, _ = required_axis_counts(train_layout)
+    val_kettle_count, _ = required_axis_counts(val_layout)
 
     if output_root.exists() and not overwrite:
         raise FileExistsError(
@@ -1226,15 +1337,15 @@ def generate_benchmark(
             val_kettle_count,
             generation_log,
         )
-        all_kettles = train_kettles + val_kettles
         train_robots, val_robots = _collect_robot_candidates(
             sampler,
             anchor,
             anchor_dir,
             master_seed,
-            train_robot_count,
-            val_robot_count,
-            all_kettles,
+            train_layout,
+            val_layout,
+            train_kettles,
+            val_kettles,
             generation_log,
         )
         train_episodes, train_episode_manifest = _build_split(
@@ -1265,7 +1376,7 @@ def generate_benchmark(
     anchor_non_kettle = _non_kettle_scene(anchor.scene_modifications.object_poses)
     rejected = [record for record in generation_log if not record["accepted"]]
     manifest = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "benchmark_id": BENCHMARK_ID,
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "generator": str(Path(__file__).resolve()),
@@ -1317,41 +1428,52 @@ def generate_benchmark(
             "default_n_val": DEFAULT_N_VAL,
         },
         "factorization": {
+            "design": (
+                "Per-kettle conditional sampling: every robot base+init-qpos state "
+                "is sampled and validated only with its recorded conditioning kettle."
+            ),
             "default_contract": {
-                "train": "6 distinct kettle poses x 4 distinct robot states = 24",
+                "train": (
+                    "6 distinct kettle poses with 4 separately conditioned robot "
+                    "states per kettle = 24 pose pairs"
+                ),
                 "val": (
-                    "3 kettle poses disjoint from train x 4 robot states "
-                    "disjoint from train = 12"
+                    "3 kettle poses disjoint from train with 4 separately conditioned "
+                    "robot states per kettle = 12 pose pairs"
                 ),
             },
             "smoke_semantics": (
                 "--n-train/--n-val select a deterministic prefix of the corresponding "
-                "default Cartesian grid; defaults require the complete grids"
+                "kettle-major grouped layout; defaults require four states per kettle"
             ),
             "train": _layout_manifest(
                 "train",
                 train_layout,
                 train_kettle_count,
-                train_robot_count,
             ),
             "val": _layout_manifest(
                 "val",
                 val_layout,
                 val_kettle_count,
-                val_robot_count,
             ),
         },
         "deduplication": {
             "rule": (
-                "Every accepted pose must satisfy both the XY and wrapped-yaw minimum "
-                "against every pose in both splits; the same checks enforce split leakage."
+                "Kettle poses satisfy both XY and wrapped-yaw minima globally. Robot "
+                "base poses satisfy both minima within their conditioning-kettle group; "
+                "full robot state hashes and pair hashes are globally unique and split-disjoint."
             ),
             "kettle_xy_threshold_m": KETTLE_XY_DEDUP_M,
             "kettle_yaw_threshold_rad": KETTLE_YAW_DEDUP_RAD,
             "kettle_yaw_threshold_deg": math.degrees(KETTLE_YAW_DEDUP_RAD),
-            "robot_xy_threshold_m": ROBOT_XY_DEDUP_M,
-            "robot_yaw_threshold_rad": ROBOT_YAW_DEDUP_RAD,
-            "robot_yaw_threshold_deg": math.degrees(ROBOT_YAW_DEDUP_RAD),
+            "robot_primary_xy_threshold_m": ROBOT_XY_DEDUP_M,
+            "robot_primary_yaw_threshold_rad": ROBOT_YAW_DEDUP_RAD,
+            "robot_primary_yaw_threshold_deg": math.degrees(ROBOT_YAW_DEDUP_RAD),
+            "robot_fallback_xy_threshold_m": ROBOT_FALLBACK_XY_DEDUP_M,
+            "robot_fallback_yaw_threshold_rad": ROBOT_FALLBACK_YAW_DEDUP_RAD,
+            "robot_fallback_yaw_threshold_deg": math.degrees(
+                ROBOT_FALLBACK_YAW_DEDUP_RAD
+            ),
             "pose_hash_decimals": POSE_HASH_DECIMALS,
         },
         "sampling_constraints": {
@@ -1363,12 +1485,15 @@ def generate_benchmark(
             "robot_replay_max_distance_m": ROBOT_REPLAY_MAX_DISTANCE_M,
             "kettle_placement_attempts_per_call": KETTLE_PLACEMENT_ATTEMPTS,
             "max_candidate_attempts": MAX_CANDIDATE_ATTEMPTS,
+            "robot_primary_attempts_per_state": ROBOT_PRIMARY_ATTEMPTS,
+            "robot_max_attempts_per_state": ROBOT_MAX_ATTEMPTS_PER_STATE,
+            "camera_visibility_check": True,
         },
         "kettle_positions": {
             "train": train_kettles,
             "val": val_kettles,
         },
-        "robot_positions": {
+        "conditional_robot_states": {
             "train": train_robots,
             "val": val_robots,
         },
@@ -1441,6 +1566,125 @@ def _validate_pose_library(
         accepted.append(pose)
 
 
+def _validate_conditional_robot_library(
+    candidates: list[dict[str, Any]],
+    kettles: list[dict[str, Any]],
+    requirements: dict[int, list[int]],
+    split: str,
+) -> None:
+    kettle_by_index = {
+        int(candidate["index"]): candidate for candidate in kettles
+    }
+    expected_keys = {
+        (kettle_index, robot_index)
+        for kettle_index, robot_indices in requirements.items()
+        for robot_index in robot_indices
+    }
+    actual_keys = {
+        (int(candidate["kettle_index"]), int(candidate["robot_index"]))
+        for candidate in candidates
+    }
+    if actual_keys != expected_keys or len(candidates) != len(expected_keys):
+        raise BenchmarkValidationError(
+            f"{split} conditional robot states do not match layout: "
+            f"expected={sorted(expected_keys)}, actual={sorted(actual_keys)}"
+        )
+
+    groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for candidate in candidates:
+        kettle_index = int(candidate["kettle_index"])
+        kettle = kettle_by_index.get(kettle_index)
+        if kettle is None:
+            raise BenchmarkValidationError(
+                f"{split} robot state references unknown kettle index {kettle_index}"
+            )
+        if (
+            candidate.get("split") != split
+            or candidate.get("conditioning_kettle_id") != kettle["id"]
+            or candidate.get("conditioning_kettle_pose_hash") != kettle["pose_hash"]
+        ):
+            raise BenchmarkValidationError(
+                f"Robot conditioning metadata mismatch: {candidate.get('id')}"
+            )
+        if candidate["base_pose_hash"] != pose_hash(candidate["base_pose"]):
+            raise BenchmarkValidationError(
+                f"Robot candidate base hash mismatch: {candidate['id']}"
+            )
+        if candidate["init_qpos_hash"] != stable_hash(candidate["init_qpos"]):
+            raise BenchmarkValidationError(
+                f"Robot candidate qpos hash mismatch: {candidate['id']}"
+            )
+        expected_state_hash = robot_state_hash(
+            candidate["base_pose"],
+            candidate["init_qpos"],
+        )
+        if candidate["robot_state_hash"] != expected_state_hash:
+            raise BenchmarkValidationError(
+                f"Robot candidate state hash mismatch: {candidate['id']}"
+            )
+        expected_conditioned_pair_hash = stable_hash(
+            {
+                "kettle_pose": kettle["pose"],
+                "robot_base_pose": candidate["base_pose"],
+                "robot_init_qpos": candidate["init_qpos"],
+            }
+        )
+        if candidate.get("conditioned_pair_hash") != expected_conditioned_pair_hash:
+            raise BenchmarkValidationError(
+                f"Conditioned pair hash mismatch: {candidate['id']}"
+            )
+        fallback = bool(candidate.get("fallback_thresholds_used"))
+        expected_xy = (
+            ROBOT_FALLBACK_XY_DEDUP_M if fallback else ROBOT_XY_DEDUP_M
+        )
+        expected_yaw = (
+            ROBOT_FALLBACK_YAW_DEDUP_RAD if fallback else ROBOT_YAW_DEDUP_RAD
+        )
+        if (
+            not math.isclose(
+                float(candidate.get("dedup_xy_threshold_m", math.nan)),
+                expected_xy,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            or not math.isclose(
+                float(candidate.get("dedup_yaw_threshold_rad", math.nan)),
+                expected_yaw,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            or fallback != (
+                int(candidate.get("sampling_attempt", -1)) >= ROBOT_PRIMARY_ATTEMPTS
+            )
+        ):
+            raise BenchmarkValidationError(
+                f"Robot adaptive dedup metadata mismatch: {candidate['id']}"
+            )
+        if (
+            int(candidate.get("feasible_grasp_count", 0)) <= 0
+            or not candidate.get("robot_collision_free")
+            or not candidate.get("camera_visibility_check_enabled")
+        ):
+            raise BenchmarkValidationError(
+                f"Robot sampling checks failed: {candidate['id']}"
+            )
+        groups[kettle_index].append(candidate)
+
+    for kettle_index, group in sorted(groups.items()):
+        xy_threshold = min(
+            float(candidate["dedup_xy_threshold_m"]) for candidate in group
+        )
+        yaw_threshold = min(
+            float(candidate["dedup_yaw_threshold_rad"]) for candidate in group
+        )
+        _validate_pose_library(
+            [candidate["base_pose"] for candidate in group],
+            xy_threshold,
+            yaw_threshold,
+            f"{split}.conditional_robot_states[kettle={kettle_index}]",
+        )
+
+
 def _validate_factorization(
     manifest: dict[str, Any],
     split: str,
@@ -1458,6 +1702,28 @@ def _validate_factorization(
         raise BenchmarkValidationError(
             f"{split} pair order mismatch: expected {expected_ids}, got {actual_ids}"
         )
+    if split_factorization.get("conditional_robot_state_count") != len(pairs):
+        raise BenchmarkValidationError(
+            f"{split} conditional robot state count differs from pair count"
+        )
+    requirements = conditional_robot_requirements(
+        [
+            PairIndex(pair["kettle_index"], pair["robot_index"])
+            for pair in pairs
+        ]
+    )
+    expected_groups = [
+        {
+            "kettle_index": kettle_index,
+            "required_robot_indices": robot_indices,
+            "robot_state_count": len(robot_indices),
+        }
+        for kettle_index, robot_indices in requirements.items()
+    ]
+    if split_factorization.get("conditioning_groups") != expected_groups:
+        raise BenchmarkValidationError(
+            f"{split} conditioning group metadata differs from pair layout"
+        )
 
     requested = manifest["requested_counts"][f"n_{split}"]
     if split == "train" and requested == DEFAULT_N_TRAIN:
@@ -1472,7 +1738,9 @@ def _validate_factorization(
             (pair["kettle_index"], pair["robot_index"]) for pair in pairs
         }
         if actual != expected:
-            raise BenchmarkValidationError("Default train output is not the required 6x4 grid")
+            raise BenchmarkValidationError(
+                "Default train output is not six groups of four conditional states"
+            )
     if split == "val" and requested == DEFAULT_N_VAL:
         expected = {
             (kettle_index, robot_index)
@@ -1485,7 +1753,9 @@ def _validate_factorization(
             (pair["kettle_index"], pair["robot_index"]) for pair in pairs
         }
         if actual != expected:
-            raise BenchmarkValidationError("Default val output is not the required 3x4 grid")
+            raise BenchmarkValidationError(
+                "Default val output is not three groups of four conditional states"
+            )
 
 
 def validate_output(
@@ -1517,7 +1787,7 @@ def validate_output(
         "factorization",
         "deduplication",
         "kettle_positions",
-        "robot_positions",
+        "conditional_robot_states",
         "episodes",
         "rejection_reasons",
     }
@@ -1550,8 +1820,10 @@ def validate_output(
     expected_dedup = {
         "kettle_xy_threshold_m": KETTLE_XY_DEDUP_M,
         "kettle_yaw_threshold_rad": KETTLE_YAW_DEDUP_RAD,
-        "robot_xy_threshold_m": ROBOT_XY_DEDUP_M,
-        "robot_yaw_threshold_rad": ROBOT_YAW_DEDUP_RAD,
+        "robot_primary_xy_threshold_m": ROBOT_XY_DEDUP_M,
+        "robot_primary_yaw_threshold_rad": ROBOT_YAW_DEDUP_RAD,
+        "robot_fallback_xy_threshold_m": ROBOT_FALLBACK_XY_DEDUP_M,
+        "robot_fallback_yaw_threshold_rad": ROBOT_FALLBACK_YAW_DEDUP_RAD,
     }
     if any(
         not math.isclose(
@@ -1600,8 +1872,8 @@ def validate_output(
         raise BenchmarkValidationError("Manifest episode records are missing or duplicated")
     train_kettles = manifest["kettle_positions"]["train"]
     val_kettles = manifest["kettle_positions"]["val"]
-    train_robots = manifest["robot_positions"]["train"]
-    val_robots = manifest["robot_positions"]["val"]
+    train_robots = manifest["conditional_robot_states"]["train"]
+    val_robots = manifest["conditional_robot_states"]["val"]
     kettle_by_id = {
         candidate["id"]: candidate for candidate in train_kettles + val_kettles
     }
@@ -1611,6 +1883,11 @@ def validate_output(
 
     seeds = []
     pair_hashes = set()
+    pair_hashes_by_split: dict[str, set[str]] = {"train": set(), "val": set()}
+    episode_robot_hashes_by_split: dict[str, set[str]] = {
+        "train": set(),
+        "val": set(),
+    }
     for split, index, episode in all_raw:
         _assert_episode_contract(episode, anchor)
         controlled = episode.get("controlled")
@@ -1621,6 +1898,13 @@ def validate_output(
             raise BenchmarkValidationError(f"No manifest record for {split}[{index}]")
         if controlled["pair_id"] != record["pair_id"]:
             raise BenchmarkValidationError(f"Pair ID mismatch for {split}[{index}]")
+        if (
+            controlled.get("kettle_pose_id") != record.get("kettle_pose_id")
+            or controlled.get("robot_state_id") != record.get("robot_state_id")
+        ):
+            raise BenchmarkValidationError(
+                f"Conditional factor ID mismatch for {split}[{index}]"
+            )
         if episode["seed"] != record["seed"]:
             raise BenchmarkValidationError(f"Seed mismatch for {split}[{index}]")
         seeds.append(episode["seed"])
@@ -1630,7 +1914,7 @@ def validate_output(
         base = episode["task"]["robot_base_pose"]
         init_qpos = episode["robot"]["init_qpos"]
         kettle_candidate = kettle_by_id.get(controlled.get("kettle_pose_id"))
-        robot_candidate = robot_by_id.get(controlled.get("robot_pose_id"))
+        robot_candidate = robot_by_id.get(controlled.get("robot_state_id"))
         if kettle_candidate is None or kettle_candidate["split"] != split:
             raise BenchmarkValidationError(
                 f"Unknown or cross-split kettle ID for {split}[{index}]"
@@ -1638,6 +1922,14 @@ def validate_output(
         if robot_candidate is None or robot_candidate["split"] != split:
             raise BenchmarkValidationError(
                 f"Unknown or cross-split robot ID for {split}[{index}]"
+            )
+        if (
+            robot_candidate.get("conditioning_kettle_id") != kettle_candidate["id"]
+            or controlled.get("robot_conditioning_kettle_id") != kettle_candidate["id"]
+            or record.get("robot_conditioning_kettle_id") != kettle_candidate["id"]
+        ):
+            raise BenchmarkValidationError(
+                f"Conditional robot/kettle mismatch for {split}[{index}]"
             )
         if not np.allclose(
             start,
@@ -1651,9 +1943,9 @@ def validate_output(
         if not np.allclose(
             base,
             robot_candidate["base_pose"],
-            atol=POSE_ATOL,
+            atol=ROBOT_REPLAY_ATOL,
             rtol=0.0,
-        ) or stable_hash(init_qpos) != stable_hash(robot_candidate["init_qpos"]):
+        ) or not robot_qpos_matches(init_qpos, robot_candidate["init_qpos"]):
             raise BenchmarkValidationError(
                 f"Robot factor replay mismatch for {split}[{index}]"
             )
@@ -1689,9 +1981,19 @@ def validate_output(
         if expected_hashes["pair"] in pair_hashes:
             raise BenchmarkValidationError(f"Duplicate full pair at {split}[{index}]")
         pair_hashes.add(expected_hashes["pair"])
+        pair_hashes_by_split[split].add(expected_hashes["pair"])
+        if expected_hashes["robot_state"] in episode_robot_hashes_by_split[split]:
+            raise BenchmarkValidationError(
+                f"Duplicate frozen robot state at {split}[{index}]"
+            )
+        episode_robot_hashes_by_split[split].add(expected_hashes["robot_state"])
         if int(record["feasible_grasp_count"]) <= 0 or not record["robot_collision_free"]:
             raise BenchmarkValidationError(f"Invalid simulation checks for {split}[{index}]")
 
+    if pair_hashes_by_split["train"] & pair_hashes_by_split["val"]:
+        raise BenchmarkValidationError("Full pair hash leakage between train and val")
+    if episode_robot_hashes_by_split["train"] & episode_robot_hashes_by_split["val"]:
+        raise BenchmarkValidationError("Frozen robot state leakage between train and val")
     if len(seeds) != len(set(seeds)):
         raise BenchmarkValidationError("Episode seeds are not unique")
     if seeds != manifest["seeds"]["episode_seeds"]:
@@ -1729,34 +2031,29 @@ def validate_output(
     }:
         raise BenchmarkValidationError("Kettle pose hash leakage between train and val")
 
-    all_robot_poses = [
-        candidate["base_pose"] for candidate in train_robots + val_robots
-    ]
-    if len(train_robots) != manifest["factorization"]["train"]["robot_pose_count"]:
-        raise BenchmarkValidationError("Train robot candidate count differs from factorization")
-    if len(val_robots) != manifest["factorization"]["val"]["robot_pose_count"]:
-        raise BenchmarkValidationError("Val robot candidate count differs from factorization")
-    for candidate in train_robots + val_robots:
-        if candidate["base_pose_hash"] != pose_hash(candidate["base_pose"]):
-            raise BenchmarkValidationError(
-                f"Robot candidate base hash mismatch: {candidate['id']}"
-            )
-        if candidate["init_qpos_hash"] != stable_hash(candidate["init_qpos"]):
-            raise BenchmarkValidationError(
-                f"Robot candidate qpos hash mismatch: {candidate['id']}"
-            )
-        if candidate["robot_state_hash"] != robot_state_hash(
-            candidate["base_pose"],
-            candidate["init_qpos"],
-        ):
-            raise BenchmarkValidationError(
-                f"Robot candidate state hash mismatch: {candidate['id']}"
-            )
-    _validate_pose_library(
-        all_robot_poses,
-        ROBOT_XY_DEDUP_M,
-        ROBOT_YAW_DEDUP_RAD,
-        "robot_positions",
+    train_requirements = conditional_robot_requirements(
+        [
+            PairIndex(pair["kettle_index"], pair["robot_index"])
+            for pair in manifest["factorization"]["train"]["pairs"]
+        ]
+    )
+    val_requirements = conditional_robot_requirements(
+        [
+            PairIndex(pair["kettle_index"], pair["robot_index"])
+            for pair in manifest["factorization"]["val"]["pairs"]
+        ]
+    )
+    _validate_conditional_robot_library(
+        train_robots,
+        train_kettles,
+        train_requirements,
+        "train",
+    )
+    _validate_conditional_robot_library(
+        val_robots,
+        val_kettles,
+        val_requirements,
+        "val",
     )
     train_robot_hashes = {candidate["robot_state_hash"] for candidate in train_robots}
     val_robot_hashes = {candidate["robot_state_hash"] for candidate in val_robots}
@@ -1766,6 +2063,11 @@ def validate_output(
         raise BenchmarkValidationError("Duplicate val robot state hashes")
     if train_robot_hashes & val_robot_hashes:
         raise BenchmarkValidationError("Robot state leakage between train and val")
+    all_conditioned_pair_hashes = {
+        candidate["conditioned_pair_hash"] for candidate in train_robots + val_robots
+    }
+    if len(all_conditioned_pair_hashes) != len(train_robots) + len(val_robots):
+        raise BenchmarkValidationError("Duplicate conditioned pair hashes")
 
     non_kettle_hash = stable_hash(
         _non_kettle_scene(anchor.scene_modifications.object_poses)
@@ -1825,13 +2127,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--n-train",
         type=int,
         default=DEFAULT_N_TRAIN,
-        help="Train episodes; defaults enforce the complete 6x4 factorization",
+        help="Train episodes; default is six kettle groups with four states each",
     )
     parser.add_argument(
         "--n-val",
         type=int,
         default=DEFAULT_N_VAL,
-        help="Validation episodes; defaults enforce the complete disjoint 3x4 factorization",
+        help="Validation episodes; default is three held-out groups with four states each",
     )
     parser.add_argument(
         "--validate-only",

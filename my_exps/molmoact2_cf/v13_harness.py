@@ -24,10 +24,17 @@ RUN_NAME = "rlt_cf_v13_controlled"
 BENCHMARK_NAME = "house0_kettle_v13"
 TRAIN_EPISODES = 24
 VALIDATION_EPISODES = 12
-MAX_VALID_EPISODES = 400
+MAX_VALID_EPISODES = int(os.environ.get("V13_MAX_VALID_EPISODES", "400"))
 HORIZON = 500
-TARGET_ENV_STEPS = 250_000
-SNAPSHOT_EPISODES = (0, 100, 200, 400)
+TARGET_ENV_STEPS = int(os.environ.get("V13_TARGET_ENV_STEPS", "250000"))
+SNAPSHOT_EPISODES = tuple(
+    int(token)
+    for token in os.environ.get(
+        "V13_SNAPSHOT_EPISODES",
+        "0,100,200,400",
+    ).split(",")
+    if token.strip()
+)
 TRAIN_SEED = 20260813
 INTERIM_VALIDATION_SEEDS = (20260831,)
 FINAL_VALIDATION_SEEDS = (20260831, 20260832, 20260833, 20260834)
@@ -69,9 +76,14 @@ class VariantSpec:
     def policies(self) -> tuple[str, ...]:
         if self.is_baseline:
             return ("reference",)
+        noisy_reference = (
+            ("reference_noise",)
+            if self.name in {"residual_rlt_actor", "flow_rlt_actor"}
+            else ()
+        )
         if self.use_guide:
-            return ("checkpoint_gate", "actor", "actor_guide")
-        return ("checkpoint_gate", "actor")
+            return ("checkpoint_gate", "actor", "actor_guide", *noisy_reference)
+        return ("checkpoint_gate", "actor", *noisy_reference)
 
 
 VARIANTS = (
@@ -260,9 +272,11 @@ def _common_model_args(variant: VariantSpec) -> list[str]:
                 "--ae_lora_alpha",
                 str(AE_LORA_ALPHA),
                 "--ae_batch_size",
-                "1",
+                "2",
                 "--ae_image_replay_capacity",
                 str(AE_IMAGE_REPLAY_CAPACITY),
+                "--lr_ae",
+                "0.0001",
             ]
         )
     return args
@@ -319,10 +333,20 @@ def build_train_command(
         "50",
         "--replay_out",
         str(out_dir / "chunk_replay.npz"),
+        "--replay_capacity",
+        "50000",
+        "--pos_frac",
+        "0.4",
+        "--batch_size",
+        "128",
+        "--min_replay_chunks",
+        "8",
         "--seed",
         str(TRAIN_SEED),
         "--deploy_policy",
         "gated",
+        "--g_start_episodes",
+        "40",
         "--g_min_advantage",
         str(PAIRED_LCB_THRESHOLD),
         "--g_min_action_sensitivity",
@@ -353,6 +377,28 @@ def build_train_command(
         "0.02",
         "--cql_n_actions",
         "8",
+        "--cql_coef",
+        "0.1",
+        "--cql_action_radius",
+        "0.2",
+        "--gamma",
+        "0.99",
+        "--mc_coef",
+        "0.1",
+        "--ref_dropout",
+        "0.5",
+        "--actor_beta",
+        "1.0",
+        "--target_divergence",
+        "0.0025",
+        "--lr_critic",
+        "0.0003",
+        "--lr_actor",
+        "0.0001",
+        "--lr_guide",
+        "0.0001",
+        "--lr_alpha",
+        "0.0001",
         "--tmp_rollout_dir",
         str(tmp_rollout_dir),
         "--rlt_ckpt",
@@ -434,6 +480,7 @@ def build_eval_command(
         raise ValueError(f"Policy {policy!r} is not valid for {variant.name}")
     source_dir = snapshot_dir(run_dir, variant, episode)
     out_dir = validation_output_dir(run_dir, variant, episode, policy, seed)
+    runtime_policy = "reference" if policy == "reference_noise" else policy
     command = [
         python_executable,
         str(root / "train_rlt_online.py"),
@@ -466,7 +513,7 @@ def build_eval_command(
         "--seed",
         str(seed),
         "--deploy_policy",
-        policy,
+        runtime_policy,
         "--g_min_advantage",
         str(PAIRED_LCB_THRESHOLD),
         "--g_min_action_sensitivity",
@@ -484,6 +531,8 @@ def build_eval_command(
         "--tmp_rollout_dir",
         str(tmp_rollout_dir),
     ]
+    if policy == "reference_noise":
+        command.extend(["--eval_reference_noise_std", str(EXPLORE_STD)])
     command.extend(_common_model_args(variant))
     if variant.ae_trainable:
         command.extend(
@@ -678,6 +727,8 @@ def build_manifest(
         "B1K_ROOT",
         "B1K_TMP",
         "HF_HOME",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
         "MLSPACES_ASSETS_DIR",
         "RLT_EGL_MAX_CONCURRENT",
         "RLT_EGL_PER_GPU",
@@ -687,6 +738,13 @@ def build_manifest(
         "CUDA_VISIBLE_DEVICES",
         "GPU_IDS",
         "FRESH",
+        "POLL_SEC",
+        "SERVER_WAIT_ATTEMPTS",
+        "SERVER_STAGGER_SEC",
+        "TRAINER_STAGGER_SEC",
+        "MUJOCO_GL",
+        "PYOPENGL_PLATFORM",
+        "UV_BIN",
     )
     env_snapshot = {
         key: redact_value(key, environment[key])
@@ -812,6 +870,8 @@ def build_manifest(
             },
         },
         "fixed_parameters": {
+            "controlled_train_episodes": TRAIN_EPISODES,
+            "controlled_validation_episodes": VALIDATION_EPISODES,
             "max_valid_episodes": MAX_VALID_EPISODES,
             "horizon": HORIZON,
             "target_env_steps": TARGET_ENV_STEPS,
@@ -826,8 +886,16 @@ def build_manifest(
             "exploration_std": EXPLORE_STD,
             "bc_ref_coef": BC_REF_COEF,
             "frozen_token": True,
+            "n_critics": N_CRITICS,
+            "flow_steps": FLOW_STEPS,
+            "guidance_coef": GUIDANCE_COEF,
+            "gate_start_episodes": 40,
+            "gate_sensitivity_noise": 0.08,
+            "http_ports": list(HTTP_PORTS),
             "ae_instances_per_gpu": 1,
             "ae_image_replay_capacity": AE_IMAGE_REPLAY_CAPACITY,
+            "ae_lora_rank": AE_LORA_RANK,
+            "ae_lora_alpha": AE_LORA_ALPHA,
         },
         "environment": env_snapshot,
         "servers": server_records,
@@ -888,10 +956,25 @@ def evaluation_complete(out_dir: Path, expected_episodes: int = VALIDATION_EPISO
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
+    valid_indices = []
+    if results_path.is_file():
+        with results_path.open("r", encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    return False
+                if not isinstance(row, dict) or not bool(row.get("valid", False)):
+                    continue
+                try:
+                    valid_indices.append(int(row["episode_idx"]))
+                except (KeyError, TypeError, ValueError):
+                    return False
     return (
         bool(summary.get("eval_only"))
         and int(summary.get("valid_episodes", 0) or 0) == expected_episodes
-        and results_path.is_file()
+        and int(summary.get("skipped_episodes", 0) or 0) == 0
+        and sorted(valid_indices) == list(range(expected_episodes))
     )
 
 
@@ -903,6 +986,18 @@ def training_complete(out_dir: Path, expected_episodes: int = MAX_VALID_EPISODES
         except (OSError, json.JSONDecodeError):
             return False
     return int(row.get("valid_episodes", 0) or 0) >= expected_episodes
+
+
+def port_is_available(port: int) -> bool:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("0.0.0.0", int(port)))
+    except OSError:
+        return False
+    finally:
+        listener.close()
+    return True
 
 
 def _variants_tsv() -> str:
@@ -1009,6 +1104,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     training_parser.add_argument("--out-dir", type=Path, required=True)
     training_parser.add_argument("--expected-episodes", type=int, default=MAX_VALID_EPISODES)
 
+    status_parser = subparsers.add_parser("training-status")
+    status_parser.add_argument("--out-dir", type=Path, required=True)
+    status_parser.add_argument("--ae", action="store_true")
+
+    port_parser = subparsers.add_parser("port-free")
+    port_parser.add_argument("--port", type=int, required=True)
+
     eval_parser = subparsers.add_parser("evaluation-complete")
     eval_parser.add_argument("--out-dir", type=Path, required=True)
     eval_parser.add_argument("--expected-episodes", type=int, default=VALIDATION_EPISODES)
@@ -1103,6 +1205,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         complete = training_complete(args.out_dir, args.expected_episodes)
         print("complete" if complete else "incomplete")
         return 0 if complete else 1
+    if args.command == "training-status":
+        row = latest_jsonl_row(args.out_dir / "metrics.jsonl") or {}
+        print(
+            "\t".join(
+                [
+                    str(int(row.get("valid_episodes", 0) or 0)),
+                    str(int(row.get("env_steps", 0) or 0)),
+                    f"{float(row.get('cumulative_success_rate', 0.0) or 0.0):.4f}",
+                    f"{float(row.get('window_success_rate', 0.0) or 0.0):.4f}",
+                    "1" if bool(row.get("gate_deploy_actor", row.get("g_enabled", False))) else "0",
+                    resume_state(args.out_dir, args.ae),
+                ]
+            )
+        )
+        return 0
+    if args.command == "port-free":
+        available = port_is_available(args.port)
+        print("free" if available else "in-use")
+        return 0 if available else 1
     if args.command == "evaluation-complete":
         complete = evaluation_complete(args.out_dir, args.expected_episodes)
         print("complete" if complete else "incomplete")

@@ -7,6 +7,7 @@ import copy
 import math
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -29,14 +30,19 @@ from generate_controlled_benchmark import (
     KETTLE_YAW_DEDUP_RAD,
     MASTER_SEED,
     POSE_ATOL,
+    ROBOT_FALLBACK_XY_DEDUP_M,
+    ROBOT_FALLBACK_YAW_DEDUP_RAD,
+    ROBOT_PRIMARY_ATTEMPTS,
     ROBOT_XY_DEDUP_M,
     ROBOT_YAW_DEDUP_RAD,
     SCENE_DATASET,
     TARGET_OBJECT,
     TASK_CLASS,
     _assert_episode_contract,
+    _validate_conditional_robot_library,
     build_generation_config,
     build_pair_layout,
+    conditional_robot_requirements,
     derive_seed,
     find_anchor_benchmark,
     load_verified_anchor,
@@ -72,6 +78,61 @@ def _yaw_pose(x: float, y: float, yaw_rad: float) -> list[float]:
     ]
 
 
+def _kettle_candidate(index: int, pose: list[float]) -> dict[str, object]:
+    return {
+        "id": f"train_k{index:02d}",
+        "split": "train",
+        "index": index,
+        "pose": pose,
+        "pose_hash": pose_hash(pose),
+    }
+
+
+def _conditional_robot_candidate(
+    kettle: dict[str, object],
+    robot_index: int,
+    base_pose: list[float],
+    *,
+    fallback: bool,
+) -> dict[str, object]:
+    kettle_index = int(kettle["index"])
+    init_qpos = {"arm": [float(kettle_index), float(robot_index)]}
+    state_hash = robot_state_hash(base_pose, init_qpos)
+    xy_threshold = (
+        ROBOT_FALLBACK_XY_DEDUP_M if fallback else ROBOT_XY_DEDUP_M
+    )
+    yaw_threshold = (
+        ROBOT_FALLBACK_YAW_DEDUP_RAD if fallback else ROBOT_YAW_DEDUP_RAD
+    )
+    return {
+        "id": f"train_k{kettle_index:02d}_r{robot_index:02d}",
+        "split": "train",
+        "kettle_index": kettle_index,
+        "robot_index": robot_index,
+        "conditioning_kettle_id": kettle["id"],
+        "conditioning_kettle_pose_hash": kettle["pose_hash"],
+        "sampling_attempt": ROBOT_PRIMARY_ATTEMPTS if fallback else 0,
+        "base_pose": base_pose,
+        "base_pose_hash": pose_hash(base_pose),
+        "init_qpos": init_qpos,
+        "init_qpos_hash": stable_hash(init_qpos),
+        "robot_state_hash": state_hash,
+        "conditioned_pair_hash": stable_hash(
+            {
+                "kettle_pose": kettle["pose"],
+                "robot_base_pose": base_pose,
+                "robot_init_qpos": init_qpos,
+            }
+        ),
+        "dedup_xy_threshold_m": xy_threshold,
+        "dedup_yaw_threshold_rad": yaw_threshold,
+        "fallback_thresholds_used": fallback,
+        "feasible_grasp_count": 1,
+        "robot_collision_free": True,
+        "camera_visibility_check_enabled": True,
+    }
+
+
 @pytest.fixture(scope="module")
 def anchor_dir() -> Path:
     try:
@@ -85,7 +146,7 @@ def anchor(anchor_dir: Path) -> EpisodeSpec:
     return load_verified_anchor(anchor_dir)
 
 
-def test_default_factorizations_are_complete_cartesian_products() -> None:
+def test_default_factorizations_are_grouped_by_conditioning_kettle() -> None:
     train = build_pair_layout(
         DEFAULT_N_TRAIN,
         DEFAULT_TRAIN_KETTLE_COUNT,
@@ -101,15 +162,17 @@ def test_default_factorizations_are_complete_cartesian_products() -> None:
     assert len(val) == 12
     assert required_axis_counts(train) == (6, 4)
     assert required_axis_counts(val) == (3, 4)
-    assert {(pair.kettle_index, pair.robot_index) for pair in train} == {
-        (kettle_index, robot_index)
-        for kettle_index in range(6)
-        for robot_index in range(4)
+    assert Counter(pair.kettle_index for pair in train) == Counter(
+        {kettle_index: 4 for kettle_index in range(6)}
+    )
+    assert Counter(pair.kettle_index for pair in val) == Counter(
+        {kettle_index: 4 for kettle_index in range(3)}
+    )
+    assert conditional_robot_requirements(train) == {
+        kettle_index: [0, 1, 2, 3] for kettle_index in range(6)
     }
-    assert {(pair.kettle_index, pair.robot_index) for pair in val} == {
-        (kettle_index, robot_index)
-        for kettle_index in range(3)
-        for robot_index in range(4)
+    assert conditional_robot_requirements(val) == {
+        kettle_index: [0, 1, 2, 3] for kettle_index in range(3)
     }
 
 
@@ -200,21 +263,51 @@ def test_wrapped_yaw_distance_handles_pi_boundary() -> None:
     assert math.isclose(yaw_from_pose(_yaw_pose(0.0, 0.0, distance)), distance)
 
 
-def test_robot_split_leakage_thresholds_are_enforceable() -> None:
-    train_pose = _yaw_pose(0.0, 0.0, 0.0)
-    leaked_val_pose = _yaw_pose(
-        ROBOT_XY_DEDUP_M * 2.0,
-        0.0,
-        ROBOT_YAW_DEDUP_RAD / 2.0,
+def test_robot_base_dedup_is_grouped_by_conditioning_kettle() -> None:
+    kettles = [
+        _kettle_candidate(0, _yaw_pose(0.0, 0.0, 0.0)),
+        _kettle_candidate(1, _yaw_pose(0.1, 0.0, math.radians(20.0))),
+    ]
+    shared_base = _yaw_pose(0.0, 0.0, 0.0)
+    robots = [
+        _conditional_robot_candidate(kettles[0], 0, shared_base, fallback=False),
+        _conditional_robot_candidate(
+            kettles[0],
+            1,
+            _yaw_pose(0.02, 0.0, math.radians(1.0)),
+            fallback=True,
+        ),
+        _conditional_robot_candidate(kettles[1], 0, shared_base, fallback=False),
+    ]
+    _validate_conditional_robot_library(
+        robots,
+        kettles,
+        {0: [0, 1], 1: [0]},
+        "train",
     )
-    distinct, reason = pose_is_distinct(
-        leaked_val_pose,
-        [train_pose],
-        ROBOT_XY_DEDUP_M,
-        ROBOT_YAW_DEDUP_RAD,
+
+    duplicate_within_group = copy.deepcopy(robots)
+    duplicate_within_group[1]["base_pose"] = shared_base
+    duplicate_within_group[1]["base_pose_hash"] = pose_hash(shared_base)
+    init_qpos = duplicate_within_group[1]["init_qpos"]
+    duplicate_within_group[1]["robot_state_hash"] = robot_state_hash(
+        shared_base,
+        init_qpos,
     )
-    assert not distinct
-    assert reason is not None and reason.startswith("yaw_dedup")
+    duplicate_within_group[1]["conditioned_pair_hash"] = stable_hash(
+        {
+            "kettle_pose": kettles[0]["pose"],
+            "robot_base_pose": shared_base,
+            "robot_init_qpos": init_qpos,
+        }
+    )
+    with pytest.raises(BenchmarkValidationError, match="violates dedup"):
+        _validate_conditional_robot_library(
+            duplicate_within_group,
+            kettles,
+            {0: [0, 1], 1: [0]},
+            "train",
+        )
 
 
 def test_anchor_episode_zero_is_exact_verified_template(

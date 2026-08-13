@@ -22,7 +22,7 @@ from models import (
 CHUNK_SIZE = 8
 ACTION_DIM = 8
 STATE_DIM = Z_DIM + PROPRIO_DIM  # 264
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 CF_MODE_RESIDUAL = "residual"
 CF_MODE_FLOW = "flow"
 DEFAULT_FLOW_STEPS = 10
@@ -30,6 +30,38 @@ DEFAULT_GUIDANCE_COEF = 0.5
 DEFAULT_CONSENSUS_FLOOR = 0.01
 DEFAULT_CONFLICT_POWER = 2.0
 DEFAULT_RESIDUAL_DAMP = 0.25
+DEFAULT_Q_TAIL_FRACTION = 0.25
+DEFAULT_Q_TAIL_MIN_HEADS = 2
+
+
+def lower_tail_mean(
+    values: torch.Tensor,
+    *,
+    fraction: float = DEFAULT_Q_TAIL_FRACTION,
+    min_heads: int = DEFAULT_Q_TAIL_MIN_HEADS,
+    dim: int = 0,
+) -> torch.Tensor:
+    """Mean of the pessimistic lower ensemble tail.
+
+    For the default ten-head critic this averages the lowest three heads.  With
+    a two-head test critic both heads participate, avoiding a disguised hard
+    minimum.
+    """
+    if values.ndim == 0:
+        raise ValueError("lower_tail_mean requires an ensemble dimension")
+    heads = int(values.shape[dim])
+    if heads < 1:
+        raise ValueError("lower_tail_mean received an empty ensemble")
+    if not 0.0 < float(fraction) <= 1.0:
+        raise ValueError(f"fraction must be in (0, 1], got {fraction}")
+    if int(min_heads) < 1:
+        raise ValueError(f"min_heads must be positive, got {min_heads}")
+    selected = min(
+        heads,
+        max(int(min_heads), int(math.ceil(float(fraction) * heads))),
+    )
+    tail = torch.topk(values, k=selected, dim=dim, largest=False).values
+    return tail.mean(dim=dim)
 
 
 def _sinusoidal_positions(length: int, dim: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -582,6 +614,8 @@ class MolmoAct2RLTCF(nn.Module):
         flow_steps: int = DEFAULT_FLOW_STEPS,
         guidance_coef: float = DEFAULT_GUIDANCE_COEF,
         time_dim: int = 64,
+        q_tail_fraction: float = DEFAULT_Q_TAIL_FRACTION,
+        q_tail_min_heads: int = DEFAULT_Q_TAIL_MIN_HEADS,
     ) -> None:
         super().__init__()
         mode = str(cf_mode).lower().strip()
@@ -610,6 +644,12 @@ class MolmoAct2RLTCF(nn.Module):
         self.flow_steps = int(flow_steps)
         self.guidance_coef = float(guidance_coef)
         self.time_dim = int(time_dim)
+        self.q_tail_fraction = float(q_tail_fraction)
+        self.q_tail_min_heads = int(q_tail_min_heads)
+        if not 0.0 < self.q_tail_fraction <= 1.0:
+            raise ValueError("q_tail_fraction must be in (0, 1]")
+        if self.q_tail_min_heads < 1:
+            raise ValueError("q_tail_min_heads must be positive")
         self.loaded_meta: dict[str, Any] = {}
         # "rlt" = FlowVelocityActor; "molmo_ae" = MolmoAct2 Action Expert (V11_1).
         self.v_source = "rlt"
@@ -903,6 +943,65 @@ class MolmoAct2RLTCF(nn.Module):
             return critic.q_min(state, flat, t)
         return critic.q_min(state, flat)
 
+    def q_lower_tail_chunk(
+        self,
+        state: torch.Tensor,
+        actions_n: torch.Tensor,
+        *,
+        target: bool = False,
+        t: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Deployment-relevant robust pessimistic value aggregate."""
+        values = self.q_chunk(
+            state,
+            actions_n,
+            target=target,
+            t=t,
+        )
+        return lower_tail_mean(
+            values,
+            fraction=self.q_tail_fraction,
+            min_heads=self.q_tail_min_heads,
+            dim=0,
+        )
+
+    def reinitialize_critic_heads(
+        self,
+        head_indices: list[int],
+        *,
+        seed: int,
+    ) -> list[nn.Parameter]:
+        """Explicitly reset selected online/target heads for controlled recovery."""
+        online_heads = getattr(self.critic, "critics", None)
+        target_heads = getattr(self.target_critic, "critics", None)
+        if online_heads is None or target_heads is None:
+            raise RuntimeError("Critic ensemble does not expose head modules")
+        unique = sorted(set(int(index) for index in head_indices))
+        if any(index < 0 or index >= len(online_heads) for index in unique):
+            raise IndexError(
+                f"Invalid critic head indices {unique} for {len(online_heads)} heads"
+            )
+        devices: list[int] = []
+        parameter = next(self.critic.parameters())
+        if parameter.is_cuda:
+            devices = [parameter.device.index or 0]
+        reset_parameters: list[nn.Parameter] = []
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed(int(seed))
+            if parameter.is_cuda:
+                torch.cuda.manual_seed_all(int(seed))
+            for index in unique:
+                for module in online_heads[index].modules():
+                    reset = getattr(module, "reset_parameters", None)
+                    if callable(reset):
+                        reset()
+                target_heads[index].load_state_dict(
+                    online_heads[index].state_dict(),
+                    strict=True,
+                )
+                reset_parameters.extend(online_heads[index].parameters())
+        return reset_parameters
+
     def save(self, path: str, meta: dict[str, Any] | None = None) -> None:
         payload = {
             "schema_version": self.schema_version,
@@ -926,6 +1025,8 @@ class MolmoAct2RLTCF(nn.Module):
             "flow_steps": self.flow_steps,
             "guidance_coef": self.guidance_coef,
             "time_dim": self.time_dim,
+            "q_tail_fraction": self.q_tail_fraction,
+            "q_tail_min_heads": self.q_tail_min_heads,
             "meta": meta or {},
         }
         torch.save(payload, path)
@@ -953,6 +1054,12 @@ class MolmoAct2RLTCF(nn.Module):
             flow_steps=int(payload.get("flow_steps", DEFAULT_FLOW_STEPS)),
             guidance_coef=float(payload.get("guidance_coef", DEFAULT_GUIDANCE_COEF)),
             time_dim=int(payload.get("time_dim", 64)),
+            q_tail_fraction=float(
+                payload.get("q_tail_fraction", DEFAULT_Q_TAIL_FRACTION)
+            ),
+            q_tail_min_heads=int(
+                payload.get("q_tail_min_heads", DEFAULT_Q_TAIL_MIN_HEADS)
+            ),
         )
         model.load_state_dict(payload["state_dict"], strict=False)
         model.loaded_meta = dict(payload.get("meta") or {})
@@ -968,6 +1075,8 @@ class MolmoAct2RLTCF(nn.Module):
         n_critics: int = 10,
         flow_steps: int = DEFAULT_FLOW_STEPS,
         guidance_coef: float = DEFAULT_GUIDANCE_COEF,
+        q_tail_fraction: float = DEFAULT_Q_TAIL_FRACTION,
+        q_tail_min_heads: int = DEFAULT_Q_TAIL_MIN_HEADS,
     ) -> "MolmoAct2RLTCF":
         """Build a flow-CF model, copying token AE + norm stats from a residual/token ckpt."""
         payload = torch.load(path, map_location=map_location, weights_only=False)
@@ -989,6 +1098,8 @@ class MolmoAct2RLTCF(nn.Module):
             flow_steps=flow_steps,
             guidance_coef=guidance_coef,
             time_dim=64,
+            q_tail_fraction=q_tail_fraction,
+            q_tail_min_heads=q_tail_min_heads,
         )
         src = payload["state_dict"]
         dst = model.state_dict()

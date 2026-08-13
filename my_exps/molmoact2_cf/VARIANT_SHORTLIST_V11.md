@@ -1,4 +1,14 @@
-# CF_VLA shortlist — V12 (active)
+# CF_VLA shortlist — V12 (being superseded by controlled V13)
+
+- **V13 correction/audit:** `V13_THEORY_IMPLEMENTATION_AUDIT.md`
+- **V13 launcher:** `launch_v13_controlled.sh`
+- **V13 controlled benchmark:** `runs/benchmarks/house0_kettle_v13/`
+- **V13 run:** `runs/rlt_cf_v13_controlled/`
+
+V13 retains the eight-arm comparison but fixes raw ConsensusFlow target
+distillation, AE-consistent critic/gate paths, stable adapter-disabled AE
+references, atomic resume bundles, and held-out evaluation. V12 is preserved
+as historical evidence and is stopped only after its final snapshot.
 
 **Active run:** `runs/rlt_cf_v12_shortlist/`  
 **Launch:** `launch_v12_shortlist.sh`  

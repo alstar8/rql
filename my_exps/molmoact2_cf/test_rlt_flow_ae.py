@@ -119,6 +119,16 @@ class FakeAEBackend:
     def train(self, _mode: bool = True) -> None:
         return None
 
+    def action_contract(self):
+        return {
+            "action_horizon": 15,
+            "action_dim": ACTION_DIM,
+            "max_action_dim": 32,
+        }
+
+    def normalize_actions(self, actions):
+        return torch.as_tensor(actions, dtype=torch.float32)
+
     def encode_context(
         self,
         external,
@@ -128,14 +138,23 @@ class FakeAEBackend:
         *,
         action_horizon,
     ):
-        assert action_horizon == CHUNK_SIZE
+        assert action_horizon == 15
         marker = int(np.asarray(external)[0, 0, 0])
         self.context_calls.append(marker)
-        return marker, {}
+        return SimpleNamespace(
+            marker=marker,
+            action_horizon=15,
+            action_dim=ACTION_DIM,
+            max_action_dim=32,
+        ), {}
 
     def velocity(self, context, x_t, t):
         self.velocity_calls += 1
-        return torch.zeros_like(x_t) + (float(context) / 1000.0) + 0.0 * t.view(-1, 1, 1)
+        return (
+            torch.zeros_like(x_t)
+            + (float(context.marker) / 1000.0)
+            + 0.0 * t.view(-1, 1, 1)
+        )
 
 
 def test_raw_w_distill_and_deploy_bound():
@@ -365,6 +384,7 @@ def test_frozen_reference_gate_switches_ae_deployment():
 
 def test_ae_trainable_roundtrip_and_adapter_disable():
     backend = object.__new__(MolmoAEBackend)
+    backend.invalidate_modulation_cache = lambda: None
     backend.model = nn.Linear(3, 2)
     original = backend.model.weight.detach().clone()
     with tempfile.TemporaryDirectory() as temp_dir:

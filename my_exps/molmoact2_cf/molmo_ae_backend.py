@@ -125,9 +125,12 @@ class AEFlowContext:
 
     encoder_kv_states: Sequence[tuple[torch.Tensor, torch.Tensor]]
     encoder_attention_mask: torch.Tensor
-    action_context: Any
     action_dim: int = ACTION_DIM
     max_action_dim: int = 32
+    action_horizon: int = 15
+    n_action_steps: int = 15
+    n_obs_steps: int = 1
+    action_dim_is_pad: torch.Tensor | None = None
 
 
 class MolmoAEBackend:
@@ -189,6 +192,22 @@ class MolmoAEBackend:
             self._apply_ae_lora(rank=lora_rank, alpha=lora_alpha, dropout=lora_dropout)
         else:
             self._unfreeze_action_expert()
+        stats = self.model._get_robot_stats()
+        if stats.norm_mode != "q01_q99":
+            raise RuntimeError(
+                "V14 Molmo AE requires q01_q99 coordinates, got "
+                f"{stats.norm_mode!r}"
+            )
+        contract = self.action_contract()
+        if contract["action_dim"] != ACTION_DIM:
+            raise RuntimeError(
+                f"Molmo robot action_dim={contract['action_dim']} != {ACTION_DIM}"
+            )
+        if contract["action_horizon"] < CHUNK_SIZE:
+            raise RuntimeError(
+                "Molmo action horizon is shorter than the RLT deployment chunk"
+            )
+        self.invalidate_modulation_cache()
 
         n_train = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         n_total = sum(p.numel() for p in self.model.parameters())
@@ -241,19 +260,9 @@ class MolmoAEBackend:
             bias="none",
             target_modules=linear_names,
         )
-        try:
-            self.model = get_peft_model(self.model, cfg)
-        except Exception:
-            # Fallback: leaf-name targets that only appear under AE.
-            leaves = sorted({n.split(".")[-1] for n in linear_names})
-            cfg = LoraConfig(
-                r=int(rank),
-                lora_alpha=int(alpha),
-                lora_dropout=float(dropout),
-                bias="none",
-                target_modules=leaves,
-            )
-            self.model = get_peft_model(self.model, cfg)
+        # Full AE-scoped names are deliberate.  A generic leaf-name fallback
+        # (for example ``out_proj``) can attach adapters to the frozen VLM.
+        self.model = get_peft_model(self.model, cfg)
         # Peft adapters default to float32; keep them on the backbone dtype
         # (bf16) so time_embed / AE Linear matmuls do not mix Float/BFloat16.
         self.model.to(device=self.device, dtype=self.dtype)
@@ -265,6 +274,24 @@ class MolmoAEBackend:
                 p.requires_grad_(False)
             elif p.dtype != self.dtype:
                 p.data = p.data.to(dtype=self.dtype)
+        trainable_names = [
+            name
+            for name, parameter in self.model.named_parameters()
+            if parameter.requires_grad
+        ]
+        if not trainable_names or any(
+            "action_expert" not in name or "lora_" not in name.lower()
+            for name in trainable_names
+        ):
+            raise RuntimeError(
+                "AE LoRA scope violation: every trainable tensor must be an "
+                "action_expert LoRA parameter"
+            )
+        for required in ("context_k_proj", "context_v_proj"):
+            if not any(required in name for name in trainable_names):
+                raise RuntimeError(
+                    f"AE LoRA is missing required trainable {required} tensors"
+                )
 
     def _unfreeze_action_expert(self) -> None:
         found = False
@@ -301,22 +328,117 @@ class MolmoAEBackend:
             return
         if not callable(disable_adapter):
             raise RuntimeError("PEFT disable_adapter attribute is not callable")
-        with disable_adapter():
-            yield
+        self.invalidate_modulation_cache()
+        try:
+            with disable_adapter():
+                yield
+        finally:
+            self.invalidate_modulation_cache()
 
     def _pad_actions(self, actions: torch.Tensor) -> torch.Tensor:
-        """Pad (B,H,8) → (B,H,max_action_dim)."""
-        ae = self._action_expert()
-        max_dim = int(getattr(ae.config, "action_dim", None) or getattr(self.model.config, "max_action_dim", 32))
+        """Pad native robot-width actions to Molmo's expert width."""
+        contract = self.action_contract()
+        max_dim = contract["max_action_dim"]
         if actions.shape[-1] == max_dim:
-            return actions
-        if actions.shape[-1] > max_dim:
-            return actions[..., :max_dim]
+            return self._mask_padded_dims(
+                actions,
+                self._action_dim_is_pad(actions.shape[0]),
+            )
+        if actions.shape[-1] != contract["action_dim"]:
+            raise ValueError(
+                f"AE action width {actions.shape[-1]} != robot width "
+                f"{contract['action_dim']} or expert width {max_dim}"
+            )
         pad = actions.new_zeros(*actions.shape[:-1], max_dim - actions.shape[-1])
         return torch.cat([actions, pad], dim=-1)
 
     def _trim_actions(self, actions: torch.Tensor) -> torch.Tensor:
-        return actions[..., :ACTION_DIM]
+        return actions[..., : self.action_contract()["action_dim"]]
+
+    def pad_native_actions(self, actions: torch.Tensor) -> torch.Tensor:
+        return self._pad_actions(actions)
+
+    def compact_native_actions(self, actions: torch.Tensor) -> torch.Tensor:
+        if actions.ndim != 3:
+            raise ValueError(f"Expected batched native actions, got {actions.shape}")
+        return actions[:, :CHUNK_SIZE, :ACTION_DIM]
+
+    def action_contract(self) -> dict[str, int]:
+        stats = self.model._get_robot_stats()
+        norm_tag = stats.validate_tag(NORM_TAG)
+        action_dim = stats.get_action_dim(norm_tag)
+        if action_dim is None:
+            raise RuntimeError(f"Missing action dimension for norm tag {norm_tag!r}")
+        action_horizon = stats.get_action_horizon(norm_tag)
+        if action_horizon is None:
+            action_horizon = int(self.model.config.max_action_horizon)
+        n_action_steps = stats.get_n_action_steps(norm_tag)
+        if n_action_steps is None:
+            n_action_steps = int(action_horizon)
+        return {
+            "action_dim": int(action_dim),
+            "max_action_dim": int(self.model.config.max_action_dim),
+            "action_horizon": int(action_horizon),
+            "n_action_steps": int(n_action_steps),
+            "n_obs_steps": int(self.model.config.n_obs_steps),
+        }
+
+    def normalize_actions(self, actions_raw: np.ndarray | torch.Tensor) -> torch.Tensor:
+        stats = self.model._get_robot_stats()
+        norm_tag = stats.validate_tag(NORM_TAG)
+        normalizer = stats.action_normalizers.get(norm_tag)
+        normalized = actions_raw if normalizer is None else normalizer.normalize(actions_raw)
+        out = torch.as_tensor(normalized, device=self.device, dtype=self.dtype)
+        if out.shape[-1] != self.action_contract()["action_dim"]:
+            raise ValueError(
+                f"Normalized AE action has invalid width {out.shape[-1]}"
+            )
+        if not torch.isfinite(out).all():
+            raise RuntimeError("Non-finite normalized AE action")
+        return out
+
+    def unnormalize_actions(self, actions_native: torch.Tensor) -> np.ndarray:
+        stats = self.model._get_robot_stats()
+        norm_tag = stats.validate_tag(NORM_TAG)
+        # Preserve the expert dtype through unnormalization.  Molmo's native
+        # path unnormalizes bf16 and only then casts raw actions to float32.
+        native = self._trim_actions(actions_native).detach()
+        raw = stats.unnormalize_action(native, norm_tag)
+        raw_t = torch.as_tensor(raw, device=self.device, dtype=torch.float32)
+        if not torch.isfinite(raw_t).all():
+            raise RuntimeError("Non-finite unnormalized AE action")
+        return raw_t.cpu().numpy().astype(np.float32, copy=False)
+
+    def _action_dim_is_pad(self, batch_size: int) -> torch.Tensor:
+        contract = self.action_contract()
+        mask = torch.ones(
+            batch_size,
+            contract["max_action_dim"],
+            device=self.device,
+            dtype=torch.bool,
+        )
+        mask[:, : contract["action_dim"]] = False
+        return mask
+
+    @staticmethod
+    def _mask_padded_dims(
+        tensor: torch.Tensor,
+        action_dim_is_pad: torch.Tensor,
+    ) -> torch.Tensor:
+        return tensor.masked_fill(action_dim_is_pad[:, None, :], 0.0)
+
+    def invalidate_modulation_cache(self) -> None:
+        action_expert = self._action_expert()
+        for name in (
+            "_modulation_cache",
+            "modulation_cache",
+            "_cached_modulation",
+            "cached_modulation",
+            "_modulation_cache_key",
+            "_modulation_cache_value",
+        ):
+            if hasattr(action_expert, name):
+                setattr(action_expert, name, None)
 
     def _build_robot_inputs(
         self,
@@ -357,7 +479,6 @@ class MolmoAEBackend:
             inputs = self.model._drop_trivial_attention_mask(inputs)
         return inputs
 
-    @torch.no_grad()
     def encode_context(
         self,
         external_cam: np.ndarray,
@@ -365,7 +486,7 @@ class MolmoAEBackend:
         instruction: str,
         state: np.ndarray,
         *,
-        action_horizon: int = CHUNK_SIZE,
+        action_horizon: int | None = None,
     ) -> tuple[AEFlowContext, dict[str, np.ndarray]]:
         """Frozen VLM forward → detached KV + pooled/token features."""
         ext_pil = _to_pil(external_cam)
@@ -376,51 +497,51 @@ class MolmoAEBackend:
 
         inputs = self._build_robot_inputs([ext_pil, wri_pil], instruction, state_f32)
         bb = self._backbone()
-        outputs = self.model(
-            **inputs,
-            use_cache=True,
-            output_hidden_states=True,
-            return_dict=True,
-        )
-        encoder_kv = bb._extract_kv_states(outputs.past_key_values)
-        # Detach + clone so AE training cannot push grads into VLM.
-        encoder_kv = tuple(
-            (k.detach().clone(), v.detach().clone()) for k, v in encoder_kv
-        )
-        enc_mask = bb._get_encoder_attention_mask(
-            inputs.get("input_ids"), inputs.get("attention_mask")
-        ).detach().clone()
+        with torch.no_grad():
+            # Native continuous inference enters the inner MolmoAct2 model here.
+            # Calling the outer conditional-generation wrapper produces slightly
+            # different KV tensors in bf16 and breaks same-source parity.
+            outputs = bb(
+                **inputs,
+                use_cache=True,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+            encoder_kv = bb._extract_kv_states(outputs.past_key_values)
+            encoder_kv = tuple(
+                (k.detach().clone(), v.detach().clone()) for k, v in encoder_kv
+            )
+            enc_mask = bb._get_encoder_attention_mask(
+                inputs.get("input_ids"), inputs.get("attention_mask")
+            ).detach().clone()
+            depth_gate, depth_mask = bb._depth_gate_from_condition(
+                input_ids=inputs.get("input_ids"),
+                encoder_attention_mask=enc_mask,
+                layer_kv_states=encoder_kv,
+            )
+            encoder_kv = bb._apply_depth_gate_to_layer_kv_states(
+                encoder_kv, depth_mask, depth_gate
+            )
+            encoder_kv = tuple((k.detach(), v.detach()) for k, v in encoder_kv)
 
-        depth_gate, depth_mask = bb._depth_gate_from_condition(
-            input_ids=inputs.get("input_ids"),
-            encoder_attention_mask=enc_mask,
-            layer_kv_states=encoder_kv,
-        )
-        encoder_kv = bb._apply_depth_gate_to_layer_kv_states(
-            encoder_kv, depth_mask, depth_gate
-        )
-        encoder_kv = tuple(
-            (k.detach(), v.detach()) for k, v in encoder_kv
-        )
-
-        ae = self._action_expert()
+        contract = self.action_contract()
+        resolved_horizon = int(action_horizon or contract["action_horizon"])
+        if resolved_horizon != contract["action_horizon"]:
+            raise ValueError(
+                "Custom AE paths must preserve Molmo's native action horizon: "
+                f"{resolved_horizon} != {contract['action_horizon']}"
+            )
         batch_size = encoder_kv[0][0].shape[0]
-        traj_dtype = ae.action_embed.weight.dtype
-        action_context = ae.prepare_context(
-            encoder_kv_states=encoder_kv,
-            encoder_attention_mask=enc_mask,
-            state_embeddings=None,
-            batch_size=batch_size,
-            seq_len=int(action_horizon),
-            device=self.device,
-            dtype=traj_dtype,
-        )
+        action_dim_is_pad = self._action_dim_is_pad(batch_size)
         ctx = AEFlowContext(
             encoder_kv_states=encoder_kv,
             encoder_attention_mask=enc_mask,
-            action_context=action_context,
-            action_dim=ACTION_DIM,
-            max_action_dim=int(getattr(self.model.config, "max_action_dim", 32)),
+            action_dim=contract["action_dim"],
+            max_action_dim=contract["max_action_dim"],
+            action_horizon=contract["action_horizon"],
+            n_action_steps=contract["n_action_steps"],
+            n_obs_steps=contract["n_obs_steps"],
+            action_dim_is_pad=action_dim_is_pad,
         )
 
         hidden = getattr(outputs, "last_hidden_state", None)
@@ -469,22 +590,247 @@ class MolmoAEBackend:
         ctx: AEFlowContext,
         x_t: torch.Tensor,
         t: torch.Tensor,
+        *,
+        action_context: Any | None = None,
+        modulation: Any | None = None,
     ) -> torch.Tensor:
-        """AE flow velocity at (x_t, t). ``x_t`` is (B,H,8) in raw action units."""
+        """AE velocity in Molmo's padded normalized coordinate system."""
         ae = self._action_expert()
-        x_pad = self._pad_actions(x_t.to(dtype=ae.action_embed.weight.dtype))
+        if x_t.ndim != 3 or x_t.shape[1:] != (
+            ctx.action_horizon,
+            ctx.max_action_dim,
+        ):
+            raise ValueError(
+                "AE velocity requires native padded shape "
+                f"(B,{ctx.action_horizon},{ctx.max_action_dim}), got {tuple(x_t.shape)}"
+            )
+        x_pad = self._mask_padded_dims(
+            x_t.to(dtype=ae.action_embed.weight.dtype),
+            ctx.action_dim_is_pad,
+        )
         if t.ndim == 2:
             t_flat = t.reshape(-1)
         else:
             t_flat = t
         t_flat = t_flat.to(device=x_pad.device, dtype=torch.float32)
+        if action_context is None:
+            action_context = ae.prepare_context(
+                encoder_kv_states=ctx.encoder_kv_states,
+                encoder_attention_mask=ctx.encoder_attention_mask,
+                state_embeddings=None,
+                batch_size=x_pad.shape[0],
+                seq_len=ctx.action_horizon,
+                device=self.device,
+                dtype=x_pad.dtype,
+            )
         v_pad = ae.forward_with_context(
             x_pad,
             t_flat,
-            context=ctx.action_context,
-            modulation=None,
+            context=action_context,
+            modulation=modulation,
         )
-        return self._trim_actions(v_pad)
+        return self._mask_padded_dims(v_pad, ctx.action_dim_is_pad)
+
+    def sample_native_source(
+        self,
+        ctx: AEFlowContext,
+        *,
+        seed: int | None = None,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        if seed is not None and generator is not None:
+            raise ValueError("Pass either seed or generator, not both")
+        if seed is not None:
+            generator = torch.Generator(device=self.device)
+            generator.manual_seed(int(seed))
+        ae = self._action_expert()
+        source = torch.randn(
+            (
+                ctx.encoder_kv_states[0][0].shape[0],
+                ctx.action_horizon,
+                ctx.max_action_dim,
+            ),
+            device=self.device,
+            dtype=ae.action_embed.weight.dtype,
+            generator=generator,
+        )
+        return self._mask_padded_dims(source, ctx.action_dim_is_pad)
+
+    def integrate_native(
+        self,
+        ctx: AEFlowContext,
+        source_native: torch.Tensor,
+        *,
+        steps: int,
+        apply_guide: bool = False,
+        rlt_state: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Euler integration over the full native Molmo action horizon."""
+        if steps < 1:
+            raise ValueError(f"steps must be positive, got {steps}")
+        if source_native.shape[1:] != (
+            ctx.action_horizon,
+            ctx.max_action_dim,
+        ):
+            raise ValueError(
+                "Native source shape mismatch: "
+                f"{tuple(source_native.shape)} vs "
+                f"(B,{ctx.action_horizon},{ctx.max_action_dim})"
+            )
+        if apply_guide:
+            if self.rlt is None or self.rlt.guide is None or rlt_state is None:
+                raise RuntimeError(
+                    "Guided AE integration requires an RLT guide and state"
+                )
+            if ctx.action_horizon < CHUNK_SIZE or ctx.action_dim < ACTION_DIM:
+                raise RuntimeError("Native AE contract is smaller than the RLT chunk")
+
+        ae = self._action_expert()
+        trajectory = self._mask_padded_dims(
+            source_native.to(device=self.device, dtype=ae.action_embed.weight.dtype),
+            ctx.action_dim_is_pad,
+        )
+        action_context = ae.prepare_context(
+            encoder_kv_states=ctx.encoder_kv_states,
+            encoder_attention_mask=ctx.encoder_attention_mask,
+            state_embeddings=None,
+            batch_size=trajectory.shape[0],
+            seq_len=ctx.action_horizon,
+            device=self.device,
+            dtype=trajectory.dtype,
+        )
+        timesteps = [
+            torch.full(
+                (trajectory.shape[0],),
+                index / float(steps),
+                device=self.device,
+                dtype=torch.float32,
+            )
+            for index in range(steps)
+        ]
+        # Always prepare from current trainable weights.  Reusing Molmo's eval
+        # cache across adapter/base switches silently serves stale modulation.
+        modulations = ae.prepare_modulation_cache(timesteps)
+        dt = 1.0 / float(steps)
+        for index, timestep in enumerate(timesteps):
+            velocity = self.velocity(
+                ctx,
+                trajectory,
+                timestep,
+                action_context=action_context,
+                modulation=modulations[index],
+            )
+            if apply_guide:
+                compact_x = trajectory[:, :CHUNK_SIZE, :ACTION_DIM].float()
+                compact_v = velocity[:, :CHUNK_SIZE, :ACTION_DIM].float()
+                mean = self.rlt.action_mean.to(self.device)
+                std = self.rlt.action_std.to(self.device).clamp_min(1e-6)
+                compact_x_n = (compact_x - mean) / std
+                compact_v_n = compact_v / std
+                guide_t = timestep[:, None]
+                guide_n, _magnitude, _diagnostics = self.rlt.guide.guidance(
+                    rlt_state.to(self.device).float(),
+                    compact_x_n,
+                    guide_t,
+                    compact_v_n.detach(),
+                )
+                velocity = velocity.clone()
+                velocity[:, :CHUNK_SIZE, :ACTION_DIM] += (
+                    guide_n * std
+                ).to(dtype=velocity.dtype)
+            trajectory = self._mask_padded_dims(
+                trajectory + dt * velocity,
+                ctx.action_dim_is_pad,
+            )
+            if not torch.isfinite(trajectory).all():
+                raise RuntimeError(
+                    f"Non-finite native AE trajectory at flow step {index}"
+                )
+        return trajectory
+
+    def _decode_native_actions(
+        self,
+        actions_native_padded: torch.Tensor,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        native_full = self._trim_actions(actions_native_padded)
+        if not torch.isfinite(native_full).all():
+            raise RuntimeError("Non-finite native AE endpoint")
+        raw_full = self.unnormalize_actions(native_full)
+        if raw_full.ndim != 3:
+            raise ValueError(f"Unexpected decoded action shape {raw_full.shape}")
+        start = max(0, self.action_contract()["n_obs_steps"] - 1)
+        stop = start + self.action_contract()["n_action_steps"]
+        raw_deploy = raw_full[:, start:stop]
+        raw_chunk = raw_deploy[:, :CHUNK_SIZE]
+        if raw_chunk.shape[1:] != (CHUNK_SIZE, ACTION_DIM):
+            raise ValueError(f"Unexpected deploy chunk shape {raw_chunk.shape}")
+        if not np.isfinite(raw_full).all():
+            raise RuntimeError("Non-finite raw AE endpoint")
+        return (
+            raw_chunk[0].astype(np.float32, copy=False),
+            raw_full[0].astype(np.float32, copy=False),
+            native_full[0].detach().float().cpu().numpy().astype(np.float32),
+        )
+
+    def _predict_custom(
+        self,
+        external_cam: np.ndarray,
+        wrist_cam: np.ndarray,
+        instruction: str,
+        state: np.ndarray,
+        *,
+        steps: int,
+        apply_guide: bool,
+        rlt_state: torch.Tensor | None,
+        source_seed: int | None,
+        source_native: torch.Tensor | np.ndarray | None,
+    ) -> dict[str, Any]:
+        if apply_guide:
+            if self.rlt is None:
+                raise RuntimeError(
+                    "Guided AE prediction requires an RLT model"
+                )
+            if self.rlt.guide is None:
+                raise RuntimeError(
+                    "Guided AE prediction requires an RLT guide"
+                )
+            if rlt_state is None:
+                raise RuntimeError(
+                    "Guided AE prediction requires an encoded RLT state"
+                )
+        ctx, feats = self.encode_context(
+            external_cam,
+            wrist_cam,
+            instruction,
+            state,
+        )
+        if source_native is None:
+            source = self.sample_native_source(ctx, seed=source_seed)
+        else:
+            source = torch.as_tensor(
+                source_native,
+                device=self.device,
+                dtype=self._action_expert().action_embed.weight.dtype,
+            )
+            if source.ndim == 2:
+                source = source.unsqueeze(0)
+            source = self._mask_padded_dims(source, ctx.action_dim_is_pad)
+        endpoint = self.integrate_native(
+            ctx,
+            source,
+            steps=steps,
+            apply_guide=apply_guide,
+            rlt_state=rlt_state,
+        )
+        actions, raw_full, native_full = self._decode_native_actions(endpoint)
+        return {
+            "actions": actions,
+            "actions_raw_full": raw_full,
+            "actions_native_full": native_full,
+            "source_native": source[0].detach().float().cpu().numpy().astype(np.float32),
+            "source_seed": source_seed,
+            **feats,
+        }
 
     @torch.inference_mode()
     def predict(
@@ -498,32 +844,27 @@ class MolmoAEBackend:
         apply_guide: bool = False,
         rlt_state: torch.Tensor | None = None,
         action_stats: tuple[torch.Tensor, torch.Tensor] | None = None,
+        source_seed: int | None = None,
+        source_native: torch.Tensor | np.ndarray | None = None,
     ) -> dict[str, Any]:
-        """Rollout act: AE ODE, optionally ``v_AE + G`` with G from RLT guide."""
+        """Roll out trainable AE in Molmo-native coordinates."""
+        if action_stats is not None:
+            raise ValueError(
+                "External raw-action statistics are invalid for Molmo AE flow"
+            )
         steps = int(num_steps or self.num_steps)
         with self._lock:
-            if apply_guide:
-                if self.rlt is None:
-                    raise RuntimeError("Guided AE prediction requires an RLT model")
-                if self.rlt.guide is None:
-                    raise RuntimeError("Guided AE prediction requires an RLT guide")
-                if rlt_state is None:
-                    raise RuntimeError("Guided AE prediction requires an encoded RLT state")
-                actions, feats = self._predict_guided(
-                    external_cam,
-                    wrist_cam,
-                    instruction,
-                    state,
-                    steps=steps,
-                    rlt_state=rlt_state,
-                    action_stats=action_stats,
-                )
-            else:
-                actions, feats = self._predict_unguided(
-                    external_cam, wrist_cam, instruction, state, steps=steps
-                )
-        out: dict[str, Any] = {"actions": actions, **feats}
-        return out
+            return self._predict_custom(
+                external_cam,
+                wrist_cam,
+                instruction,
+                state,
+                steps=steps,
+                apply_guide=apply_guide,
+                rlt_state=rlt_state,
+                source_seed=source_seed,
+                source_native=source_native,
+            )
 
     @torch.inference_mode()
     def predict_reference(
@@ -534,8 +875,39 @@ class MolmoAEBackend:
         state: np.ndarray,
         *,
         num_steps: int | None = None,
+        source_seed: int | None = None,
+        source_native: torch.Tensor | np.ndarray | None = None,
     ) -> dict[str, Any]:
         """Predict with the frozen base AE, independent of trainable adapters."""
+        steps = int(num_steps or self.num_steps)
+        with self._lock:
+            self.model.eval()
+            with self.adapter_disabled():
+                out = self._predict_custom(
+                    external_cam,
+                    wrist_cam,
+                    instruction,
+                    state,
+                    steps=steps,
+                    apply_guide=False,
+                    rlt_state=None,
+                    source_seed=source_seed,
+                    source_native=source_native,
+                )
+        return out
+
+    @torch.inference_mode()
+    def predict_native_reference(
+        self,
+        external_cam: np.ndarray,
+        wrist_cam: np.ndarray,
+        instruction: str,
+        state: np.ndarray,
+        *,
+        num_steps: int | None = None,
+        source_seed: int | None = None,
+    ) -> dict[str, Any]:
+        """Call Molmo's untouched native inference path for parity probes."""
         steps = int(num_steps or self.num_steps)
         with self._lock:
             self.model.eval()
@@ -546,8 +918,9 @@ class MolmoAEBackend:
                     instruction,
                     state,
                     steps=steps,
+                    source_seed=source_seed,
                 )
-        return {"actions": actions, **feats}
+        return {"actions": actions, "source_seed": source_seed, **feats}
 
     def _predict_unguided(
         self,
@@ -557,6 +930,7 @@ class MolmoAEBackend:
         state: np.ndarray,
         *,
         steps: int,
+        source_seed: int | None = None,
     ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         ext_pil = _to_pil(external_cam)
         wri_pil = _to_pil(wrist_cam)
@@ -592,6 +966,10 @@ class MolmoAEBackend:
         target = getattr(hook_root, "model", hook_root)
         if target is not None:
             hook_handles.append(target.register_forward_hook(_capture_hidden, with_kwargs=True))
+        generator = None
+        if source_seed is not None:
+            generator = torch.Generator(device=self.device)
+            generator.manual_seed(int(source_seed))
         try:
             result = self.model.predict_action(
                 processor=self.processor,
@@ -602,6 +980,7 @@ class MolmoAEBackend:
                 inference_action_mode="continuous",
                 enable_depth_reasoning=False,
                 num_steps=steps,
+                generator=generator,
                 normalize_language=True,
                 enable_cuda_graph=False,
             )
@@ -650,7 +1029,7 @@ class MolmoAEBackend:
         if self.feature_mode in ("tokens", "both", "rl_token") and "token_features" not in feats:
             # Peft wrapping can miss the VLM hook; fall back to an explicit encode.
             _ctx, feats2 = self.encode_context(
-                external_cam, wrist_cam, instruction, state_f32, action_horizon=CHUNK_SIZE
+                external_cam, wrist_cam, instruction, state_f32
             )
             del _ctx
             feats.update(feats2)
@@ -669,48 +1048,27 @@ class MolmoAEBackend:
         rlt_state: torch.Tensor | None,
         action_stats: tuple[torch.Tensor, torch.Tensor] | None,
     ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-        """Euler ``x ← x + (v_AE + G) dt`` in raw action space with G from RLT."""
-        if self.rlt is None:
-            raise RuntimeError("Guided AE prediction requires an RLT model")
-        if self.rlt.guide is None:
-            raise RuntimeError("Guided AE prediction requires an RLT guide")
-        if rlt_state is None:
-            raise RuntimeError("Guided AE prediction requires an encoded RLT state")
-        ctx, feats = self.encode_context(
-            external_cam, wrist_cam, instruction, state, action_horizon=CHUNK_SIZE
-        )
-        ae = self._action_expert()
-        b = 1
-        x = torch.randn(
-            (b, CHUNK_SIZE, ACTION_DIM),
-            device=self.device,
-            dtype=ae.action_embed.weight.dtype,
-        )
-        dt = 1.0 / float(steps)
-        if action_stats is None:
-            mean = self.rlt.action_mean.to(self.device)
-            std = self.rlt.action_std.to(self.device)
-        else:
-            mean, std = action_stats
-            mean = mean.to(self.device)
-            std = std.to(self.device)
-        s = rlt_state.to(self.device)
-        if s.shape != (1, self.rlt.state_dim) or not torch.isfinite(s).all():
+        if action_stats is not None:
             raise ValueError(
-                "Guided AE prediction received invalid RLT state "
-                f"shape={tuple(s.shape)} expected=(1, {self.rlt.state_dim})"
+                "External raw-action statistics are invalid for Molmo AE flow"
             )
-
-        for i in range(steps):
-            t = torch.full((b, 1), i / float(steps), device=self.device, dtype=torch.float32)
-            v = self.velocity(ctx, x, t)
-            x_n = (x.float() - mean) / std.clamp_min(1e-6)
-            v_n = v.float() / std.clamp_min(1e-6)
-            g_n, _, _ = self.rlt.guide.guidance(s.float(), x_n, t, v_n.detach())
-            g = g_n * std
-            x = x + (v + g.to(dtype=x.dtype)) * dt
-
-        actions = x[0].detach().float().cpu().numpy().astype(np.float32)
+        out = self._predict_custom(
+            external_cam,
+            wrist_cam,
+            instruction,
+            state,
+            steps=steps,
+            apply_guide=True,
+            rlt_state=rlt_state,
+            source_seed=None,
+            source_native=None,
+        )
+        actions = np.asarray(out.pop("actions"), dtype=np.float32)
+        feats = {
+            key: value
+            for key, value in out.items()
+            if isinstance(value, np.ndarray)
+        }
         return actions, feats
 
     def save_trainable(
@@ -759,6 +1117,7 @@ class MolmoAEBackend:
                 f"{missing.unexpected_keys[:8]}"
             )
         meta = dict(blob.get("meta") or {}) if isinstance(blob, dict) else {}
+        self.invalidate_modulation_cache()
         self.loaded_trainable_meta = meta
         log.info("Loaded AE trainable weights from %s missing=%s", path, missing.missing_keys[:8])
         return meta

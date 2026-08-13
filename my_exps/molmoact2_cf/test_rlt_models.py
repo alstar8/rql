@@ -25,6 +25,7 @@ from rlt_models import (
     bootstrap_scale,
     chunk_return,
     common_scale_normalize,
+    lower_tail_mean,
     normalized_grad_target,
 )
 from train_rlt import (
@@ -219,6 +220,66 @@ def test_token_replay_and_checkpoint():
         assert len(tok2) == len(tok)
 
 
+def test_lower_tail_mean_is_robust_to_one_dead_head():
+    values = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.4, 0.5],
+            [0.5, 0.6],
+            [0.6, 0.7],
+            [0.7, 0.8],
+            [0.8, 0.9],
+            [0.9, 0.9],
+            [0.9, 0.9],
+            [0.9, 0.9],
+            [0.9, 0.9],
+        ]
+    )
+    aggregate = lower_tail_mean(values, fraction=0.25, min_heads=2, dim=0)
+    assert torch.allclose(aggregate, torch.tensor([0.3, 11.0 / 30.0]))
+    assert torch.all(aggregate > values.min(dim=0).values)
+
+
+def test_q_tail_config_roundtrip():
+    model = MolmoAct2RLTCF(
+        token_layers=1,
+        token_d_model=64,
+        n_critics=4,
+        q_tail_fraction=0.5,
+        q_tail_min_heads=3,
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "tail.pt"
+        model.save(str(path))
+        loaded = MolmoAct2RLTCF.load(str(path))
+    assert loaded.q_tail_fraction == 0.5
+    assert loaded.q_tail_min_heads == 3
+
+
+def test_explicit_critic_head_recovery_resets_target_copy():
+    model = MolmoAct2RLTCF(
+        token_layers=1,
+        token_d_model=64,
+        n_critics=3,
+    )
+    before = [
+        parameter.detach().clone()
+        for parameter in model.critic.critics[1].parameters()
+    ]
+    reset_parameters = model.reinitialize_critic_heads([1], seed=917)
+    after = list(model.critic.critics[1].parameters())
+    target = list(model.target_critic.critics[1].parameters())
+    assert reset_parameters
+    assert any(
+        not torch.equal(old, new.detach())
+        for old, new in zip(before, after)
+    )
+    assert all(
+        torch.equal(online.detach(), target_parameter.detach())
+        for online, target_parameter in zip(after, target)
+    )
+
+
 def test_reference_dropout_changes_input_path():
     actor = ChunkGaussianActor(residual=True)
     s = torch.randn(4, STATE_DIM)
@@ -242,6 +303,9 @@ if __name__ == "__main__":
         test_normalized_grad_and_guide,
         test_common_scale_preserves_magnitude_and_opposed_members,
         test_token_replay_and_checkpoint,
+        test_lower_tail_mean_is_robust_to_one_dead_head,
+        test_q_tail_config_roundtrip,
+        test_explicit_critic_head_recovery_resets_target_copy,
         test_reference_dropout_changes_input_path,
     ]
     for fn in tests:

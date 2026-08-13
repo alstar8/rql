@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Sequence
 
-from v13_harness import atomic_write_json, latest_jsonl_row, redact_command, sha256_file
+from v13_harness import atomic_write_json, redact_command, sha256_file
 
 
 _HERE = Path(__file__).resolve().parent
@@ -84,7 +84,18 @@ def read_pid_record(pidfile: Path, run_dir: Path) -> dict[str, Any]:
         key, separator, value = row.partition("=")
         if separator:
             environment[key] = value
-    marker = environment.get("RLT_CF_V4_RUN_DIR", "")
+    marker = next(
+        (
+            environment[key]
+            for key in (
+                "RLT_CF_V14_RUN_DIR",
+                "RLT_CF_V13_RUN_DIR",
+                "RLT_CF_V4_RUN_DIR",
+            )
+            if environment.get(key)
+        ),
+        "",
+    )
     try:
         marker_path = str(Path(marker).resolve()) if marker else ""
     except OSError:
