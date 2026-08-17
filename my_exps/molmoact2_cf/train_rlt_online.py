@@ -68,7 +68,7 @@ from train_rlt import (  # noqa: E402
     guide_step,
     token_step,
 )
-from v15_helpers import (  # noqa: E402
+from v17_helpers import (  # noqa: E402
     ActorPhaseConfig,
     EmpiricalGateTracker,
     actor_phase_for_episode,
@@ -281,6 +281,16 @@ def _capture_process_rng_state() -> dict[str, Any]:
     return state
 
 
+def _as_torch_byte_rng_state(value: Any) -> torch.Tensor:
+    """Coerce checkpoint RNG blobs to the CPU ByteTensor torch expects."""
+    if isinstance(value, torch.Tensor):
+        tensor = value.detach().to(device="cpu", dtype=torch.uint8).contiguous()
+    else:
+        tensor = torch.as_tensor(value, device="cpu", dtype=torch.uint8).contiguous()
+    # torch.cuda Generator.set_state requires a true ByteTensor view.
+    return tensor.byte()
+
+
 def _restore_process_rng_state(state: dict[str, Any]) -> None:
     if not state:
         return
@@ -292,15 +302,26 @@ def _restore_process_rng_state(state: dict[str, Any]) -> None:
             numpy_state = tuple(numpy_state)
         np.random.set_state(numpy_state)
     if "torch" in state:
-        torch.set_rng_state(state["torch"].cpu())
+        torch.set_rng_state(_as_torch_byte_rng_state(state["torch"]))
     if torch.cuda.is_available() and "torch_cuda" in state:
-        saved_cuda = list(state["torch_cuda"])
+        saved_cuda = [
+            _as_torch_byte_rng_state(item) for item in list(state["torch_cuda"])
+        ]
         if len(saved_cuda) != torch.cuda.device_count():
             raise RuntimeError(
                 "V14 resume CUDA RNG device count mismatch: "
                 f"saved={len(saved_cuda)} current={torch.cuda.device_count()}"
             )
-        torch.cuda.set_rng_state_all(saved_cuda)
+        try:
+            torch.cuda.set_rng_state_all(saved_cuda)
+        except TypeError as exc:
+            # Some mid-run checkpoints carry CUDA RNG blobs that fail Generator
+            # set_state under lazy CUDA init. Prefer continuing over crash-loop.
+            log.warning(
+                "Skipping CUDA RNG restore after TypeError (%s); "
+                "CPU/policy RNG still restored",
+                exc,
+            )
 
 
 def _validate_ae_contract(ae_backend: Any) -> dict[str, int]:
@@ -662,6 +683,7 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         residual_clip: float | None = None,
         always_collect_actor: bool = False,
         actor_bc_episodes: int = 50,
+        always_collect_after_episodes: int | None = None,
     ) -> None:
         self.rlt_model = model
         self.rlt_device = device
@@ -684,13 +706,21 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             None if residual_clip is None else float(residual_clip)
         )
         # V16 / RLT paper Alg.1: after BC warmup, always collect from π_θ.
+        # V17: prefer episode-level mixture; delay always-collect via
+        # always_collect_after_episodes (defaults to actor_bc_episodes).
         self.always_collect_actor = bool(always_collect_actor)
         self.actor_bc_episodes = int(max(0, actor_bc_episodes))
+        self.always_collect_after_episodes = (
+            self.actor_bc_episodes
+            if always_collect_after_episodes is None
+            else int(max(0, always_collect_after_episodes))
+        )
         self.collect_episode_index = 0
         self.episode_used_actor = False
         self.episode_mixture_draws = 0
         self.episode_actor_chunks = 0
         self.episode_collect_policy = "reference"
+        self.episode_mixture_use_actor: bool | None = None
         self.fatal_error: RLTFeatureError | None = None
         self.root_seed = int(root_seed)
         self.episode_counter = 0
@@ -908,6 +938,7 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         self.episode_mixture_draws = 0
         self.episode_actor_chunks = 0
         self.episode_collect_policy = "reference"
+        self.episode_mixture_use_actor = None
         self.episode_residual_sq_sum = 0.0
         self.episode_residual_count = 0
 
@@ -916,6 +947,7 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         self.fatal_error = None
         self._reset_vla_prefetch_episode_stats()
         self._clear_episode()
+        self.episode_mixture_use_actor = None
 
     def _ensure_rng_streams(self) -> None:
         if not hasattr(self, "root_seed"):
@@ -941,6 +973,23 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         self.episode_counter = int(episode_id)
         self.episode_decision_counter = 0
         self.episode_collect_policy = "reference"
+        # Draw mixture once per episode so empirical labels stay coherent
+        # (V15 per-chunk mixture broke empirical_insufficient_episodes).
+        self.episode_mixture_use_actor = None
+        if (
+            self.actor_mode == "rlt"
+            and self.actor_mixture_prob > 0.0
+            and not bool(getattr(self, "eval_force_reference", False))
+            and not bool(getattr(self, "guide_on_reference", False))
+        ):
+            mixture_seed = self.next_seed("actor_mixture", episode_id=episode_id)
+            mixture_rng = np.random.default_rng(mixture_seed)
+            self.episode_mixture_use_actor = bool(
+                mixture_rng.random() < float(self.actor_mixture_prob)
+            )
+            self.episode_mixture_draws = 1
+            if self.episode_mixture_use_actor:
+                self.episode_collect_policy = "mixture_actor"
 
     def next_seed(
         self,
@@ -1273,16 +1322,22 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         use_actor = bool(self.deploy_actor and self.actor_mode == "rlt")
         mixture_draw = False
         paper_collect = False
+        always_after = int(
+            getattr(
+                self,
+                "always_collect_after_episodes",
+                getattr(self, "actor_bc_episodes", 50),
+            )
+        )
         if (
             not use_actor
             and bool(getattr(self, "always_collect_actor", False))
             and self.actor_mode == "rlt"
             and not bool(getattr(self, "guide_on_reference", False))
             and not bool(getattr(self, "eval_force_reference", False))
-            and int(getattr(self, "collect_episode_index", 0))
-            >= int(getattr(self, "actor_bc_episodes", 50))
+            and int(getattr(self, "collect_episode_index", 0)) >= always_after
         ):
-            # RLT paper Alg.1: after warmup, always execute π_θ(·|x, ã).
+            # RLT paper Alg.1: after delay, always execute π_θ(·|x, ã).
             use_actor = True
             paper_collect = True
             self.episode_collect_policy = "actor"
@@ -1291,19 +1346,25 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             and self.actor_mode == "rlt"
             and self.actor_mixture_prob > 0.0
             and not bool(getattr(self, "eval_force_reference", False))
+            and not bool(getattr(self, "guide_on_reference", False))
         ):
-            mixture_seed = self.next_seed(
-                "actor_mixture",
-                decision_id=decision_id,
-            )
-            mixture_rng = np.random.default_rng(mixture_seed)
-            mixture_draw = bool(
-                mixture_rng.random() < float(self.actor_mixture_prob)
-            )
-            self.episode_mixture_draws += 1
+            # Episode-level mixture drawn in begin_episode (not per-chunk).
+            if self.episode_mixture_use_actor is None:
+                mixture_seed = self.next_seed(
+                    "actor_mixture",
+                    episode_id=int(getattr(self, "episode_counter", 0)),
+                )
+                mixture_rng = np.random.default_rng(mixture_seed)
+                self.episode_mixture_use_actor = bool(
+                    mixture_rng.random() < float(self.actor_mixture_prob)
+                )
+                self.episode_mixture_draws = 1
+            mixture_draw = bool(self.episode_mixture_use_actor)
             use_actor = mixture_draw
             if mixture_draw:
                 self.episode_collect_policy = "mixture_actor"
+            else:
+                self.episode_collect_policy = "reference"
         use_guide_only = bool(
             self.deploy_guide
             and self.guide_on_reference
@@ -2118,7 +2179,12 @@ def _build_eval_policy(
         actor_mode=args.actor_mode,
         prefer_server_z=prefer_server_z,
         retain_tokens=(
-            bool(args.tune_token_online) and not eval_only
+            (
+                bool(args.tune_token_online)
+                or bool(getattr(args, "export_offline_tokens", False))
+                or bool(getattr(args, "retain_tokens", False))
+            )
+            and not eval_only
             if retain_tokens is None
             else bool(retain_tokens) and not eval_only
         ),
@@ -2166,6 +2232,15 @@ def _build_eval_policy(
             else bool(getattr(args, "always_collect_actor", False))
         ),
         actor_bc_episodes=int(getattr(args, "actor_bc_episodes", 50)),
+        always_collect_after_episodes=(
+            None
+            if eval_only
+            else (
+                int(args.always_collect_after_episodes)
+                if getattr(args, "always_collect_after_episodes", None) is not None
+                else None
+            )
+        ),
     )
     return policy, exp_config
 
@@ -2794,39 +2869,36 @@ def _train_after_episode(
 
     while rounds < max_updates and time_remaining():
         rounds += 1
-        # RLT uses two critic updates for every actor update.
-        for _critic_update in range(2):
+        critic_kwargs = {
+            "gamma": args.gamma,
+            "mc_coef": args.mc_coef,
+            "cql_coef": args.cql_coef,
+            "cql_n_actions": args.cql_n_actions,
+            "cql_action_radius": args.cql_action_radius,
+            "ref_dropout": args.ref_dropout,
+            "rank_coef": args.rank_coef,
+            "rank_margin": args.rank_margin,
+            "rank_noise": args.rank_noise,
+            "far_rank_coef": args.far_rank_coef,
+            "far_rank_noise": args.far_rank_noise,
+            "shuffle_rank_coef": args.shuffle_rank_coef,
+            "target_noise": args.target_noise,
+            "critic_target_use_guide": bool(
+                getattr(args, "critic_target_use_guide", False)
+            ),
+            "actor_cql_coef": float(getattr(args, "actor_cql_coef", 0.0)),
+        }
+        if ae_mode:
+            # Cheap endpoint critic first, then actor/AE, then optional expensive
+            # AE TD critic. The old 2:1 order let one AE critic step burn the
+            # whole episode budget and starve LoRA updates.
             if not time_remaining():
                 stop_reason = "time_budget"
                 break
-            critic_kwargs = {
-                "gamma": args.gamma,
-                "mc_coef": args.mc_coef,
-                "cql_coef": args.cql_coef,
-                "cql_n_actions": args.cql_n_actions,
-                "cql_action_radius": args.cql_action_radius,
-                "ref_dropout": args.ref_dropout,
-                "rank_coef": args.rank_coef,
-                "rank_margin": args.rank_margin,
-                "rank_noise": args.rank_noise,
-                "far_rank_coef": args.far_rank_coef,
-                "far_rank_noise": args.far_rank_noise,
-                "shuffle_rank_coef": args.shuffle_rank_coef,
-                "target_noise": args.target_noise,
-                "critic_target_use_guide": bool(
-                    getattr(args, "critic_target_use_guide", False)
-                ),
-                "actor_cql_coef": float(getattr(args, "actor_cql_coef", 0.0)),
-            }
-            compact_ae_update = bool(ae_mode and _critic_update == 0)
-            critic_replay = replay if compact_ae_update else active_replay
-            critic_batch_size = (
-                int(args.batch_size) if compact_ae_update else batch_size
-            )
             batch = _sample_with_policy_rng(
                 policy,
-                critic_replay,
-                critic_batch_size,
+                replay,
+                int(args.batch_size),
                 device,
                 role="update_sampling",
                 episode_id=valid_episodes,
@@ -2834,28 +2906,36 @@ def _train_after_episode(
                 require_both_outcomes=True,
             )
             sample_id += 1
-            if compact_ae_update:
-                q_info = endpoint_critic_mc_step(
-                    model,
-                    optimizers["critic"],
-                    batch,
-                    rank_coef=args.rank_coef,
-                    rank_margin=args.rank_margin,
-                    rank_noise=args.rank_noise,
-                    far_rank_coef=args.far_rank_coef,
-                    far_rank_noise=args.far_rank_noise,
-                    shuffle_rank_coef=args.shuffle_rank_coef,
-                    actions_already_normalized=True,
+            q_info = endpoint_critic_mc_step(
+                model,
+                optimizers["critic"],
+                batch,
+                rank_coef=args.rank_coef,
+                rank_margin=args.rank_margin,
+                rank_noise=args.rank_noise,
+                far_rank_coef=args.far_rank_coef,
+                far_rank_noise=args.far_rank_noise,
+                shuffle_rank_coef=args.shuffle_rank_coef,
+                actions_already_normalized=True,
+            )
+            critic_updates += 1
+        else:
+            # RLT uses two critic updates for every actor update.
+            for _critic_update in range(2):
+                if not time_remaining():
+                    stop_reason = "time_budget"
+                    break
+                batch = _sample_with_policy_rng(
+                    policy,
+                    active_replay,
+                    batch_size,
+                    device,
+                    role="update_sampling",
+                    episode_id=valid_episodes,
+                    decision_id=sample_id,
+                    require_both_outcomes=True,
                 )
-            elif ae_mode:
-                q_info = ae_flow_critic_td_step(
-                    model,
-                    ae_backend,
-                    optimizers["critic"],
-                    batch,
-                    **critic_kwargs,
-                )
-            else:
+                sample_id += 1
                 critic_fn = flow_critic_td_step if model.is_flow else critic_td_step
                 q_info = critic_fn(
                     model,
@@ -2863,10 +2943,10 @@ def _train_after_episode(
                     batch,
                     **critic_kwargs,
                 )
-            critic_updates += 1
-        if not time_remaining():
-            stop_reason = "time_budget"
-            break
+                critic_updates += 1
+            if not time_remaining():
+                stop_reason = "time_budget"
+                break
         guide_on_reference = bool(getattr(args, "guide_on_reference", False))
         if args.actor_mode == "rlt" or guide_on_reference:
             actor_batch = _sample_with_policy_rng(
@@ -2955,6 +3035,7 @@ def _train_after_episode(
                 phase = actor_phase_for_episode(
                     int(valid_episodes),
                     bc_episodes=int(getattr(args, "actor_bc_episodes", 50)),
+                    q_ramp_episodes=int(getattr(args, "q_ramp_episodes", 0)),
                     residual_clip=float(getattr(args, "residual_clip", 0.02)),
                     advantage_clip=float(getattr(args, "advantage_clip", 0.05)),
                     endpoint_ref_mse_max=float(
@@ -3027,6 +3108,28 @@ def _train_after_episode(
                                 for key, value in guide_health.items()
                             },
                         }
+        if ae_mode and time_remaining():
+            batch = _sample_with_policy_rng(
+                policy,
+                active_replay,
+                batch_size,
+                device,
+                role="update_sampling",
+                episode_id=valid_episodes,
+                decision_id=sample_id,
+                require_both_outcomes=True,
+            )
+            sample_id += 1
+            q_info = ae_flow_critic_td_step(
+                model,
+                ae_backend,
+                optimizers["critic"],
+                batch,
+                **critic_kwargs,
+            )
+            critic_updates += 1
+        elif ae_mode and not time_remaining():
+            stop_reason = "time_budget"
         if args.tune_token_online and len(token_replay) > 0:
             if not time_remaining():
                 stop_reason = "time_budget"
@@ -3125,6 +3228,54 @@ def _save_chunk_replay(replay: ChunkReplay, replay_out: str) -> None:
         _io_retry(f"chunk replay save {path}", _write)
     except Exception:
         _cleanup_path(temporary)
+        raise
+
+
+def _save_token_replay(replay: TokenReplay, replay_out: str) -> None:
+    if not replay_out or len(replay) == 0:
+        return
+    path = Path(replay_out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Stage on local disk when possible — atomic NFS replace of multi-GB
+    # object NPZs is what killed V17 collect at eps=150.
+    staging_root = Path(
+        os.environ.get("RLT_TOKEN_SAVE_STAGING", "/tmp/rlt_token_stage")
+    )
+    staging_root.mkdir(parents=True, exist_ok=True)
+    temporary = staging_root / f"{path.stem}.{os.getpid()}.tmp.npz"
+    nfs_tmp = path.with_name(f".{path.name}.tmp.npz")
+    # Serialize token flushes across shards — 8× parallel compress+write
+    # spikes RAM past 1TB and leaves 0-byte staging files.
+    lock_path = staging_root / "token_flush.lock"
+
+    def _write() -> None:
+        _cleanup_path(temporary)
+        _cleanup_path(nfs_tmp)
+        with open(lock_path, "a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                log.info(
+                    "Token flush acquired lock n=%d -> %s",
+                    len(replay),
+                    temporary,
+                )
+                replay.save_npz(str(temporary))
+                with open(temporary, "rb") as handle:
+                    os.fsync(handle.fileno())
+                shutil.copy2(temporary, nfs_tmp)
+                with open(nfs_tmp, "rb") as handle:
+                    os.fsync(handle.fileno())
+                os.replace(nfs_tmp, path)
+                _cleanup_path(temporary)
+                log.info("Token flush done -> %s (%.2f GB)", path, path.stat().st_size / 1e9)
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    try:
+        _io_retry(f"token replay save {path}", _write)
+    except Exception:
+        _cleanup_path(temporary)
+        _cleanup_path(nfs_tmp)
         raise
 
 
@@ -3266,13 +3417,21 @@ def _persist_training_state(
     ae_backend: MolmoAEBackend | None = None,
     ae_image_replay: ImageChunkReplay | None = None,
     ae_image_replay_out: str = "",
+    token_replay: TokenReplay | None = None,
+    token_replay_out: str = "",
+    chunk_token_replay: TokenReplay | None = None,
+    chunk_token_replay_out: str = "",
     optimizers: dict[str, torch.optim.Optimizer] | None = None,
     policy: RLTOnlinePolicy | None = None,
+    save_token_replays: bool = True,
 ) -> Path | None:
     """Checkpoint first, then metrics — so counters never outrun weights.
 
     On transient NFS failures, log and continue unless ``required`` (final save).
     Always runs outside the EGL GPU lock.
+
+    ``save_token_replays`` gates multi-GB token NPZ writes. Offline collect can
+    skip intermediate dumps (keep buffers in RAM) and flush once at the end.
     """
     checkpoint: Path | None = None
     checkpoint_meta = {
@@ -3318,6 +3477,52 @@ def _persist_training_state(
         )
         if required:
             raise
+
+    if save_token_replays and token_replay is not None and token_replay_out:
+        # Shared buffer: only write once, then symlink the other path.
+        same_buffer = (
+            chunk_token_replay is token_replay
+            and bool(chunk_token_replay_out)
+            and str(chunk_token_replay_out) != str(token_replay_out)
+        )
+        if same_buffer:
+            pass  # saved via chunk_token path below
+        else:
+            try:
+                _save_token_replay(token_replay, token_replay_out)
+            except Exception as error:  # noqa: BLE001
+                log.warning(
+                    "Token replay save failed after retries (steps=%d): %s",
+                    env_steps,
+                    error,
+                )
+                if required:
+                    raise
+    if (
+        save_token_replays
+        and chunk_token_replay is not None
+        and chunk_token_replay_out
+    ):
+        try:
+            _save_token_replay(chunk_token_replay, chunk_token_replay_out)
+            if (
+                token_replay is chunk_token_replay
+                and token_replay_out
+                and str(token_replay_out) != str(chunk_token_replay_out)
+            ):
+                token_path = Path(token_replay_out)
+                chunk_path = Path(chunk_token_replay_out)
+                if token_path.exists() or token_path.is_symlink():
+                    token_path.unlink()
+                token_path.symlink_to(chunk_path.resolve())
+        except Exception as error:  # noqa: BLE001
+            log.warning(
+                "Chunk-token replay save failed after retries (steps=%d): %s",
+                env_steps,
+                error,
+            )
+            if required:
+                raise
 
     if ae_backend is not None:
         if ae_image_replay is None or not ae_image_replay_out:
@@ -3560,6 +3765,8 @@ def _metrics_row(
             "guide_skip_unhealthy_critic",
             "critic_gradient_raw_norm_mean",
             "critic_gradient_raw_norm_min",
+            "critic_gradient_selected_norm_mean",
+            "critic_gradient_selected_norm_min",
             "critic_gradient_nonzero_fraction",
             "critic_gradient_direction_agreement",
         ):
@@ -3620,6 +3827,21 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
     if not eval_only and not str(getattr(args, "replay_out", "")):
         args.replay_out = str(out_dir / "chunk_replay.npz")
+    if (
+        not eval_only
+        and bool(getattr(args, "export_offline_tokens", False))
+        and not str(getattr(args, "token_replay_out", ""))
+        and not str(getattr(args, "chunk_token_replay_out", ""))
+    ):
+        # Only default token_replay_out when neither path is set. Collect that
+        # only passes chunk_token_replay_out must not also auto-write token_replay.
+        args.token_replay_out = str(out_dir / "token_replay.npz")
+    if (
+        not eval_only
+        and bool(getattr(args, "export_offline_tokens", False))
+        and not str(getattr(args, "chunk_token_replay_out", ""))
+    ):
+        args.chunk_token_replay_out = str(out_dir / "chunk_token_replay.npz")
     if (
         not eval_only
         and
@@ -3955,6 +4177,29 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         max_seq=args.token_max_seq,
         token_dim=model.feature_dim,
     )
+    chunk_token_replay = TokenReplay(
+        max_seq=args.token_max_seq,
+        token_dim=model.feature_dim,
+    )
+    export_tokens = bool(getattr(args, "export_offline_tokens", False)) or bool(
+        str(getattr(args, "token_replay_out", "") or "")
+    ) or bool(str(getattr(args, "chunk_token_replay_out", "") or ""))
+    if export_tokens and not eval_only:
+        # One shared buffer: token_replay.npz and chunk_token_replay.npz are the
+        # same sequences; duplicating them doubled RAM (~37GB/process) and made
+        # the final flush kill the V17 collect.
+        token_replay = chunk_token_replay
+        # Keep all tokens for offline AE re-encode (no capacity trim).
+        args.token_replay_capacity = max(
+            int(getattr(args, "token_replay_capacity", 1)),
+            int(getattr(args, "replay_capacity", 200000)),
+            500000,
+        )
+        args.retain_tokens = True
+        # Collect-only / pretrain export should keep reference policy.
+        if int(getattr(args, "updates_per_episode", 1)) <= 0:
+            args.actor_mixture_prob = 0.0
+            args.always_collect_actor = False
 
     if ae_backend is None:
         health = _wait_for_server(
@@ -4190,6 +4435,7 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         phase = actor_phase_for_episode(
             int(valid_episodes),
             bc_episodes=int(getattr(args, "actor_bc_episodes", 50)),
+            q_ramp_episodes=int(getattr(args, "q_ramp_episodes", 0)),
             residual_clip=float(getattr(args, "residual_clip", 0.02)),
             advantage_clip=float(getattr(args, "advantage_clip", 0.05)),
             endpoint_ref_mse_max=float(
@@ -4202,6 +4448,12 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         policy.actor_bc_episodes = int(getattr(args, "actor_bc_episodes", 50))
         policy.always_collect_actor = bool(
             getattr(args, "always_collect_actor", False)
+        )
+        after = getattr(args, "always_collect_after_episodes", None)
+        policy.always_collect_after_episodes = (
+            int(getattr(args, "actor_bc_episodes", 50))
+            if after is None
+            else int(after)
         )
 
         gate = _gate_status(
@@ -4218,6 +4470,17 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         )
         policy.deploy_actor = gate.deploy_actor
         policy.deploy_guide = gate.deploy_guide
+        # Gate-aware collect mixture (V18): keep actor rare until deploy opens.
+        base_mix = float(getattr(args, "actor_mixture_prob", 0.0))
+        pre_mix = getattr(args, "actor_mixture_prob_pre_gate", None)
+        post_mix = getattr(args, "actor_mixture_prob_post_gate", None)
+        if pre_mix is None:
+            pre_mix = base_mix
+        if post_mix is None:
+            post_mix = base_mix
+        policy.actor_mixture_prob = float(
+            post_mix if gate.deploy_actor else pre_mix
+        )
         model.eval()
 
         episode_idx = shard_start + (cycle % shard_size)
@@ -4294,11 +4557,16 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                             sources_native=trajectory["sources_native"],
                         )
                     for tokens, mask in trajectory["token_batches"]:
-                        token_replay.add(tokens, mask)
-                    token_overflow = len(token_replay) - args.token_replay_capacity
-                    if token_overflow > 0:
-                        del token_replay.tokens[:token_overflow]
-                        del token_replay.masks[:token_overflow]
+                        # Shared buffer when export_tokens (token_replay is
+                        # chunk_token_replay); otherwise both may differ by trim.
+                        chunk_token_replay.add(tokens, mask)
+                        if token_replay is not chunk_token_replay:
+                            token_replay.add(tokens, mask)
+                    if not export_tokens:
+                        token_overflow = len(token_replay) - args.token_replay_capacity
+                        if token_overflow > 0:
+                            del token_replay.tokens[:token_overflow]
+                            del token_replay.masks[:token_overflow]
             if rollout_ok and n_steps > 0 and not eval_only:
                 (
                     last_q,
@@ -4463,6 +4731,16 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             )
             or _STOP_REQUESTED
         )
+        token_every = int(
+            getattr(args, "token_ckpt_every_episodes", 0) or 0
+        )
+        flush_tokens = bool(export_tokens) and (
+            token_every > 0 and valid_episodes % token_every == 0
+        )
+        # Token export cadence must also open the persist path (otherwise
+        # token_ckpt_every=25 never fires when ckpt_every=10).
+        if flush_tokens:
+            should_log = True
         if should_log:
             row = _metrics_row(
                 args,
@@ -4487,6 +4765,8 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             )
             # Persist outside the EGL lock (already released) so NFS stalls
             # cannot block other trainers on this GPU.
+            # Offline token export buffers grow to multi-GB; skipping intermediate
+            # NPZ dumps avoids NFS stalls that freeze collectors for tens of minutes.
             checkpoint = _persist_training_state(
                 model=model,
                 out_dir=out_dir,
@@ -4501,8 +4781,15 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                 ae_image_replay_out=str(
                     getattr(args, "ae_image_replay_out", "")
                 ),
+                token_replay=token_replay if export_tokens else None,
+                token_replay_out=str(getattr(args, "token_replay_out", "")),
+                chunk_token_replay=chunk_token_replay if export_tokens else None,
+                chunk_token_replay_out=str(
+                    getattr(args, "chunk_token_replay_out", "")
+                ),
                 optimizers=optimizers,
                 policy=policy,
+                save_token_replays=flush_tokens,
             )
             if checkpoint is None:
                 log.warning(
@@ -4613,10 +4900,10 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         log.info("Validation done: %s", json.dumps(summary))
         return
 
-    checkpoint = (
-        out_dir / "rlt_cf_latest.pt"
-        if already_persisted
-        else _persist_training_state(
+    if already_persisted and not export_tokens:
+        checkpoint = out_dir / "rlt_cf_latest.pt"
+    else:
+        checkpoint = _persist_training_state(
             model=model,
             out_dir=out_dir,
             metrics_path=metrics_path,
@@ -4624,16 +4911,22 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             row=final_row,
             replay=replay,
             replay_out=args.replay_out,
-            required=False,
+            required=bool(export_tokens),
             ae_backend=ae_backend,
             ae_image_replay=image_replay,
             ae_image_replay_out=str(
                 getattr(args, "ae_image_replay_out", "")
             ),
+            token_replay=token_replay if export_tokens else None,
+            token_replay_out=str(getattr(args, "token_replay_out", "")),
+            chunk_token_replay=chunk_token_replay if export_tokens else None,
+            chunk_token_replay_out=str(
+                getattr(args, "chunk_token_replay_out", "")
+            ),
             optimizers=optimizers,
             policy=policy,
+            save_token_replays=bool(export_tokens),
         )
-    )
     if checkpoint is None:
         checkpoint = out_dir / "rlt_cf_latest.pt"
         log.error(
@@ -4972,11 +5265,54 @@ def parse_args() -> argparse.Namespace:
         help="While Q-gate is closed, execute the learned actor with this probability.",
     )
     parser.add_argument(
+        "--actor_mixture_prob_pre_gate",
+        type=float,
+        default=None,
+        help="Override mixture while gate is closed (default: actor_mixture_prob).",
+    )
+    parser.add_argument(
+        "--actor_mixture_prob_post_gate",
+        type=float,
+        default=None,
+        help="Override mixture once gate deploys actor (default: actor_mixture_prob).",
+    )
+    parser.add_argument(
         "--always_collect_actor",
         action="store_true",
         help=(
-            "V16/RLT paper Alg.1: after actor_bc_episodes, always collect from "
-            "π_θ regardless of the Q-gate (gate still controls guide deploy)."
+            "V16/RLT paper Alg.1: after always_collect_after_episodes, always "
+            "collect from π_θ regardless of the Q-gate (gate still controls guide)."
+        ),
+    )
+    parser.add_argument(
+        "--always_collect_after_episodes",
+        type=int,
+        default=None,
+        help=(
+            "Delay for --always_collect_actor (default: actor_bc_episodes). "
+            "V17 sets this high so mixture can populate empirical gate first."
+        ),
+    )
+    parser.add_argument(
+        "--q_ramp_episodes",
+        type=int,
+        default=0,
+        help="After BC warmup, linearly ramp actor q_coef 0→1 over this many episodes.",
+    )
+    parser.add_argument(
+        "--export_offline_tokens",
+        action="store_true",
+        help="Persist token_replay + chunk_token_replay for offline kettle pretrain.",
+    )
+    parser.add_argument("--token_replay_out", type=str, default="")
+    parser.add_argument("--chunk_token_replay_out", type=str, default="")
+    parser.add_argument(
+        "--token_ckpt_every_episodes",
+        type=int,
+        default=0,
+        help=(
+            "When exporting offline tokens, write multi-GB token NPZs every N "
+            "episodes (0 = only at end). Intermediate dumps stall NFS collect."
         ),
     )
     parser.add_argument(

@@ -96,6 +96,7 @@ def warmup(args: argparse.Namespace) -> None:
                 target_divergence=args.target_divergence,
                 ref_dropout=args.ref_dropout,
                 bc_coef=args.bc_coef,
+                q_coef=float(getattr(args, "actor_q_coef", 0.0)),
             )
         if step % args.log_every == 0 or step == args.steps:
             sens = action_sensitivity(model, batch, noise=args.rank_noise)
@@ -156,8 +157,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--actor_every", type=int, default=1)
     parser.add_argument("--bc_coef", type=float, default=1.0)
     parser.add_argument("--actor_beta", type=float, default=1.0)
+    parser.add_argument(
+        "--actor_q_coef",
+        type=float,
+        default=0.0,
+        help="Q weight for flow actor during offline warmup (0 = pure BC).",
+    )
     parser.add_argument("--target_divergence", type=float, default=0.0025)
-    parser.add_argument("--ref_dropout", type=float, default=0.5)
+    parser.add_argument("--ref_dropout", type=float, default=0.0)
     parser.add_argument("--log_every", type=int, default=100)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--gamma", type=float, default=0.99)

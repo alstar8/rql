@@ -1,6 +1,7 @@
 # V16 methods: paper Alg.1 collect + strong soft-β BC
 
-Status: **implementation complete; launch via `launch_v16_controlled.sh` after V15 eval**.  
+Status: **long run live; mid-run repair applied 2026-08-13** (explore=0 on CF/AE, CF guide skip uses selected grads, AE actor-before-expensive-critic + 180s budget).  
+Reset fresh: `residual_vla_cf`, `residual_rlt_cf`, `flow_rlt_cf`, `molmo_ae_lora_actor`. Kept/resumed: baselines + RLT actors.  
 Run: `runs/rlt_cf_v16_controlled`  
 Ports: `8710–8716` (does not collide with V15 `8700–8706`)  
 Predecessor: V15 (mixture coverage + empirical gate; train SR drop diagnosed as explore tax)
@@ -53,3 +54,6 @@ bash eval_v16_controlled.sh
 Packing defaults: `INSTANCES_PER_GPU=3`, `AE_INSTANCES_PER_GPU=1`, `RLT_EGL_PER_GPU=3`, `RLT_EGL_MAX_CONCURRENT=24`. Shard outputs live under `<variant>/shard_{0,1,2}/`.
 
 Do not overwrite `runs/rlt_cf_v13_controlled`, `v14`, or `v15`.
+
+Improved RLT+CF capacity test (z=256 / d=512 / 4 layers, non-overlapping chunks only): see [V16_RLT_IMPROVED.md](V16_RLT_IMPROVED.md).  
+Follow-on (kettle offline + safe collect): see [V17_METHODS.md](V17_METHODS.md).

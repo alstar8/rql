@@ -65,11 +65,24 @@ def warmup(args: argparse.Namespace) -> None:
     else:
         model = MolmoAct2RLTCF(
             feature_dim=replay.token_dim,
+            z_dim=args.z_dim,
             use_cf_guide=args.use_cf_guide,
             tune_token_online=True,
             n_critics=args.n_critics,
+            hidden=args.hidden,
+            token_d_model=args.token_d_model,
+            token_layers=args.token_layers,
+            token_heads=args.token_heads,
         ).to(device)
-        log.info("Initialized a fresh RLT model with n_critics=%d", args.n_critics)
+        log.info(
+            "Initialized fresh RLT model n_critics=%d z=%d d=%d layers=%d heads=%d hidden=%d",
+            args.n_critics,
+            args.z_dim,
+            args.token_d_model,
+            args.token_layers,
+            args.token_heads,
+            args.hidden,
+        )
     if model.feature_dim != replay.token_dim:
         raise ValueError(
             f"Replay token_dim={replay.token_dim} does not match "
@@ -148,6 +161,16 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="Critic ensemble size stored in the warmed checkpoint (CF default K=10)",
     )
+    parser.add_argument("--z_dim", type=int, default=256)
+    parser.add_argument("--token_d_model", type=int, default=512)
+    parser.add_argument("--token_layers", type=int, default=4)
+    parser.add_argument("--token_heads", type=int, default=4)
+    parser.add_argument(
+        "--hidden",
+        type=int,
+        default=256,
+        help="Actor/critic MLP width stored alongside the token AE",
+    )
     guide_group = parser.add_mutually_exclusive_group()
     guide_group.add_argument(
         "--use_cf_guide",
@@ -167,6 +190,18 @@ def parse_args() -> argparse.Namespace:
         parser.error("--batch_size must be positive")
     if args.log_every <= 0:
         parser.error("--log_every must be positive")
+    if args.z_dim <= 0:
+        parser.error("--z_dim must be positive")
+    if args.token_d_model <= 0:
+        parser.error("--token_d_model must be positive")
+    if args.token_layers <= 0:
+        parser.error("--token_layers must be positive")
+    if args.token_heads <= 0:
+        parser.error("--token_heads must be positive")
+    if args.token_d_model % args.token_heads != 0:
+        parser.error("--token_d_model must be divisible by --token_heads")
+    if args.hidden <= 0:
+        parser.error("--hidden must be positive")
     return args
 
 

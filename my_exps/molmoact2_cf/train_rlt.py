@@ -139,16 +139,37 @@ def stochastic_target_critic_gradient(
         return target
 
     raw_norms = gradients.norm(dim=-1)
+    selected_raw_norms = selected_gradient.norm(dim=-1)
     unit = gradients / raw_norms.clamp_min(1e-12).unsqueeze(-1)
     mean_direction = unit.mean(dim=0)
     direction_agreement = mean_direction.norm(dim=-1)
     diagnostics = {
         "critic_gradient_raw_norm_mean": float(raw_norms.mean()),
         "critic_gradient_raw_norm_min": float(raw_norms.min()),
-        "critic_gradient_nonzero_fraction": float((raw_norms > 1e-8).float().mean()),
+        # Guide skip must use the *selected* members (the actual teacher), not the
+        # min over all heads×batch — one dead ensemble head previously zeroed CF.
+        "critic_gradient_selected_norm_mean": float(selected_raw_norms.mean()),
+        "critic_gradient_selected_norm_min": float(selected_raw_norms.min()),
+        "critic_gradient_nonzero_fraction": float(
+            (selected_raw_norms > 1e-8).float().mean()
+        ),
         "critic_gradient_direction_agreement": float(direction_agreement.mean()),
     }
     return target, diagnostics
+
+
+def _guide_teacher_is_dead(gradient_diagnostics: dict[str, float]) -> bool:
+    """True only when every selected teacher gradient is numerically dead."""
+    selected_mean = float(
+        gradient_diagnostics.get(
+            "critic_gradient_selected_norm_mean",
+            gradient_diagnostics.get("critic_gradient_raw_norm_mean", 0.0),
+        )
+    )
+    nonzero = float(
+        gradient_diagnostics.get("critic_gradient_nonzero_fraction", 0.0)
+    )
+    return selected_mean <= 1e-8 or nonzero <= 0.0
 
 
 def _per_head_rank_loss(
@@ -528,7 +549,7 @@ def guide_step(
         actor_mean,
         return_diagnostics=True,
     )
-    if gradient_diagnostics["critic_gradient_raw_norm_min"] <= 1e-8:
+    if _guide_teacher_is_dead(gradient_diagnostics):
         return {
             "guide_loss": 0.0,
             "guide_adv": 0.0,
@@ -2320,7 +2341,7 @@ def ae_flow_guide_step(
         t=t,
         return_diagnostics=True,
     )
-    if gradient_diagnostics["critic_gradient_raw_norm_min"] <= 1e-8:
+    if _guide_teacher_is_dead(gradient_diagnostics):
         return {
             "guide_loss": 0.0,
             "guide_adv": 0.0,
@@ -2423,7 +2444,7 @@ def flow_guide_step(
         t=t,
         return_diagnostics=True,
     )
-    if gradient_diagnostics["critic_gradient_raw_norm_min"] <= 1e-8:
+    if _guide_teacher_is_dead(gradient_diagnostics):
         return {
             "guide_loss": 0.0,
             "guide_adv": 0.0,

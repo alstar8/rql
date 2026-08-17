@@ -20,6 +20,9 @@ SERVER_WAIT_ATTEMPTS="${SERVER_WAIT_ATTEMPTS:-240}"
 SERVER_STAGGER_SEC="${SERVER_STAGGER_SEC:-3}"
 TRAINER_STAGGER_SEC="${TRAINER_STAGGER_SEC:-8}"
 FRESH="${FRESH:-0}"
+# Comma-separated variant names to wipe and restart fresh while FRESH=0 keeps
+# the other arms' progress (e.g. residual_vla_cf,residual_rlt_cf,flow_rlt_cf,molmo_ae_lora_actor).
+V16_RESET_VARIANTS="${V16_RESET_VARIANTS:-}"
 V16_MODE="${V16_MODE:-full}"
 
 case "${V16_MODE}" in
@@ -52,6 +55,7 @@ V16_AE_BATCH_SIZE="${V16_AE_BATCH_SIZE:-16}"
 V16_AE_MICROBATCH_SIZE="${V16_AE_MICROBATCH_SIZE:-4}"
 V16_AE_MIN_SUCCESS_EPISODES="${V16_AE_MIN_SUCCESS_EPISODES:-3}"
 V16_MAX_UPDATE_SEC_PER_EPISODE="${V16_MAX_UPDATE_SEC_PER_EPISODE:-60}"
+V16_AE_MAX_UPDATE_SEC_PER_EPISODE="${V16_AE_MAX_UPDATE_SEC_PER_EPISODE:-180}"
 V16_UPDATES_PER_EPISODE="${V16_UPDATES_PER_EPISODE:-128}"
 V16_AE_UPDATES_PER_EPISODE="${V16_AE_UPDATES_PER_EPISODE:-32}"
 # Keep exported for harness VariantSpec construction at trainer start.
@@ -119,11 +123,26 @@ export FRESH POLL_SEC SERVER_WAIT_ATTEMPTS SERVER_STAGGER_SEC TRAINER_STAGGER_SE
 export V16_MODE V16_MAX_VALID_EPISODES V16_TARGET_ENV_STEPS
 export V16_SNAPSHOT_EPISODES V16_AE_BATCH_SIZE V16_AE_MICROBATCH_SIZE
 export V16_AE_MIN_SUCCESS_EPISODES
-export V16_MAX_UPDATE_SEC_PER_EPISODE
+export V16_MAX_UPDATE_SEC_PER_EPISODE V16_AE_MAX_UPDATE_SEC_PER_EPISODE
 export V16_UPDATES_PER_EPISODE V16_AE_UPDATES_PER_EPISODE
+export V16_RESET_VARIANTS
+
+declare -A V16_RESET_SET=()
+if [[ -n "${V16_RESET_VARIANTS}" ]]; then
+  IFS=',' read -r -a _reset_tokens <<< "${V16_RESET_VARIANTS}"
+  for token in "${_reset_tokens[@]}"; do
+    token="${token//[[:space:]]/}"
+    [[ -z "${token}" ]] && continue
+    V16_RESET_SET["${token}"]=1
+  done
+fi
 
 if [[ ! "${FRESH}" =~ ^[01]$ ]]; then
   echo "[v16] FRESH must be 0 or 1, got ${FRESH}" >&2
+  exit 1
+fi
+if [[ "${FRESH}" == "1" && ${#V16_RESET_SET[@]} -gt 0 ]]; then
+  echo "[v16] V16_RESET_VARIANTS is only valid with FRESH=0 (selective wipe)" >&2
   exit 1
 fi
 for positive_integer in \
@@ -202,6 +221,17 @@ if (( ${#VARIANT_ROWS[@]} != 8 )); then
   echo "[v16] expected eight variant rows, got ${#VARIANT_ROWS[@]}" >&2
   exit 1
 fi
+declare -A V16_KNOWN_VARIANTS=()
+for row in "${VARIANT_ROWS[@]}"; do
+  IFS='|' read -r variant _ <<< "${row}"
+  V16_KNOWN_VARIANTS["${variant}"]=1
+done
+for variant in "${!V16_RESET_SET[@]}"; do
+  if [[ -z "${V16_KNOWN_VARIANTS[${variant}]:-}" ]]; then
+    echo "[v16] unknown V16_RESET_VARIANTS entry: ${variant}" >&2
+    exit 1
+  fi
+done
 
 pid_first_field() {
   local pidfile="$1"
@@ -555,12 +585,16 @@ run_watchdog() {
     IFS='|' read -r variant gpu_index cf_mode actor_mode guide ae_mode checkpoint_kind updates port <<< "${row}"
     n_inst="$(n_instances_for "${ae_mode}")"
     gpu="${GPU_ARRAY[$gpu_index]}"
+    local variant_fresh="${initial_fresh}"
+    if [[ -n "${V16_RESET_SET[${variant}]:-}" ]]; then
+      variant_fresh=1
+    fi
     for ((shard=0; shard<n_inst; shard++)); do
       port_i=""
       if [[ -n "${port}" ]]; then
         port_i="$(shard_http_port "${gpu_index}" "${shard}")"
       fi
-      start_trainer "${variant}" "${gpu}" "${ae_mode}" "${initial_fresh}" "${shard}" "${port_i}"
+      start_trainer "${variant}" "${gpu}" "${ae_mode}" "${variant_fresh}" "${shard}" "${port_i}"
       sleep "${TRAINER_STAGGER_SEC}"
     done
   done
@@ -686,8 +720,20 @@ else
     echo "[v16] resume GPU mapping differs from the immutable manifest" >&2
     exit 1
   fi
+  for variant in "${!V16_RESET_SET[@]}"; do
+    echo "[v16] selective reset: wiping ${variant}"
+    rm -rf "${RUN_DIR:?}/${variant}"
+    rm -f "${RUN_DIR}/pids/train_${variant}"*.resume_blocked
+    rm -rf "${RUN_DIR}/validation/${variant}"
+    shopt -s nullglob
+    rm -f "${LOCAL_LOG_DIR}"/*"${variant}"*.log
+    shopt -u nullglob
+  done
   for row in "${VARIANT_ROWS[@]}"; do
     IFS='|' read -r variant gpu_index cf_mode actor_mode guide ae_mode checkpoint_kind updates port <<< "${row}"
+    if [[ -n "${V16_RESET_SET[${variant}]:-}" ]]; then
+      continue
+    fi
     n_inst="$(n_instances_for "${ae_mode}")"
     for ((shard=0; shard<n_inst; shard++)); do
       state_args=(
@@ -749,6 +795,8 @@ nohup setsid env \
   V16_MAX_VALID_EPISODES="${V16_MAX_VALID_EPISODES}" \
   V16_TARGET_ENV_STEPS="${V16_TARGET_ENV_STEPS}" \
   V16_SNAPSHOT_EPISODES="${V16_SNAPSHOT_EPISODES}" \
+  V16_RESET_VARIANTS="${V16_RESET_VARIANTS}" \
+  V16_AE_MAX_UPDATE_SEC_PER_EPISODE="${V16_AE_MAX_UPDATE_SEC_PER_EPISODE}" \
   INSTANCES_PER_GPU="${INSTANCES_PER_GPU}" \
   AE_INSTANCES_PER_GPU="${AE_INSTANCES_PER_GPU}" \
   BASE_HTTP_PORT="${BASE_HTTP_PORT}" \

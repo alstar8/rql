@@ -72,6 +72,26 @@ def test_train_command_paper_collect_flags() -> None:
     )
     assert "--guide_on_reference" in cf
     assert "--always_collect_actor" not in cf
+    assert cmd[cmd.index("--explore_residual_std") + 1] == "0.0"
+    assert cf[cf.index("--explore_residual_std") + 1] == "0.0"
+    assert cf[cf.index("--explore_deploy_std") + 1] == "0.0"
+
+    ae = h.build_train_command(
+        python_executable="python",
+        root=HERE,
+        run_dir=run_dir,
+        benchmark_train=HERE / "runs" / "benchmarks" / "house0_kettle_v13" / "train",
+        residual_checkpoint=HERE / "runs" / "rlt_pretrain_demo1k" / "x.pt",
+        flow_checkpoint=HERE / "runs" / "rlt_pretrain_demo1k" / "y.pt",
+        tmp_rollout_dir=HERE / "tmp",
+        variant=h.VARIANT_BY_NAME["molmo_ae_lora_actor"],
+        fresh=True,
+    )
+    assert ae[ae.index("--explore_residual_std") + 1] == "0.0"
+    assert ae[ae.index("--explore_deploy_std") + 1] == "0.0"
+    assert ae[ae.index("--max_update_sec_per_episode") + 1] == str(
+        h.AE_MAX_UPDATE_SEC_PER_EPISODE
+    )
 
 
 def test_validate_trainer_cli() -> None:

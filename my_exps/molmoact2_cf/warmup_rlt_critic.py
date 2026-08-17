@@ -22,6 +22,7 @@ from chunk_replay import ChunkReplay, TokenReplay  # noqa: E402
 from rlt_models import MolmoAct2RLTCF, Z_DIM  # noqa: E402
 from train_rlt import (  # noqa: E402
     action_sensitivity,
+    actor_step,
     build_rlt_optimizers,
     critic_is_healthy,
     critic_td_step,
@@ -220,40 +221,53 @@ def warmup(args: argparse.Namespace) -> None:
     model.freeze_token_encoder()
 
     token_paths = _resolve_token_paths(args)
-    if token_paths is not None:
-        log.info("streaming re-encode from %d token shards", len(token_paths))
-        for p in token_paths:
-            log.info("  shard %s", p)
-        reencode_chunk_zs_from_paths(
-            model,
-            chunk_replay,
-            token_paths,
-            batch_size=args.encode_batch_size,
-            device=device,
-        )
-    else:
-        log.info("loading full chunk_token_replay %s", args.chunk_token_replay)
-        chunk_token_replay = TokenReplay.load_npz(args.chunk_token_replay)
-        log.info("loaded chunk_tokens=%d", len(chunk_token_replay))
-        reencode_chunk_zs(
-            model,
-            chunk_replay,
-            chunk_token_replay,
-            batch_size=args.encode_batch_size,
-            device=device,
-        )
-        del chunk_token_replay
-        gc.collect()
-
     reenc_path = Path(args.out_ckpt).with_name("chunk_replay_reencoded.npz")
-    chunk_replay.save_npz(str(reenc_path))
-    log.info("wrote re-encoded chunk replay %s", reenc_path)
+    if bool(getattr(args, "skip_reencode", False)):
+        log.info("skipping re-encode; using chunk zs from %s", args.chunk_replay)
+        src = Path(args.chunk_replay)
+        reenc_path.parent.mkdir(parents=True, exist_ok=True)
+        if src.resolve() != reenc_path.resolve():
+            if reenc_path.exists() or reenc_path.is_symlink():
+                reenc_path.unlink()
+            reenc_path.symlink_to(src.resolve())
+        log.info("reenc pointer -> %s", src.resolve())
+    else:
+        if token_paths is not None:
+            log.info("streaming re-encode from %d token shards", len(token_paths))
+            for p in token_paths:
+                log.info("  shard %s", p)
+            reencode_chunk_zs_from_paths(
+                model,
+                chunk_replay,
+                token_paths,
+                batch_size=args.encode_batch_size,
+                device=device,
+            )
+        else:
+            log.info("loading full chunk_token_replay %s", args.chunk_token_replay)
+            chunk_token_replay = TokenReplay.load_npz(args.chunk_token_replay)
+            log.info("loaded chunk_tokens=%d", len(chunk_token_replay))
+            reencode_chunk_zs(
+                model,
+                chunk_replay,
+                chunk_token_replay,
+                batch_size=args.encode_batch_size,
+                device=device,
+            )
+            del chunk_token_replay
+            gc.collect()
+        reenc_path.parent.mkdir(parents=True, exist_ok=True)
+        chunk_replay.save_npz(str(reenc_path))
+        log.info("wrote re-encoded chunk replay %s", reenc_path)
 
-    optimizers = build_rlt_optimizers(model, lr_critic=args.lr)
+    optimizers = build_rlt_optimizers(
+        model, lr_critic=args.lr, lr_actor=float(getattr(args, "lr_actor", args.lr))
+    )
     metrics_path = Path(args.out_ckpt).with_name("critic_warmup_metrics.jsonl")
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     start = time.time()
     last: dict[str, float] = {}
+    last_actor: dict[str, float] = {}
 
     for step in range(1, args.steps + 1):
         batch = chunk_replay.sample(args.batch_size, device=device)
@@ -299,6 +313,48 @@ def warmup(args: argparse.Namespace) -> None:
                 sens,
                 healthy,
             )
+
+    actor_bc_steps = int(getattr(args, "actor_bc_steps", 0))
+    if actor_bc_steps > 0:
+        success_only = bool(getattr(args, "actor_bc_success_only", False))
+        prev_pos_frac = float(chunk_replay.pos_frac)
+        if success_only:
+            # Stratified sampler with pos_frac=1.0 draws only successful chunks.
+            chunk_replay.pos_frac = 1.0
+            n_pos = sum(1 for row in chunk_replay.rows if float(row.success) > 0.5)
+            log.info(
+                "residual actor BC success-only: pos_rows=%d/%d",
+                n_pos,
+                len(chunk_replay.rows),
+            )
+            if n_pos < max(8, int(args.batch_size)):
+                raise RuntimeError(
+                    f"actor_bc_success_only needs more success rows (got {n_pos})"
+                )
+        log.info("residual actor BC warmup steps=%d beta=%.2f", actor_bc_steps, args.actor_beta)
+        for step in range(1, actor_bc_steps + 1):
+            batch = chunk_replay.sample(args.batch_size, device=device)
+            last_actor = actor_step(
+                model,
+                optimizers["actor"],
+                optimizers["alpha"],
+                batch,
+                beta=float(args.actor_beta),
+                target_divergence=float(getattr(args, "target_divergence", 0.0025)),
+                ref_dropout=0.0,
+                q_coef=0.0,
+                residual_clip=float(getattr(args, "residual_clip", 0.02)),
+                advantage_clip=float(getattr(args, "advantage_clip", 0.05)),
+            )
+            if step % args.log_every == 0 or step == actor_bc_steps:
+                log.info(
+                    "actor_bc step=%d/%d residual_mse=%.5f actor_loss=%.5f",
+                    step,
+                    actor_bc_steps,
+                    float(last_actor.get("residual_mse", 0.0)),
+                    float(last_actor.get("actor_loss", 0.0)),
+                )
+        chunk_replay.pos_frac = prev_pos_frac
 
     out = Path(args.out_ckpt)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -356,9 +412,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--far_rank_noise", type=float, default=0.35)
     parser.add_argument("--shuffle_rank_coef", type=float, default=0.5)
     parser.add_argument("--target_noise", type=float, default=0.02)
+    parser.add_argument("--actor_bc_steps", type=int, default=0)
+    parser.add_argument(
+        "--actor_bc_success_only",
+        action="store_true",
+        help="During actor BC, sample only successful chunks (pos_frac=1).",
+    )
+    parser.add_argument(
+        "--skip_reencode",
+        action="store_true",
+        help="Use chunk zs as-is (already re-encoded); skip token AE pass.",
+    )
+    parser.add_argument("--actor_beta", type=float, default=5.0)
+    parser.add_argument("--lr_actor", type=float, default=3e-4)
+    parser.add_argument("--target_divergence", type=float, default=0.0025)
+    parser.add_argument("--residual_clip", type=float, default=0.02)
+    parser.add_argument("--advantage_clip", type=float, default=0.05)
     args = parser.parse_args()
-    if not args.chunk_token_shards and not args.chunk_token_glob and not args.chunk_token_replay:
-        parser.error("need --chunk_token_shards, --chunk_token_glob, or --chunk_token_replay")
+    if (
+        not args.skip_reencode
+        and not args.chunk_token_shards
+        and not args.chunk_token_glob
+        and not args.chunk_token_replay
+    ):
+        parser.error(
+            "need --chunk_token_shards, --chunk_token_glob, or --chunk_token_replay "
+            "(or pass --skip_reencode)"
+        )
     return args
 
 

@@ -55,6 +55,10 @@ BENCHMARK_POSE_CYCLE = TRAIN_EPISODES
 MAX_UPDATE_SEC_PER_EPISODE = float(
     os.environ.get("V16_MAX_UPDATE_SEC_PER_EPISODE", "60")
 )
+# AE critic/actor steps are much slower; give LoRA room after the cheap critic.
+AE_MAX_UPDATE_SEC_PER_EPISODE = float(
+    os.environ.get("V16_AE_MAX_UPDATE_SEC_PER_EPISODE", "180")
+)
 # Fill the post-episode CUDA budget: V15 used 8 rounds (~1s) then idled in MuJoCo.
 # Default 128 ≈ tens of seconds of critic/actor work per episode on H100.
 UPDATES_PER_EPISODE = int(os.environ.get("V16_UPDATES_PER_EPISODE", "128"))
@@ -220,9 +224,11 @@ REQUIRED_V16_TRAINER_OPTIONS = tuple(
 
 def _assert_v16_run_dir(run_dir: Path) -> Path:
     resolved = run_dir.resolve()
-    if resolved.name != RUN_NAME:
+    allowed = {RUN_NAME, "rlt_cf_v16_rlt_improved"}
+    if resolved.name not in allowed:
         raise ValueError(
-            f"V16 run directory basename must be {RUN_NAME!r}, got {resolved}"
+            f"V16 run directory basename must be one of {sorted(allowed)!r}, "
+            f"got {resolved}"
         )
     for forbidden in (
         "rlt_cf_v13_controlled",
@@ -245,6 +251,18 @@ def _append_option(command: list[str], flag: str, value: object | None = None) -
 def _set_argument(command: list[str], flag: str, value: object) -> None:
     index = command.index(flag)
     command[index + 1] = str(value)
+
+
+def _set_explore_std(command: list[str], value: float) -> None:
+    """Zero additive explore on collect and deploy (V16 paper default)."""
+    if "--explore_residual_std" in command:
+        _set_argument(command, "--explore_residual_std", value)
+    else:
+        _append_option(command, "--explore_residual_std", value)
+    if "--explore_deploy_std" in command:
+        _set_argument(command, "--explore_deploy_std", value)
+    else:
+        _append_option(command, "--explore_deploy_std", value)
 
 
 def training_output_dir(run_dir: Path, variant: VariantSpec) -> Path:
@@ -318,7 +336,8 @@ def _apply_v16_flags(command: list[str], variant: VariantSpec) -> list[str]:
             command.append("--guide_on_reference")
             _append_option(command, "--actor_mixture_prob", 0.0)
             # Guide isolation arm: keep VLA(+guide) collect, not paper actor collect.
-            _append_option(command, "--explore_residual_std", EXPLORE_STD)
+            # Still zero additive explore — V15 train-SR drop was the explore tax.
+            _set_explore_std(command, EXPLORE_RESIDUAL_STD)
         else:
             _append_option(command, "--actor_mixture_prob", ACTOR_MIXTURE_PROB)
             if "--always_collect_actor" not in command:
@@ -327,14 +346,7 @@ def _apply_v16_flags(command: list[str], variant: VariantSpec) -> list[str]:
                 command.append("--require_empirical_gate")
             _append_option(command, "--g_min_empirical_advantage", G_MIN_EMPIRICAL)
             _append_option(command, "--empirical_min_episodes", EMPIRICAL_MIN_EPISODES)
-            if "--explore_residual_std" in command:
-                _set_argument(command, "--explore_residual_std", EXPLORE_RESIDUAL_STD)
-            else:
-                _append_option(command, "--explore_residual_std", EXPLORE_RESIDUAL_STD)
-            if "--explore_deploy_std" in command:
-                _set_argument(command, "--explore_deploy_std", EXPLORE_RESIDUAL_STD)
-            else:
-                _append_option(command, "--explore_deploy_std", EXPLORE_RESIDUAL_STD)
+            _set_explore_std(command, EXPLORE_RESIDUAL_STD)
         _append_option(command, "--actor_bc_episodes", ACTOR_BC_EPISODES)
         _append_option(command, "--residual_clip", RESIDUAL_CLIP)
         _append_option(command, "--advantage_clip", ADVANTAGE_CLIP)
@@ -362,10 +374,19 @@ def _apply_v16_flags(command: list[str], variant: VariantSpec) -> list[str]:
             _set_argument(command, "--actor_beta", ACTOR_BETA)
         else:
             _append_option(command, "--actor_beta", ACTOR_BETA)
-        if "--explore_residual_std" in command:
-            _set_argument(command, "--explore_residual_std", EXPLORE_RESIDUAL_STD)
+        _set_explore_std(command, EXPLORE_RESIDUAL_STD)
+        if "--max_update_sec_per_episode" in command:
+            _set_argument(
+                command,
+                "--max_update_sec_per_episode",
+                AE_MAX_UPDATE_SEC_PER_EPISODE,
+            )
         else:
-            _append_option(command, "--explore_residual_std", EXPLORE_RESIDUAL_STD)
+            _append_option(
+                command,
+                "--max_update_sec_per_episode",
+                AE_MAX_UPDATE_SEC_PER_EPISODE,
+            )
         _set_argument(command, "--ae_batch_size", AE_BATCH_SIZE)
         if "--ae_image_replay_capacity" in command:
             _set_argument(

@@ -383,9 +383,13 @@ class ChunkReplay:
     ) -> int:
         """Add non-overlapping chunk transitions from one episode.
 
-        Each list entry is one chunk boundary. ``zs[i]`` is the state at the
-        start of chunk i; after the last chunk, we bootstrap with a zero next
-        state and terminal=True.
+        Each list entry is one chunk boundary (open-loop chunk of size
+        ``chunk_size``). This is *not* the RLT-paper stride-2 overlapping
+        subsample; we keep normal non-overlapping batch order
+        ``<x_0,a_{0:C}>, <x_C,a_{C:2C}>, …``.
+
+        ``zs[i]`` is the state at the start of chunk i; after the last chunk,
+        we bootstrap with a zero next state and terminal=True.
         """
         n = len(zs)
         if n == 0:
@@ -673,11 +677,27 @@ class TokenReplay:
         }
 
     def save_npz(self, path: str) -> None:
-        # Ragged: store object arrays of variable-length sequences.
-        np.savez_compressed(
+        # Dense padded float16 + lengths. Avoid object-array savez_compressed:
+        # zlib on pickled ragged arrays burns ~150GB RAM and 20+ min/shard.
+        # Uncompressed dense is ~few GB and finishes in seconds; callers must
+        # serialize multi-shard flushes (see train_rlt_online flock).
+        n = len(self.tokens)
+        if n == 0:
+            return
+        lengths = np.asarray([int(m.shape[0]) for m in self.masks], dtype=np.int32)
+        max_s = int(lengths.max()) if n else 0
+        max_s = min(max(max_s, 1), self.max_seq)
+        tokens = np.zeros((n, max_s, self.token_dim), dtype=np.float16)
+        masks = np.zeros((n, max_s), dtype=np.uint8)
+        for i, (tok, mask) in enumerate(zip(self.tokens, self.masks)):
+            s = int(mask.shape[0])
+            tokens[i, :s] = tok[:s]
+            masks[i, :s] = mask[:s]
+        np.savez(
             path,
-            tokens=np.array(self.tokens, dtype=object),
-            masks=np.array(self.masks, dtype=object),
+            tokens=tokens,
+            masks=masks,
+            lengths=lengths,
             token_dim=self.token_dim,
             max_seq=self.max_seq,
         )
@@ -686,8 +706,21 @@ class TokenReplay:
     def load_npz(cls, path: str) -> "TokenReplay":
         data = np.load(path, allow_pickle=True)
         buf = cls(max_seq=int(data["max_seq"]), token_dim=int(data["token_dim"]))
-        for t, m in zip(data["tokens"], data["masks"]):
-            buf.add(np.asarray(t), np.asarray(m))
+        tokens = data["tokens"]
+        masks = data["masks"]
+        if tokens.dtype == object:
+            # Legacy ragged object dumps.
+            for t, m in zip(tokens, masks):
+                buf.add(np.asarray(t), np.asarray(m))
+            return buf
+        lengths = (
+            data["lengths"]
+            if "lengths" in data.files
+            else masks.sum(axis=1).astype(np.int32)
+        )
+        for i in range(len(tokens)):
+            s = int(lengths[i])
+            buf.add(np.asarray(tokens[i, :s]), np.asarray(masks[i, :s]))
         return buf
 
 
