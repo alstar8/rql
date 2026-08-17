@@ -19,3 +19,5 @@ resources
 *nfs*
 run.sh
 run_supp.sh
+MUJOCO_LOG.TXT
+*.pkl
