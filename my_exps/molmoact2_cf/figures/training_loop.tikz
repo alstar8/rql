@@ -1,0 +1,111 @@
+% Training loop (CPI) with brief losses. Wrap sits below the phase row.
+\begin{tikzpicture}[v19]
+  \def\W{180}
+
+  \node[paneltitle] at (0.5*\W,98.2) {Iterated extraction (CPI)};
+
+  \def\bw{31.2}
+  \def\bh{32.8}
+  \def\by{59.6}
+  \def\b0{3.6}
+  \def\dg{3.2}
+
+  \newcommand{\phasebox}[6]{% x, fill, edge, title, body, tag
+    \fill[#2, rounded corners=1.5mm] (#1,\by) rectangle ++(\bw,\bh);
+    \draw[#3, line width=0.65pt, rounded corners=1.5mm] (#1,\by) rectangle ++(\bw,\bh);
+    \node[font=\footnotesize\bfseries, text=ink, anchor=north]
+      at (#1+0.5*\bw,\by+\bh-1.6) {#4};
+    \node[font=\footnotesize, text=ink, align=center, anchor=north]
+      at (#1+0.5*\bw,\by+\bh-8.6) {#5};
+    \node[font=\scriptsize\bfseries, text=#3, anchor=south]
+      at (#1+0.5*\bw,\by+1.5) {#6};
+  }
+
+  \phasebox{\b0}{probefill}{probeedge}
+    {Phase 0  {\scriptsize(once)}}
+    {frozen $\pihat$\\[-0.1mm]
+     24 train poses}
+    {baseline $\mathrm{SR}_0$}
+
+  \pgfmathsetmacro{\bA}{\b0+\bw+\dg}
+  \phasebox{\bA}{phaseafill}{rledge}
+    {Phase A}
+    {fit $\Qpsi$, snapshot $Q_{\psi'}$\\[-0.1mm]
+     relabel $o$, fit $\vth$}
+    {extract}
+
+  \pgfmathsetmacro{\bRA}{\bA+\bw+\dg}
+  \phasebox{\bRA}{actfill}{actedge}
+    {$r$A probe}
+    {actor at current $w$\\[-0.1mm]
+     same 24 poses}
+    {sets mix $p$}
+
+  \pgfmathsetmacro{\bB}{\bRA+\bw+\dg}
+  \phasebox{\bB}{phasebfill}{vlaedge}
+    {Phase B}
+    {actor w.p.\ $p$, else $\pihat$\\[-0.1mm]
+     1 episode / worker}
+    {online mix}
+
+  \pgfmathsetmacro{\bRB}{\bB+\bw+\dg}
+  \phasebox{\bRB}{actfill}{actedge}
+    {$r$B probe}
+    {actor at current $w$\\[-0.1mm]
+     same 24 poses}
+    {noisy $r$A repeat}
+
+  \foreach \x in {\b0,\bA,\bRA,\bB} {
+    \pgfmathsetmacro{\xn}{\x+\bw}
+    \draw[flow, line width=0.85pt] (\xn,\by+0.5*\bh) -- ++(\dg,0);
+  }
+
+  % Wrap under the row; label sits above the dashed line, not on it
+  \draw[flow, densely dashed, line width=0.75pt]
+    (\bRB+0.5*\bw,\by) -- ++(0,-6.8)
+    -- (\bA+0.5*\bw,\by-6.8) -- (\bA+0.5*\bw,\by);
+  \node[font=\footnotesize, text=muted, anchor=south] at (90,\by-2.8)
+    {$r\leftarrow r{+}1$ (12 rounds; skip Phase 0)};
+
+  \fill[obsblue!11, rounded corners=0.9mm] (3.6,47.0) rectangle (176.4,51.8);
+  \node[font=\footnotesize, text=obsblue!85!black] at (90,49.4)
+    {Fleet barrier: every worker logs the current phase index before the next step.};
+
+  \def\ch{41.8}
+  \def\cw{55.8}
+  \def\cy{3.0}
+
+  \fill[rlfill, rounded corners=1.5mm] (3.6,\cy) rectangle ++(\cw,\ch);
+  \draw[rledge, line width=0.65pt, rounded corners=1.5mm] (3.6,\cy) rectangle ++(\cw,\ch);
+  \node[font=\footnotesize\bfseries, anchor=north] at (3.6+0.5*\cw,\cy+\ch-1.6)
+    {Critic (always on)};
+  \node[eq, anchor=north] at (3.6+0.5*\cw,\cy+\ch-8.8) {%
+    $\displaystyle\mathcal{L}_{Q}=\mathbb{E}\big[(\hat Q-\Qpsi)^{2}\big]$\\[0.8mm]
+    $\displaystyle\quad+\lambda_{\mathrm{CQL}}\mathcal{L}_{\mathrm{CQL}}+\lambda_{\mathrm{rank}}\mathcal{L}_{\mathrm{rank}}$\\[1.5mm]
+    $\displaystyle\hat Q=r_{1:C}+\gamma^{C}Q_{\psi'}(x',a')$\\[1.2mm]
+    {\footnotesize\color{muted}$o$ from stop-grad $Q_{\psi'}$}
+  };
+
+  \fill[rlfill, rounded corners=1.5mm] (62.2,\cy) rectangle ++(\cw,\ch);
+  \draw[rledge, line width=0.65pt, rounded corners=1.5mm] (62.2,\cy) rectangle ++(\cw,\ch);
+  \node[font=\footnotesize\bfseries, anchor=north] at (62.2+0.5*\cw,\cy+\ch-1.6)
+    {Actor (Phase A only)};
+  \node[eq, anchor=north] at (62.2+0.5*\cw,\cy+\ch-8.8) {%
+    $\displaystyle\mathcal{L}_{\mathrm{CFGRL}}=\mathbb{E}\big[\|\vth(x,a_{t},t,o)-(a^{\star}-a_{0})\|_{2}^{2}\big]$\\[1.4mm]
+    $a^{\star}=\atil$ if $o=\varnothing$\\[0.4mm]
+    $a^{\star}=a$ if $o=1$\\[1.1mm]
+    {\footnotesize\color{muted}10\% dropout to $\varnothing$}
+  };
+
+  \fill[vlafill, rounded corners=1.5mm] (120.8,\cy) rectangle ++(\cw,\ch);
+  \draw[vlaedge, line width=0.65pt, rounded corners=1.5mm] (120.8,\cy) rectangle ++(\cw,\ch);
+  \node[font=\footnotesize\bfseries, anchor=north] at (120.8+0.5*\cw,\cy+\ch-1.6)
+    {Deploy $w$ and mix $p$};
+  \node[eq, anchor=north] at (120.8+0.5*\cw,\cy+\ch-8.8) {%
+    $w=0$ until $\big\|\vth(\cdot,\varnothing)-\atil\big\|\le 0.02$\\[0.4mm]
+    then $w=0.5$\\[1.3mm]
+    $p=0.25$ if $\mathrm{SR}_{r\mathrm{A}}\ge\mathrm{SR}_{0}-1/n$\\[0.4mm]
+    else $p=0$ (execute $\pihat$)\\[1.1mm]
+    {\footnotesize\color{muted}$n=\#$ probe episodes; $p$ uses $r$A only}
+  };
+\end{tikzpicture}

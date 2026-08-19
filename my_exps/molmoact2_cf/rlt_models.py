@@ -32,6 +32,14 @@ DEFAULT_CONFLICT_POWER = 2.0
 DEFAULT_RESIDUAL_DAMP = 0.25
 DEFAULT_Q_TAIL_FRACTION = 0.25
 DEFAULT_Q_TAIL_MIN_HEADS = 2
+# CFGRL optimality tokens: uncond / A<0 / A>=0 (or success-conditioned).
+CFGRL_O_UNCOND = 0
+CFGRL_O_NEG = 1
+CFGRL_O_POS = 2
+CFGRL_O_CLASSES = 3
+DEFAULT_CFGRL_O_DIM = 16
+DEFAULT_CFGRL_W = 1.0
+DEFAULT_CFGRL_DROPOUT = 0.1
 
 
 def lower_tail_mean(
@@ -391,7 +399,7 @@ class EnsembleTimeCQL(nn.Module):
 
 
 class FlowVelocityActor(nn.Module):
-    """VLA-conditioned flow velocity: v_θ(s, x_t, t, a_VLA)."""
+    """VLA-conditioned flow velocity: v_θ(s, x_t, t, a_VLA[, o])."""
 
     def __init__(
         self,
@@ -400,15 +408,20 @@ class FlowVelocityActor(nn.Module):
         chunk_size: int = CHUNK_SIZE,
         hidden: int = 256,
         time_dim: int = 64,
+        o_dim: int = 0,
     ) -> None:
         super().__init__()
         self.action_dim = int(action_dim)
         self.chunk_size = int(chunk_size)
         self.flat_action = self.action_dim * self.chunk_size
         self.time_dim = int(time_dim)
-        # state + x_t + a_ref + t
+        self.o_dim = int(o_dim)
+        self.o_embed = (
+            nn.Embedding(CFGRL_O_CLASSES, self.o_dim) if self.o_dim > 0 else None
+        )
+        # state + x_t + a_ref + t (+ optional optimality embedding)
         self.net = mlp(
-            state_dim + 2 * self.flat_action + time_dim,
+            state_dim + 2 * self.flat_action + time_dim + self.o_dim,
             self.flat_action,
             hidden,
             n_hidden=3,
@@ -421,6 +434,7 @@ class FlowVelocityActor(nn.Module):
         x_t: torch.Tensor,
         t: torch.Tensor,
         reference: torch.Tensor,
+        o: torch.Tensor | None = None,
     ) -> torch.Tensor:
         b = state.shape[0]
         x_flat = x_t.reshape(b, -1)
@@ -428,8 +442,49 @@ class FlowVelocityActor(nn.Module):
         if t.ndim == 1:
             t = t.unsqueeze(-1)
         temb = sinusoidal_time_embed(t.squeeze(-1), self.time_dim)
-        v = self.net(torch.cat([state, x_flat, ref_flat, temb], dim=-1))
+        pieces = [state, x_flat, ref_flat, temb]
+        if self.o_embed is not None:
+            if o is None:
+                o = torch.full(
+                    (b,),
+                    CFGRL_O_UNCOND,
+                    device=state.device,
+                    dtype=torch.long,
+                )
+            else:
+                o = o.reshape(b).to(dtype=torch.long)
+            pieces.append(self.o_embed(o))
+        v = self.net(torch.cat(pieces, dim=-1))
         return v.reshape(b, self.chunk_size, self.action_dim)
+
+    def copy_pretrained_into_o_actor(self, source: "FlowVelocityActor") -> None:
+        """Keep a pretrained flow net; zero-init extra o columns so v(·,o) starts as v_pre."""
+        if self.o_embed is not None:
+            nn.init.zeros_(self.o_embed.weight)
+        src_first = source.net[0]
+        dst_first = self.net[0]
+        if not isinstance(src_first, nn.Linear) or not isinstance(dst_first, nn.Linear):
+            return
+        old_in = int(src_first.weight.shape[1])
+        new_in = int(dst_first.weight.shape[1])
+        if (
+            src_first.weight.shape[0] != dst_first.weight.shape[0]
+            or new_in < old_in
+        ):
+            return
+        with torch.no_grad():
+            dst_first.weight[:, :old_in].copy_(src_first.weight)
+            if new_in > old_in:
+                dst_first.weight[:, old_in:].zero_()
+            dst_first.bias.copy_(src_first.bias)
+            src_sd = source.net.state_dict()
+            dst_sd = self.net.state_dict()
+            for key, value in src_sd.items():
+                if key.startswith("0."):
+                    continue
+                if key in dst_sd and dst_sd[key].shape == value.shape:
+                    dst_sd[key].copy_(value)
+            self.net.load_state_dict(dst_sd)
 
 
 class FlowCFGuide(nn.Module):
@@ -616,6 +671,9 @@ class MolmoAct2RLTCF(nn.Module):
         time_dim: int = 64,
         q_tail_fraction: float = DEFAULT_Q_TAIL_FRACTION,
         q_tail_min_heads: int = DEFAULT_Q_TAIL_MIN_HEADS,
+        use_cfgrl: bool = False,
+        cfgrl_o_dim: int = DEFAULT_CFGRL_O_DIM,
+        cfgrl_w: float = DEFAULT_CFGRL_W,
     ) -> None:
         super().__init__()
         mode = str(cf_mode).lower().strip()
@@ -646,6 +704,9 @@ class MolmoAct2RLTCF(nn.Module):
         self.time_dim = int(time_dim)
         self.q_tail_fraction = float(q_tail_fraction)
         self.q_tail_min_heads = int(q_tail_min_heads)
+        self.use_cfgrl = bool(use_cfgrl)
+        self.cfgrl_o_dim = int(cfgrl_o_dim) if self.use_cfgrl else 0
+        self.cfgrl_w = float(cfgrl_w)
         if not 0.0 < self.q_tail_fraction <= 1.0:
             raise ValueError("q_tail_fraction must be in (0, 1]")
         if self.q_tail_min_heads < 1:
@@ -680,6 +741,7 @@ class MolmoAct2RLTCF(nn.Module):
                 self.chunk_size,
                 hidden=hidden,
                 time_dim=time_dim,
+                o_dim=self.cfgrl_o_dim,
             )
             self.critic = EnsembleTimeCQL(
                 self.state_dim,
@@ -837,10 +899,11 @@ class MolmoAct2RLTCF(nn.Module):
         x_t: torch.Tensor,
         t: torch.Tensor,
         reference_n: torch.Tensor,
+        o: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if not self.is_flow:
             raise RuntimeError("flow_velocity requires cf_mode=flow")
-        return self.actor(state, x_t, t, reference_n)
+        return self.actor(state, x_t, t, reference_n, o=o)
 
     def flow_sample(
         self,
@@ -850,8 +913,14 @@ class MolmoAct2RLTCF(nn.Module):
         apply_guide: bool = False,
         n_steps: int | None = None,
         x0: torch.Tensor | None = None,
+        cfg_w: float | None = None,
+        o_cond: int = CFGRL_O_POS,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Euler integrate dx/dt = v_θ(+G) from noise to action chunk."""
+        """Euler integrate dx/dt = v_θ(+G) from noise to action chunk.
+
+        When ``use_cfgrl`` is set, compose uncond and o=1 velocities:
+        v = (1-w) v(∅) + w v(o=1). Guide is not used on the CFGRL arm.
+        """
         if not self.is_flow:
             raise RuntimeError("flow_sample requires cf_mode=flow")
         s = state.detach()
@@ -861,11 +930,19 @@ class MolmoAct2RLTCF(nn.Module):
         x = torch.randn_like(ref) if x0 is None else x0
         dt = 1.0 / float(steps)
         guide_norm = s.new_zeros(())
+        weight = float(self.cfgrl_w if cfg_w is None else cfg_w)
+        o_uncond = torch.full((b,), CFGRL_O_UNCOND, device=s.device, dtype=torch.long)
+        o_pos = torch.full((b,), int(o_cond), device=s.device, dtype=torch.long)
         for i in range(steps):
             t = torch.full((b, 1), i / float(steps), device=s.device, dtype=s.dtype)
-            v = self.flow_velocity(s, x, t, ref)
+            if self.use_cfgrl:
+                v_u = self.flow_velocity(s, x, t, ref, o=o_uncond)
+                v_c = self.flow_velocity(s, x, t, ref, o=o_pos)
+                v = (1.0 - weight) * v_u + weight * v_c
+            else:
+                v = self.flow_velocity(s, x, t, ref)
             g = torch.zeros_like(v)
-            if apply_guide and self.guide is not None:
+            if apply_guide and self.guide is not None and not self.use_cfgrl:
                 g, _, _ = self.guide.guidance(s, x, t, v)
                 guide_norm = guide_norm + g.detach().flatten(1).norm(dim=-1).mean()
             x = x + (v + g) * dt
@@ -873,6 +950,7 @@ class MolmoAct2RLTCF(nn.Module):
             "actor_mean": x,
             "actor_delta": x - ref,
             "guide_norm": guide_norm / float(steps),
+            "cfgrl_w": s.new_tensor(weight),
         }
         return x, info
 
@@ -1027,6 +1105,9 @@ class MolmoAct2RLTCF(nn.Module):
             "time_dim": self.time_dim,
             "q_tail_fraction": self.q_tail_fraction,
             "q_tail_min_heads": self.q_tail_min_heads,
+            "use_cfgrl": self.use_cfgrl,
+            "cfgrl_o_dim": self.cfgrl_o_dim,
+            "cfgrl_w": self.cfgrl_w,
             "meta": meta or {},
         }
         torch.save(payload, path)
@@ -1060,10 +1141,74 @@ class MolmoAct2RLTCF(nn.Module):
             q_tail_min_heads=int(
                 payload.get("q_tail_min_heads", DEFAULT_Q_TAIL_MIN_HEADS)
             ),
+            use_cfgrl=bool(payload.get("use_cfgrl", False)),
+            cfgrl_o_dim=int(payload.get("cfgrl_o_dim", DEFAULT_CFGRL_O_DIM)),
+            cfgrl_w=float(payload.get("cfgrl_w", DEFAULT_CFGRL_W)),
         )
-        model.load_state_dict(payload["state_dict"], strict=False)
+        src = payload["state_dict"]
+        dst = model.state_dict()
+        compatible = {
+            key: value
+            for key, value in src.items()
+            if key in dst and dst[key].shape == value.shape
+        }
+        model.load_state_dict(compatible, strict=False)
         model.loaded_meta = dict(payload.get("meta") or {})
         return model
+
+    def as_cfgrl(
+        self,
+        *,
+        cfgrl_w: float = DEFAULT_CFGRL_W,
+        o_dim: int = DEFAULT_CFGRL_O_DIM,
+    ) -> "MolmoAct2RLTCF":
+        """Upgrade a flow model to CFGRL (fresh o-conditioned actor, keep token/critic)."""
+        if not self.is_flow:
+            raise RuntimeError("CFGRL requires cf_mode=flow")
+        if self.use_cfgrl:
+            self.cfgrl_w = float(cfgrl_w)
+            self.guide = None
+            self.use_cf_guide = False
+            return self
+        upgraded = self.__class__(
+            feature_dim=self.feature_dim,
+            z_dim=self.z_dim,
+            proprio_dim=self.proprio_dim,
+            action_dim=self.action_dim,
+            chunk_size=self.chunk_size,
+            bounded_critic=self.bounded_critic,
+            use_cf_guide=False,
+            tune_token_online=False,
+            hidden=self.hidden,
+            n_critics=self.n_critics,
+            residual_actor=self.residual_actor,
+            max_delta=self.max_delta,
+            token_d_model=self.token_d_model,
+            token_layers=self.token_layers,
+            token_heads=self.token_heads,
+            cf_mode=CF_MODE_FLOW,
+            flow_steps=self.flow_steps,
+            guidance_coef=self.guidance_coef,
+            time_dim=self.time_dim,
+            q_tail_fraction=self.q_tail_fraction,
+            q_tail_min_heads=self.q_tail_min_heads,
+            use_cfgrl=True,
+            cfgrl_o_dim=int(o_dim),
+            cfgrl_w=float(cfgrl_w),
+        )
+        src = self.state_dict()
+        dst = upgraded.state_dict()
+        compatible = {
+            key: value
+            for key, value in src.items()
+            if key in dst and dst[key].shape == value.shape
+        }
+        upgraded.load_state_dict(compatible, strict=False)
+        upgraded.actor.copy_pretrained_into_o_actor(self.actor)
+        upgraded.loaded_meta = dict(self.loaded_meta)
+        upgraded.freeze_token_encoder()
+        upgraded.guide = None
+        return upgraded
 
     @classmethod
     def from_token_ckpt_as_flow(

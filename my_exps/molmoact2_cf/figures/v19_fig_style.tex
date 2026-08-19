@@ -1,0 +1,105 @@
+% Shared ICRA-style palette and TikZ keys for V19 schemes.
+% Okabe--Ito accents on RLT pastel panels (colorblind-safe).
+\usepackage{amsmath,amssymb,bm}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usetikzlibrary{
+  arrows.meta,
+  positioning,
+  fit,
+  calc,
+  backgrounds,
+  patterns,
+  shapes.geometric,
+  shapes.misc,
+}
+
+\definecolor{datafill}{HTML}{F7F1E6}
+\definecolor{dataedge}{HTML}{C9B89A}
+\definecolor{vlafill}{HTML}{EAF3FB}
+\definecolor{vlaedge}{HTML}{8FB0CC}
+\definecolor{rlfill}{HTML}{EEF6F1}
+\definecolor{rledge}{HTML}{7FB39A}
+\definecolor{actfill}{HTML}{FFF4E0}
+\definecolor{actedge}{HTML}{D4B56A}
+\definecolor{obsblue}{HTML}{0072B2}
+\definecolor{obsfill}{HTML}{D6E6F5}
+\definecolor{rlorange}{HTML}{E69F00}
+\definecolor{rltoken}{HTML}{FFCC33}
+\definecolor{vlagreen}{HTML}{009E73}
+\definecolor{vgfill}{HTML}{D8F0E6}
+\definecolor{ink}{HTML}{1A1A1A}
+\definecolor{muted}{HTML}{555555}
+\definecolor{boxfill}{HTML}{FFFFFF}
+\definecolor{probefill}{HTML}{F3F0FA}
+\definecolor{probeedge}{HTML}{9B8FBF}
+\definecolor{phaseafill}{HTML}{EEF6F1}
+\definecolor{phasebfill}{HTML}{EAF3FB}
+
+\newcommand{\zrl}{z_{\mathrm{rl}}}
+\newcommand{\atil}{\tilde{a}}
+\newcommand{\pihat}{\hat{\pi}}
+\newcommand{\vth}{v_{\theta}}
+\newcommand{\Qpsi}{Q_{\psi}}
+
+\tikzset{
+  v19/.style={
+    x=1mm, y=1mm,
+    >={Stealth[length=1.8mm, width=1.6mm]},
+    font=\footnotesize,
+    line join=round,
+    line cap=round,
+  },
+  panel/.style={
+    rounded corners=2.2mm,
+    line width=0.75pt,
+    inner sep=0pt,
+  },
+  paneltitle/.style={
+    font=\small\bfseries,
+    text=ink,
+    anchor=north,
+  },
+  card/.style={
+    draw=#1,
+    fill=boxfill,
+    rounded corners=1.2mm,
+    line width=0.6pt,
+    inner sep=1.5mm,
+    align=center,
+    font=\footnotesize,
+    text=ink,
+  },
+  pill/.style={
+    rounded corners=1.3mm,
+    draw=#1,
+    line width=0.55pt,
+    inner sep=0.9mm,
+    font=\footnotesize,
+    align=center,
+  },
+  eq/.style={
+    font=\footnotesize,
+    text=ink,
+    align=center,
+    inner sep=0.3mm,
+  },
+  lab/.style={
+    font=\scriptsize,
+    text=muted,
+    align=center,
+    inner sep=0.15mm,
+  },
+  flow/.style={
+    -{Stealth[length=1.8mm, width=1.6mm]},
+    line width=0.75pt,
+    draw=ink!70,
+  },
+  tokpipe/.style={flow, draw=rlorange, solid},
+  actpipe/.style={flow, draw=vlagreen, densely dashed},
+  obspipe/.style={flow, draw=obsblue, solid},
+  hatchfr/.style={
+    pattern=north east lines,
+    pattern color=obsblue!28,
+  },
+}

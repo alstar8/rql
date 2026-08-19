@@ -10,14 +10,17 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import faulthandler
 import gc
 import hashlib
 import json
 import logging
 import os
+import pickle
 import random
 import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -26,6 +29,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterator
 
 import json_numpy
@@ -35,6 +39,7 @@ import torch
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+faulthandler.enable(all_threads=True)
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -59,6 +64,8 @@ from train_rlt import (  # noqa: E402
     ae_flow_guide_step,
     actor_step,
     build_rlt_optimizers,
+    cfgrl_actor_step,
+    cfgrl_endpoint_diagnostics,
     critic_health_metrics,
     critic_td_step,
     endpoint_critic_mc_step,
@@ -73,6 +80,7 @@ from v17_helpers import (  # noqa: E402
     EmpiricalGateTracker,
     actor_phase_for_episode,
 )
+import v19_harness  # noqa: E402
 from molmo_spaces.evaluation.configs.evaluation_configs import (  # noqa: E402
     MolmoAct2PolicyEvalConfig,
 )
@@ -191,11 +199,15 @@ def _patch_renderer_device_id() -> None:
 
     Without this, MolmoSpaces sets ``device_id=0`` from remapped CUDA and can
     attach every trainer's EGL context to the wrong GPU under contention.
+    Falls back to the first ``CUDA_VISIBLE_DEVICES`` entry when the explicit
+    EGL id is missing (common launch-script omission).
     """
     original_init = ogl.MjOpenGLRenderer.__init__
 
     def _init(self: Any, *args: Any, device_id: int | None = None, **kwargs: Any) -> None:
         raw = os.environ.get("MUJOCO_EGL_DEVICE_ID", "").strip()
+        if not raw:
+            raw = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
         if raw:
             device_id = int(raw.split(",")[0].strip())
         original_init(self, *args, device_id=device_id, **kwargs)
@@ -577,14 +589,30 @@ def _egl_concurrency_slot() -> Iterator[int]:
             log.info("Released EGL concurrency slot %d", slot)
 
 
+def _is_isolated_child() -> bool:
+    raw = os.environ.get("RLT_ISOLATED_CHILD", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _kill_process_group(pid: int) -> None:
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+
 @contextmanager
 def _egl_gpu_lock() -> Iterator[None]:
     """Bound concurrent classic/EGL MuJoCo rollouts per physical GPU.
 
-    Concurrent MjOpenGLRenderer contexts on one device can SIGABRT, so we keep
-    a small per-GPU slot pool (``RLT_EGL_PER_GPU``, default 3) rather than a
-    single exclusive lock.  With 4 trainers/GPU the old exclusive lock left
-    75% of workers idle for tens of minutes.
+    Concurrent MjOpenGLRenderer contexts on one device SIGABRT in
+    ``mjr_readPixels`` after the first chunk, so we keep one slot per GPU
+    (``RLT_EGL_PER_GPU``, default 1).  With 4 trainers/GPU the extra workers
+    wait; both GPUs still render because the machine-wide cap is
+    ``n_gpu × per_gpu``.
 
     Only the MuJoCo rollout should hold this lock; CUDA critic/actor updates
     run *after* release so training does not extend the EGL queue.  A short
@@ -592,10 +620,13 @@ def _egl_gpu_lock() -> Iterator[None]:
     *before* the global concurrency slot so one busy GPU cannot consume every
     machine-wide slot while blocked.
     """
+    if _is_isolated_child():
+        yield
+        return
     device = _egl_device_id()
     lock_dir = _egl_lock_dir()
     lock_dir.mkdir(parents=True, exist_ok=True)
-    per_gpu = max(1, int(os.environ.get("RLT_EGL_PER_GPU", "3")))
+    per_gpu = max(1, int(os.environ.get("RLT_EGL_PER_GPU", "1")))
     cooldown = float(os.environ.get("RLT_EGL_COOLDOWN_SEC", "0.5"))
     handles: list[Any] = []
     slot = -1
@@ -715,6 +746,8 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
             if always_collect_after_episodes is None
             else int(max(0, always_collect_after_episodes))
         )
+        self.eval_force_reference = False
+        self.eval_force_actor = False
         self.collect_episode_index = 0
         self.episode_used_actor = False
         self.episode_mixture_draws = 0
@@ -976,10 +1009,15 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         # Draw mixture once per episode so empirical labels stay coherent
         # (V15 per-chunk mixture broke empirical_insufficient_episodes).
         self.episode_mixture_use_actor = None
-        if (
+        if bool(getattr(self, "eval_force_reference", False)):
+            self.episode_collect_policy = "reference"
+            self.episode_mixture_use_actor = False
+        elif bool(getattr(self, "eval_force_actor", False)):
+            self.episode_collect_policy = "actor"
+            self.episode_mixture_use_actor = True
+        elif (
             self.actor_mode == "rlt"
             and self.actor_mixture_prob > 0.0
-            and not bool(getattr(self, "eval_force_reference", False))
             and not bool(getattr(self, "guide_on_reference", False))
         ):
             mixture_seed = self.next_seed("actor_mixture", episode_id=episode_id)
@@ -1322,6 +1360,12 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         use_actor = bool(self.deploy_actor and self.actor_mode == "rlt")
         mixture_draw = False
         paper_collect = False
+        if bool(getattr(self, "eval_force_reference", False)):
+            use_actor = False
+            self.episode_collect_policy = "reference"
+        elif bool(getattr(self, "eval_force_actor", False)) and self.actor_mode == "rlt":
+            use_actor = True
+            self.episode_collect_policy = "actor"
         always_after = int(
             getattr(
                 self,
@@ -1617,6 +1661,13 @@ class RLTOnlinePolicy(MolmoAct2_Policy):
         self.ep_executed_raw.append(deployed_raw.copy())
         self.ep_reference_raw_full.append(full_reference_raw.copy())
         self.ep_executed_raw_full.append(full_executed_raw.copy())
+        log.info(
+            "sim chunk %d (~%d env steps) pid=%s isolated=%s",
+            int(self.episode_decision_counter),
+            int(self.episode_decision_counter) * int(self.chunk_size),
+            os.getpid(),
+            _is_isolated_child(),
+        )
 
     def inference_model(self, model_input: dict[str, Any]) -> np.ndarray:
         if self.actions_buffer is None or self.current_buffer_index >= min(
@@ -2145,6 +2196,21 @@ def _load_model(
     if not args.use_cf_guide:
         model.guide = None
         model.use_cf_guide = False
+    if bool(getattr(args, "cfgrl", False)):
+        if not model.is_flow:
+            raise ValueError("--cfgrl requires --cf_mode flow")
+        model = model.as_cfgrl(
+            cfgrl_w=float(getattr(args, "cfgrl_w", 1.0)),
+            o_dim=int(getattr(args, "cfgrl_o_dim", 16)),
+        ).to(device)
+        args.use_cf_guide = False
+        model.guide = None
+        model.use_cf_guide = False
+        log.info(
+            "CFGRL actor enabled w=%.3f o_dim=%d (guide off, token frozen)",
+            model.cfgrl_w,
+            model.cfgrl_o_dim,
+        )
     if args.tune_token_online:
         model.unfreeze_token_encoder()
     else:
@@ -2243,6 +2309,330 @@ def _build_eval_policy(
         ),
     )
     return policy, exp_config
+
+
+@dataclass
+class IsolatedRollout:
+    success: bool
+    rollout_ok: bool
+    n_steps: int
+    trajectory: dict[str, Any]
+    fatal_error: str | None = None
+
+
+def _empty_trajectory() -> dict[str, Any]:
+    return {"n_steps": 0, "token_batches": [], "residual_rms": 0.0}
+
+
+def _write_isolated_result(
+    path: Path,
+    *,
+    success: bool,
+    rollout_ok: bool,
+    trajectory: dict[str, Any],
+    fatal_error: str | None = None,
+) -> None:
+    payload = {
+        "success": bool(success),
+        "rollout_ok": bool(rollout_ok),
+        "n_steps": int(trajectory.get("n_steps", 0) or 0),
+        "fatal_error": fatal_error,
+        "trajectory": trajectory,
+    }
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("wb") as handle:
+        pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    temporary.replace(path)
+
+
+def _read_isolated_result(path: Path) -> IsolatedRollout:
+    with Path(path).open("rb") as handle:
+        payload = pickle.load(handle)
+    trajectory = dict(payload.get("trajectory") or _empty_trajectory())
+    n_steps = int(payload.get("n_steps", trajectory.get("n_steps", 0)) or 0)
+    trajectory["n_steps"] = n_steps
+    return IsolatedRollout(
+        success=bool(payload.get("success")),
+        rollout_ok=bool(payload.get("rollout_ok")),
+        n_steps=n_steps,
+        trajectory=trajectory,
+        fatal_error=(
+            None
+            if payload.get("fatal_error") in {None, ""}
+            else str(payload.get("fatal_error"))
+        ),
+    )
+
+
+def _isolated_rollout_main(spec_path: Path) -> int:
+    """Child process: EGL + CPU RLT, no CUDA. Parent retries if this SIGABRTs."""
+
+    log.info(
+        "isolated child pid=%s cuda_available=%s egl_device=%s",
+        os.getpid(),
+        torch.cuda.is_available(),
+        os.environ.get("MUJOCO_EGL_DEVICE_ID"),
+    )
+    spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
+    result_path = Path(spec["result_path"])
+    output_dir = Path(spec["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    args = SimpleNamespace(
+        rlt_ckpt=str(spec["ckpt"]),
+        cf_mode=str(spec.get("cf_mode", "flow")),
+        cfgrl=bool(spec.get("cfgrl", True)),
+        cfgrl_w=float(spec.get("cfgrl_w", 0.0)),
+        cfgrl_o_dim=int(spec.get("cfgrl_o_dim", 16)),
+        n_critics=int(spec.get("n_critics", 10)),
+        use_cf_guide=bool(spec.get("use_cf_guide", False)),
+        actor_mode=str(spec.get("actor_mode", "rlt")),
+        tune_token_online=False,
+        server_host=str(spec["server_host"]),
+        server_port=int(spec["server_port"]),
+        server_request_timeout_sec=float(spec.get("server_request_timeout_sec", 120.0)),
+        seed=int(spec.get("seed", 0)),
+        eval_only=False,
+        eval_reference_noise_std=None,
+        explore_residual_std=float(spec.get("explore_residual_std", 0.0)),
+        explore_deploy_std=float(spec.get("explore_deploy_std", 0.0)),
+        explore_warmup_mult=1.0,
+        actor_mixture_prob=float(spec.get("actor_mixture_prob", 0.0)),
+        guide_on_reference=bool(spec.get("guide_on_reference", False)),
+        residual_clip=spec.get("residual_clip"),
+        always_collect_actor=bool(spec.get("always_collect_actor", False)),
+        actor_bc_episodes=int(spec.get("actor_bc_episodes", 50)),
+        always_collect_after_episodes=spec.get("always_collect_after_episodes"),
+        export_offline_tokens=False,
+        retain_tokens=False,
+        flow_steps=int(spec.get("flow_steps", 10)),
+        guidance_coef=float(spec.get("guidance_coef", 0.5)),
+    )
+    device = torch.device("cpu")
+    model = _load_model(args, device, resume_checkpoint=Path(spec["ckpt"]))
+    model.eval()
+    policy, _exp_config = _build_eval_policy(args, model, device, prefer_server_z=True)
+    policy.eval_force_reference = bool(spec.get("eval_force_reference", False))
+    policy.eval_force_actor = bool(spec.get("eval_force_actor", False))
+    policy.actor_mixture_prob = float(spec.get("actor_mixture_prob", 0.0))
+    policy.always_collect_actor = bool(spec.get("always_collect_actor", False))
+    policy.deploy_actor = bool(spec.get("deploy_actor", False))
+    policy.collect_episode_index = int(spec.get("collect_episode_index", 0))
+    policy.begin_episode(int(spec.get("episode_id", 0)))
+    if spec.get("episode_mixture_use_actor") is not None:
+        policy.episode_mixture_use_actor = bool(spec["episode_mixture_use_actor"])
+        policy.episode_collect_policy = str(
+            spec.get("episode_collect_policy", "reference")
+        )
+    results = run_evaluation(
+        eval_config_cls=MolmoAct2PolicyEvalConfig,
+        benchmark_dir=Path(spec["benchmark_dir"]),
+        task_horizon_steps=int(spec["horizon"]),
+        num_workers=1,
+        use_wandb=False,
+        preloaded_policy=policy,
+        episode_idx=int(spec["episode_idx"]),
+        output_dir=output_dir,
+    )
+    success = bool(results.success_count > 0)
+    rollout_ok = bool(results.total_count > 0)
+    if policy.fatal_error is not None:
+        _write_isolated_result(
+            result_path,
+            success=False,
+            rollout_ok=False,
+            trajectory=_empty_trajectory(),
+            fatal_error=str(policy.fatal_error),
+        )
+        return 2
+    trajectory = policy.pop_episode(success)
+    _write_isolated_result(
+        result_path,
+        success=bool(success and rollout_ok),
+        rollout_ok=rollout_ok,
+        trajectory=trajectory,
+    )
+    return 0 if rollout_ok else 1
+
+
+def _run_isolated_evaluation(
+    args: argparse.Namespace,
+    policy: RLTOnlinePolicy,
+    *,
+    episode_idx: int,
+    episode_dir: Path,
+    episode_id: int,
+) -> IsolatedRollout:
+    """Run one MolmoSpaces episode in a CUDA-free child so EGL SIGABRT is retryable."""
+
+    if not v19_harness.isolated_rollouts_enabled():
+        results = run_evaluation(
+            eval_config_cls=MolmoAct2PolicyEvalConfig,
+            benchmark_dir=Path(args.benchmark_dir),
+            task_horizon_steps=args.horizon,
+            num_workers=1,
+            use_wandb=False,
+            preloaded_policy=policy,
+            episode_idx=episode_idx,
+            output_dir=episode_dir,
+        )
+        success = bool(results.success_count > 0)
+        rollout_ok = bool(results.total_count > 0)
+        if policy.fatal_error is not None:
+            raise policy.fatal_error
+        trajectory = policy.pop_episode(success)
+        return IsolatedRollout(
+            success=bool(success and rollout_ok),
+            rollout_ok=rollout_ok,
+            n_steps=int(trajectory.get("n_steps", 0) or 0),
+            trajectory=trajectory,
+        )
+
+    episode_dir = Path(episode_dir)
+    episode_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path = episode_dir / "isolated_ckpt.pt"
+    spec_path = episode_dir / "isolated_spec.json"
+    result_path = episode_dir / "isolated_result.pkl"
+    if not ckpt_path.is_file():
+        policy.rlt_model.save(str(ckpt_path))
+    spec = {
+        "ckpt": str(ckpt_path),
+        "result_path": str(result_path),
+        "output_dir": str(episode_dir / "child"),
+        "benchmark_dir": str(args.benchmark_dir),
+        "horizon": int(args.horizon),
+        "episode_idx": int(episode_idx),
+        "episode_id": int(episode_id),
+        "server_host": str(args.server_host),
+        "server_port": int(args.server_port),
+        "server_request_timeout_sec": float(args.server_request_timeout_sec),
+        "cf_mode": str(getattr(args, "cf_mode", "flow")),
+        "cfgrl": bool(getattr(args, "cfgrl", False)),
+        "cfgrl_w": float(getattr(policy.rlt_model, "cfgrl_w", 0.0)),
+        "cfgrl_o_dim": int(getattr(policy.rlt_model, "cfgrl_o_dim", 16)),
+        "n_critics": int(getattr(args, "n_critics", 10)),
+        "use_cf_guide": bool(getattr(args, "use_cf_guide", False)),
+        "actor_mode": str(getattr(args, "actor_mode", "rlt")),
+        "seed": int(getattr(args, "seed", 0)),
+        "explore_residual_std": float(getattr(policy, "explore_residual_std", 0.0)),
+        "explore_deploy_std": float(getattr(policy, "explore_deploy_std", 0.0)),
+        "actor_mixture_prob": float(policy.actor_mixture_prob),
+        "guide_on_reference": bool(getattr(policy, "guide_on_reference", False)),
+        "residual_clip": getattr(policy, "residual_clip", None),
+        "always_collect_actor": bool(policy.always_collect_actor),
+        "actor_bc_episodes": int(getattr(policy, "actor_bc_episodes", 50)),
+        "always_collect_after_episodes": getattr(
+            policy, "always_collect_after_episodes", None
+        ),
+        "eval_force_reference": bool(getattr(policy, "eval_force_reference", False)),
+        "eval_force_actor": bool(getattr(policy, "eval_force_actor", False)),
+        "deploy_actor": bool(policy.deploy_actor),
+        "collect_episode_index": int(getattr(policy, "collect_episode_index", 0)),
+        "episode_mixture_use_actor": getattr(policy, "episode_mixture_use_actor", None),
+        "episode_collect_policy": str(
+            getattr(policy, "episode_collect_policy", "reference")
+        ),
+        "flow_steps": int(getattr(args, "flow_steps", 10)),
+        "guidance_coef": float(getattr(args, "guidance_coef", 0.5)),
+    }
+    spec_path.write_text(json.dumps(spec, default=str), encoding="utf-8")
+    timeout = v19_harness.isolated_rollout_timeout_sec(int(args.horizon))
+    attempts = v19_harness.isolated_rollout_attempts()
+    child_env = os.environ.copy()
+    egl_device = (
+        os.environ.get("MUJOCO_EGL_DEVICE_ID", "").strip()
+        or os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",")[0].strip()
+        or "0"
+    )
+    child_env["MUJOCO_EGL_DEVICE_ID"] = egl_device
+    child_env["CUDA_VISIBLE_DEVICES"] = ""
+    child_env["RLT_ISOLATED_ROLLOUT"] = "1"
+    child_env["RLT_ISOLATED_CHILD"] = "1"
+    # EGL still SIGABRTs after ~20 min in a CUDA-free child. OSMesa is on
+    # this host but PyOpenGL fails to bind it (glGetError is None). Keep EGL
+    # unless RLT_ISOLATED_GL is set.
+    gl_backend = os.environ.get("RLT_ISOLATED_GL", "egl").strip() or "egl"
+    child_env["MUJOCO_GL"] = gl_backend
+    child_env["PYOPENGL_PLATFORM"] = gl_backend
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--isolated_rollout",
+        str(spec_path),
+    ]
+    last_code: int | None = None
+    for attempt in range(1, attempts + 1):
+        result_path.unlink(missing_ok=True)
+        shutil.rmtree(episode_dir / "child", ignore_errors=True)
+        log.info(
+            "Isolated rollout idx=%d attempt=%d/%d timeout=%.0fs (CPU RLT, no CUDA, gl=%s egl_dev=%s)",
+            episode_idx,
+            attempt,
+            attempts,
+            timeout,
+            gl_backend,
+            egl_device,
+        )
+        proc: subprocess.Popen[Any] | None = None
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                env=child_env,
+                start_new_session=True,
+            )
+            last_code = int(proc.wait(timeout=timeout))
+        except subprocess.TimeoutExpired:
+            last_code = None
+            if proc is not None and proc.pid:
+                _kill_process_group(proc.pid)
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    _kill_process_group(proc.pid)
+            log.warning(
+                "Isolated rollout idx=%d attempt=%d timed out after %.0fs",
+                episode_idx,
+                attempt,
+                timeout,
+            )
+            continue
+        if last_code == 0 and result_path.is_file():
+            isolated = _read_isolated_result(result_path)
+            if isolated.fatal_error:
+                raise RLTFeatureError(isolated.fatal_error)
+            return isolated
+        if v19_harness.is_egl_crash_returncode(last_code):
+            log.warning(
+                "Isolated rollout idx=%d attempt=%d EGL crash rc=%s; retrying",
+                episode_idx,
+                attempt,
+                last_code,
+            )
+            time.sleep(2.0)
+            continue
+        log.warning(
+            "Isolated rollout idx=%d attempt=%d rc=%s result=%s",
+            episode_idx,
+            attempt,
+            last_code,
+            result_path.is_file(),
+        )
+        if result_path.is_file():
+            isolated = _read_isolated_result(result_path)
+            if isolated.fatal_error:
+                raise RLTFeatureError(isolated.fatal_error)
+            return isolated
+    log.warning(
+        "Isolated rollout idx=%d failed after %d attempts (last rc=%s)",
+        episode_idx,
+        attempts,
+        last_code,
+    )
+    return IsolatedRollout(
+        success=False,
+        rollout_ok=False,
+        n_steps=0,
+        trajectory=_empty_trajectory(),
+    )
 
 
 def _sample_with_policy_rng(
@@ -2764,6 +3154,8 @@ def _train_after_episode(
     image_replay: ImageChunkReplay | None = None,
     policy: RLTOnlinePolicy | None = None,
     valid_episodes: int = 0,
+    skip_actor: bool = False,
+    cfgrl_use_advantage: bool = False,
 ) -> tuple[
     dict[str, float],
     dict[str, float],
@@ -3048,8 +3440,21 @@ def _train_after_episode(
                 train_actor = (
                     args.actor_mode == "rlt"
                     and not bool(getattr(args, "guide_on_reference", False))
+                    and not skip_actor
                 )
-                if train_actor:
+                if train_actor and bool(getattr(args, "cfgrl", False)):
+                    actor_info = cfgrl_actor_step(
+                        model,
+                        optimizers["actor"],
+                        actor_batch,
+                        cond_dropout=float(getattr(args, "cfgrl_dropout", 0.1)),
+                        use_advantage_labels=bool(cfgrl_use_advantage),
+                    )
+                    actor_info["actor_phase"] = (
+                        "cfgrl_adv" if cfgrl_use_advantage else "cfgrl_success"
+                    )
+                    actor_updates += 1
+                elif train_actor:
                     actor_fn = flow_actor_step if model.is_flow else actor_step
                     actor_kwargs = {
                         "beta": args.actor_beta,
@@ -3075,7 +3480,11 @@ def _train_after_episode(
                     )
                     actor_info["actor_phase"] = phase.phase
                     actor_updates += 1
-                if args.use_cf_guide and time_remaining():
+                if (
+                    args.use_cf_guide
+                    and time_remaining()
+                    and not bool(getattr(args, "cfgrl", False))
+                ):
                     guide_health = critic_health_metrics(
                         model,
                         actor_batch,
@@ -3169,6 +3578,331 @@ def _train_after_episode(
         status.elapsed_sec,
     )
     return q_info, actor_info, guide_info, token_info, status
+
+
+def _run_cfgrl_phase_a(
+    args: argparse.Namespace,
+    model: MolmoAct2RLTCF,
+    optimizers: dict[str, torch.optim.Optimizer],
+    replay: ChunkReplay,
+    device: torch.device,
+    *,
+    policy: RLTOnlinePolicy | None,
+    valid_episodes: int,
+    n_critic: int,
+    n_actor: int,
+    use_advantage: bool,
+) -> dict[str, float]:
+    """Offline extractor round: many critic steps, then CFGRL actor on snapshot Q."""
+    info: dict[str, float] = {
+        "cfgrl_phase": 1.0,
+        "cfgrl_kq": float(n_critic),
+        "cfgrl_kpi": float(n_actor),
+        "cfgrl_use_advantage": float(use_advantage),
+    }
+    if n_critic <= 0 and n_actor <= 0:
+        return info
+    if len(replay) < int(args.min_replay_chunks) or not replay.has_both_outcomes():
+        info["cfgrl_phase_skipped"] = 1.0
+        log.info(
+            "CFGRL Phase A skipped: rows=%d both_outcomes=%s",
+            len(replay),
+            replay.has_both_outcomes(),
+        )
+        return info
+    critic_fn = flow_critic_td_step if model.is_flow else critic_td_step
+    critic_kwargs = {
+        "gamma": args.gamma,
+        "mc_coef": args.mc_coef,
+        "cql_coef": args.cql_coef,
+        "cql_n_actions": args.cql_n_actions,
+        "cql_action_radius": args.cql_action_radius,
+        "ref_dropout": args.ref_dropout,
+        "rank_coef": args.rank_coef,
+        "rank_margin": args.rank_margin,
+        "rank_noise": args.rank_noise,
+        "far_rank_coef": args.far_rank_coef,
+        "far_rank_noise": args.far_rank_noise,
+        "shuffle_rank_coef": args.shuffle_rank_coef,
+        "target_noise": args.target_noise,
+        "critic_target_use_guide": False,
+        "actor_cql_coef": 0.0,
+    }
+    q_info: dict[str, float] = {}
+    actor_info: dict[str, float] = {}
+    started = time.monotonic()
+    for step in range(int(n_critic)):
+        batch = _sample_with_policy_rng(
+            policy,
+            replay,
+            int(args.batch_size),
+            device,
+            role="update_sampling",
+            episode_id=valid_episodes,
+            decision_id=step,
+            require_both_outcomes=True,
+        )
+        q_info = critic_fn(model, optimizers["critic"], batch, **critic_kwargs)
+    for step in range(int(n_actor)):
+        batch = _sample_with_policy_rng(
+            policy,
+            replay,
+            int(args.batch_size),
+            device,
+            role="update_sampling",
+            episode_id=valid_episodes,
+            decision_id=10_000 + step,
+            require_both_outcomes=True,
+        )
+        actor_info = cfgrl_actor_step(
+            model,
+            optimizers["actor"],
+            batch,
+            cond_dropout=float(getattr(args, "cfgrl_dropout", 0.1)),
+            use_advantage_labels=bool(use_advantage),
+        )
+    if actor_info:
+        diag_batch = _sample_with_policy_rng(
+            policy,
+            replay,
+            int(args.batch_size),
+            device,
+            role="update_sampling",
+            episode_id=valid_episodes,
+            decision_id=20_000,
+            require_both_outcomes=True,
+        )
+        actor_info.update(cfgrl_endpoint_diagnostics(model, diag_batch))
+    info.update({f"phase_a_{k}": float(v) for k, v in q_info.items() if np.isfinite(v)})
+    info.update(
+        {f"phase_a_{k}": float(v) for k, v in actor_info.items() if np.isfinite(v)}
+    )
+    info["cfgrl_phase_a_sec"] = float(time.monotonic() - started)
+    log.info(
+        "CFGRL Phase A done eps=%d kq=%d kpi=%d adv=%s sec=%.1f bc=%.4f "
+        "pos=%.2f uncond_ref_mse=%.4f cond_ref_mse=%.4f",
+        valid_episodes,
+        n_critic,
+        n_actor,
+        use_advantage,
+        info["cfgrl_phase_a_sec"],
+        float(actor_info.get("bc_loss", 0.0)),
+        float(actor_info.get("cfgrl_pos_frac", 0.0)),
+        float(actor_info.get("cfgrl_uncond_ref_mse", 0.0)),
+        float(actor_info.get("cfgrl_cond_ref_mse", 0.0)),
+    )
+    return info
+
+
+def _apply_cfgrl_w_schedule(
+    model: MolmoAct2RLTCF,
+    args: argparse.Namespace,
+    phase_a_info: dict[str, float],
+) -> None:
+    """Keep w=0 until uncond clones ã; then use the post-warmup guidance weight."""
+
+    thresh = float(getattr(args, "cfgrl_uncond_mse_max", 0.02))
+    mse = float(
+        phase_a_info.get(
+            "phase_a_cfgrl_uncond_ref_mse",
+            phase_a_info.get("cfgrl_uncond_ref_mse", 1.0),
+        )
+    )
+    if np.isfinite(mse) and mse <= thresh:
+        model.cfgrl_w = float(getattr(args, "cfgrl_w_after_warmup", args.cfgrl_w))
+    else:
+        model.cfgrl_w = 0.0
+    log.info(
+        "CFGRL w=%.3f uncond_ref_mse=%.4f thresh=%.3f",
+        float(model.cfgrl_w),
+        mse,
+        thresh,
+    )
+
+
+def _shard_id_from_out_dir(out_dir: Path) -> int:
+    name = Path(out_dir).name
+    if name.startswith("shard_"):
+        try:
+            return int(name.split("_", 1)[1])
+        except ValueError:
+            return -1
+    return -1
+
+
+def _phase_probe_recorded_idxs(path: Path, phase: str) -> set[int]:
+    found: set[int] = set()
+    if not path.is_file():
+        return found
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if str(rec.get("phase", "")) == str(phase) and v19_harness.phase_probe_row_is_complete(
+                rec
+            ):
+                found.add(int(rec.get("episode_idx", -1)))
+    return found
+
+
+def _cfgrl_phase_barrier_enabled(
+    args: argparse.Namespace, phase_probe: bool
+) -> bool:
+    explicit = getattr(args, "cfgrl_phase_barrier", None)
+    if explicit is False:
+        return False
+    if explicit is True:
+        return True
+    return bool(phase_probe)
+
+
+def _wait_cfgrl_phase_barrier(
+    args: argparse.Namespace, out_dir: Path, phase: str
+) -> bool:
+    """Wait until all shards have logged `phase`. True if released, False if stopped."""
+
+    phase_probe = bool(getattr(args, "cfgrl_phase_probe", False)) and bool(
+        getattr(args, "cfgrl", False)
+    )
+    if not _cfgrl_phase_barrier_enabled(args, phase_probe):
+        return True
+    resolved = Path(out_dir).resolve()
+    variant_dir = resolved.parent
+    run_dir = variant_dir.parent
+    n_shards = int(getattr(args, "cfgrl_n_shards", 0) or v19_harness.N_SHARDS)
+    return v19_harness.wait_for_phase_barrier(
+        run_dir,
+        str(phase),
+        n_shards=n_shards,
+        variant=variant_dir.name,
+        should_stop=lambda: _STOP_REQUESTED,
+        log=log.info,
+    )
+
+
+def _run_cfgrl_phase_probe(
+    args: argparse.Namespace,
+    policy: RLTOnlinePolicy,
+    *,
+    phase: str,
+    policy_mode: str,
+    bench: Path,
+    tmp_rollouts: Path,
+    out_dir: Path,
+    n_bench: int,
+    probe_id: int,
+) -> dict[str, Any]:
+    """Fixed train-pose rollouts for this worker. No replay write, no weight update."""
+
+    probe_path = Path(out_dir) / "phase_probe.jsonl"
+    if policy_mode not in {"reference", "actor"}:
+        raise ValueError(f"phase probe policy_mode must be reference|actor, got {policy_mode}")
+    pose_n = max(1, min(int(getattr(args, "benchmark_pose_cycle", n_bench) or n_bench), n_bench))
+    n_shards = int(getattr(args, "cfgrl_n_shards", 0) or v19_harness.N_SHARDS)
+    shard = _shard_id_from_out_dir(Path(out_dir))
+    indices = v19_harness.phase_probe_episode_indices(shard, pose_n, n_shards=n_shards)
+    recorded = _phase_probe_recorded_idxs(probe_path, phase)
+    pending = [idx for idx in indices if idx not in recorded]
+    if not pending:
+        log.info("CFGRL phase probe %s already recorded; skip", phase)
+        _wait_cfgrl_phase_barrier(args, Path(out_dir), phase)
+        return {"phase": phase, "skipped": True, "n": len(indices)}
+    prev = {
+        "eval_force_reference": bool(getattr(policy, "eval_force_reference", False)),
+        "eval_force_actor": bool(getattr(policy, "eval_force_actor", False)),
+        "actor_mixture_prob": float(policy.actor_mixture_prob),
+        "always_collect_actor": bool(policy.always_collect_actor),
+        "deploy_actor": bool(policy.deploy_actor),
+        "collect_episode_index": int(getattr(policy, "collect_episode_index", 0)),
+    }
+    last_row: dict[str, Any] = {"phase": phase}
+    try:
+        policy.eval_force_reference = policy_mode == "reference"
+        policy.eval_force_actor = policy_mode == "actor"
+        policy.actor_mixture_prob = 0.0
+        policy.always_collect_actor = policy_mode == "actor"
+        policy.deploy_actor = policy_mode == "actor"
+        policy.collect_episode_index = 10**9 if policy_mode == "actor" else 0
+        for copy_i, episode_idx in enumerate(pending):
+            if _STOP_REQUESTED:
+                log.warning("CFGRL phase probe %s stopping; remaining poses stay pending", phase)
+                break
+            success = False
+            rollout_ok = False
+            n_steps = 0
+            local_probe_id = int(probe_id) * 10 + copy_i
+            episode_dir = tmp_rollouts / f"probe_{phase}_id{local_probe_id:06d}"
+            shutil.rmtree(episode_dir, ignore_errors=True)
+            episode_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                policy.begin_episode(int(local_probe_id))
+                with _egl_gpu_lock():
+                    isolated = _run_isolated_evaluation(
+                        args,
+                        policy,
+                        episode_idx=int(episode_idx),
+                        episode_dir=episode_dir,
+                        episode_id=int(local_probe_id),
+                    )
+                    success = bool(isolated.success)
+                    rollout_ok = bool(isolated.rollout_ok)
+                    n_steps = int(isolated.n_steps)
+            except Exception as error:  # noqa: BLE001
+                log.warning(
+                    "CFGRL phase probe %s failed idx=%d: %s",
+                    phase,
+                    episode_idx,
+                    error,
+                )
+                success = False
+                rollout_ok = False
+                n_steps = 0
+                if policy.fatal_error is not None:
+                    raise policy.fatal_error
+            finally:
+                shutil.rmtree(episode_dir, ignore_errors=True)
+            if not (rollout_ok and n_steps > 0):
+                log.warning(
+                    "CFGRL phase probe %s idx=%d produced no episode; leaving pending",
+                    phase,
+                    episode_idx,
+                )
+                continue
+            last_row = {
+                "phase": str(phase),
+                "policy": str(policy_mode),
+                "shard": shard,
+                "episode_idx": int(episode_idx),
+                "success": bool(success and rollout_ok and n_steps > 0),
+                "valid": bool(rollout_ok and n_steps > 0),
+                "n_steps": int(n_steps),
+                "probe_id": int(local_probe_id),
+                "cfgrl_w": float(getattr(policy.rlt_model, "cfgrl_w", 0.0)),
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+            _append_metrics_row(probe_path, last_row)
+            log.info(
+                "CFGRL phase probe phase=%s policy=%s idx=%d success=%s steps=%d",
+                phase,
+                policy_mode,
+                episode_idx,
+                last_row["success"],
+                n_steps,
+            )
+    finally:
+        policy.eval_force_reference = prev["eval_force_reference"]
+        policy.eval_force_actor = prev["eval_force_actor"]
+        policy.actor_mixture_prob = prev["actor_mixture_prob"]
+        policy.always_collect_actor = prev["always_collect_actor"]
+        policy.deploy_actor = prev["deploy_actor"]
+        policy.collect_episode_index = prev["collect_episode_index"]
+    _wait_cfgrl_phase_barrier(args, Path(out_dir), phase)
+    return last_row
 
 
 def _atomic_model_save(
@@ -4147,6 +4881,26 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                     f"Failed to load replay paired with resumed model: {args.replay_out}"
                 ) from error
             log.warning("Failed to resume chunk replay %s: %s", args.replay_out, error)
+    seed_replay = str(getattr(args, "seed_replay", "") or "")
+    if (
+        seed_replay
+        and Path(seed_replay).is_file()
+        and len(replay) < int(args.min_replay_chunks)
+    ):
+        seeded = ChunkReplay.load_npz(
+            seed_replay,
+            max_transitions=args.replay_capacity,
+            pos_frac=args.pos_frac,
+            seed=args.seed,
+            benchmark_pose_cycle=int(args.benchmark_pose_cycle),
+        )
+        replay = seeded
+        log.info(
+            "Seeded chunk replay from %s (%d transitions, %d episodes)",
+            seed_replay,
+            len(replay),
+            int(getattr(replay, "n_episodes", 0)),
+        )
     if (
         not eval_only
         and resume_artifacts.checkpoint is not None
@@ -4158,11 +4912,20 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         expected_episodes = int(loaded_checkpoint_meta["valid_episodes"])
         replay_episode_count = int(getattr(replay, "n_episodes", -1))
         if replay_episode_count != expected_episodes:
-            raise RuntimeError(
-                "V14 checkpoint/chunk replay transaction mismatch: "
-                f"checkpoint_episodes={expected_episodes}, "
-                f"replay_episodes={replay_episode_count}"
-            )
+            seed_replay_path = str(getattr(args, "seed_replay", "") or "")
+            if seed_replay_path and replay_episode_count >= expected_episodes:
+                log.warning(
+                    "seed_replay present; allowing replay_episodes=%d >= "
+                    "checkpoint_episodes=%d",
+                    replay_episode_count,
+                    expected_episodes,
+                )
+            else:
+                raise RuntimeError(
+                    "V14 checkpoint/chunk replay transaction mismatch: "
+                    f"checkpoint_episodes={expected_episodes}, "
+                    f"replay_episodes={replay_episode_count}"
+                )
         if image_replay is not None:
             image_episode_count = int(
                 getattr(image_replay, "n_episodes", -1)
@@ -4214,6 +4977,13 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         args, model, device, ae_backend=ae_backend
     )
     bench = Path(args.benchmark_dir) if args.benchmark_dir else _default_bench()
+    if bool(getattr(args, "cfgrl", False)):
+        parts = {part.lower() for part in bench.parts}
+        if "val" in parts or bench.name.lower() in {"val", "validation"}:
+            raise ValueError(
+                "CFGRL/V19 must not use the 12-episode val split for training "
+                f"or validation; got benchmark_dir={bench}"
+            )
     n_bench = _bench_size(bench)
     shard_size = int(args.shard_size) if args.shard_size > 0 else n_bench
     shard_start = int(args.start_episode) % n_bench
@@ -4413,6 +5183,65 @@ def train_rlt_online(args: argparse.Namespace) -> None:
 
     cycles_this_process = 0
     empirical_tracker = EmpiricalGateTracker()
+    last_phase_a: dict[str, float] = {}
+    probe_id = 0
+    phase_probe = bool(getattr(args, "cfgrl_phase_probe", False)) and bool(
+        getattr(args, "cfgrl", False)
+    )
+    if (
+        not eval_only
+        and bool(getattr(args, "cfgrl", False))
+        and valid_episodes == 0
+        and int(getattr(args, "cfgrl_kq", 0)) > 0
+    ):
+        if phase_probe:
+            probe_id += 1
+            _run_cfgrl_phase_probe(
+                args,
+                policy,
+                phase="0",
+                policy_mode="reference",
+                bench=bench,
+                tmp_rollouts=tmp_rollouts,
+                out_dir=out_dir,
+                n_bench=n_bench,
+                probe_id=probe_id,
+            )
+        last_phase_a = _run_cfgrl_phase_a(
+            args,
+            model,
+            optimizers,
+            replay,
+            device,
+            policy=policy,
+            valid_episodes=0,
+            n_critic=int(args.cfgrl_kq),
+            n_actor=int(args.cfgrl_kpi),
+            use_advantage=False,
+        )
+        last_actor = {**last_actor, **last_phase_a}
+        _apply_cfgrl_w_schedule(model, args, last_phase_a)
+        if phase_probe:
+            probe_id += 1
+            _run_cfgrl_phase_probe(
+                args,
+                policy,
+                phase="1A",
+                policy_mode="actor",
+                bench=bench,
+                tmp_rollouts=tmp_rollouts,
+                out_dir=out_dir,
+                n_bench=n_bench,
+                probe_id=probe_id,
+            )
+    elif phase_probe and valid_episodes > 0:
+        last_ph = v19_harness.last_recorded_phase(Path(out_dir))
+        if last_ph:
+            log.info(
+                "CFGRL resume: waiting at last recorded phase=%s before continuing",
+                last_ph,
+            )
+            _wait_cfgrl_phase_barrier(args, Path(out_dir), last_ph)
     while (
         not _STOP_REQUESTED
         and env_steps < args.target_env_steps
@@ -4481,9 +5310,47 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         policy.actor_mixture_prob = float(
             post_mix if gate.deploy_actor else pre_mix
         )
+        if (
+            bool(getattr(args, "cfgrl", False))
+            and bool(getattr(args, "cfgrl_phase_probe", False))
+        ):
+            run_dir = Path(out_dir).resolve().parent.parent
+            policy.actor_mixture_prob = float(
+                v19_harness.cfgrl_collect_mixture_prob(
+                    run_dir,
+                    n_shards=int(
+                        getattr(args, "cfgrl_n_shards", 0) or v19_harness.N_SHARDS
+                    ),
+                    n_rounds=int(
+                        getattr(
+                            args,
+                            "cfgrl_phase_rounds",
+                            v19_harness.PHASE_ROUNDS,
+                        )
+                    ),
+                    variant=Path(out_dir).resolve().parent.name,
+                    pre=float(pre_mix),
+                    post=float(post_mix),
+                )
+            )
         model.eval()
 
-        episode_idx = shard_start + (cycle % shard_size)
+        if bool(getattr(args, "cfgrl", False)):
+            pose_n = max(
+                1,
+                min(
+                    int(getattr(args, "benchmark_pose_cycle", n_bench) or n_bench),
+                    n_bench,
+                ),
+            )
+            pose_seed = policy.next_seed(
+                "exploration",
+                episode_id=int(valid_episodes),
+                decision_id=int(cycle),
+            )
+            episode_idx = int(np.random.default_rng(pose_seed).integers(0, pose_n))
+        else:
+            episode_idx = shard_start + (cycle % shard_size)
         cycle += 1
         policy.begin_episode(cycle)
         episode_dir = tmp_rollouts / f"ep_{cycle:08d}"
@@ -4509,23 +5376,17 @@ def train_rlt_online(args: argparse.Namespace) -> None:
             # Serialize MuJoCo EGL only; CUDA train runs after unlock so it does
             # not extend the per-GPU EGL queue.
             with _egl_gpu_lock():
-                results = run_evaluation(
-                    eval_config_cls=MolmoAct2PolicyEvalConfig,
-                    benchmark_dir=bench,
-                    task_horizon_steps=args.horizon,
-                    num_workers=1,
-                    use_wandb=False,
-                    preloaded_policy=policy,
-                    episode_idx=episode_idx,
-                    output_dir=episode_dir,
+                isolated = _run_isolated_evaluation(
+                    args,
+                    policy,
+                    episode_idx=int(episode_idx),
+                    episode_dir=episode_dir,
+                    episode_id=int(cycle),
                 )
-                success = bool(results.success_count > 0)
-                rollout_ok = bool(results.total_count > 0)
-                trajectory = policy.pop_episode(success)
-                if policy.fatal_error is not None:
-                    raise policy.fatal_error
-
-                n_steps = int(trajectory["n_steps"])
+                success = bool(isolated.success)
+                rollout_ok = bool(isolated.rollout_ok)
+                trajectory = isolated.trajectory
+                n_steps = int(isolated.n_steps)
                 if rollout_ok and n_steps > 0 and not eval_only:
                     replay.add_episode_chunks(
                         trajectory["zs"],
@@ -4585,7 +5446,39 @@ def train_rlt_online(args: argparse.Namespace) -> None:
                     image_replay=image_replay,
                     policy=policy,
                     valid_episodes=valid_episodes,
+                    skip_actor=bool(getattr(args, "cfgrl", False)),
+                    cfgrl_use_advantage=bool(
+                        gate.critic_health
+                        and int(valid_episodes)
+                        >= int(getattr(args, "cfgrl_adv_start_episodes", 200))
+                    ),
                 )
+                if (
+                    bool(getattr(args, "cfgrl", False))
+                    and not phase_probe
+                    and int(getattr(args, "cfgrl_round_episodes", 100)) > 0
+                    and valid_episodes > 0
+                    and valid_episodes
+                    % int(args.cfgrl_round_episodes)
+                    == 0
+                ):
+                    use_adv = bool(gate.critic_health) and valid_episodes >= int(
+                        getattr(args, "cfgrl_adv_start_episodes", 200)
+                    )
+                    last_phase_a = _run_cfgrl_phase_a(
+                        args,
+                        model,
+                        optimizers,
+                        replay,
+                        device,
+                        policy=policy,
+                        valid_episodes=valid_episodes,
+                        n_critic=int(getattr(args, "cfgrl_kq_online", args.cfgrl_kq)),
+                        n_actor=int(getattr(args, "cfgrl_kpi_online", args.cfgrl_kpi)),
+                        use_advantage=use_adv,
+                    )
+                    last_actor = {**last_actor, **last_phase_a}
+                    _apply_cfgrl_w_schedule(model, args, last_phase_a)
         except Exception as error:  # noqa: BLE001
             log.warning("Episode %d rollout failed: %s", episode_idx, error)
             success = False
@@ -4640,6 +5533,54 @@ def train_rlt_online(args: argparse.Namespace) -> None:
         valid_episodes += 1
         successes += int(success)
         recent.append(float(success))
+        if (
+            phase_probe
+            and int(getattr(args, "cfgrl_round_episodes", 1)) > 0
+            and valid_episodes % int(args.cfgrl_round_episodes) == 0
+        ):
+            round_idx = int(valid_episodes // int(args.cfgrl_round_episodes))
+            probe_id += 1
+            _run_cfgrl_phase_probe(
+                args,
+                policy,
+                phase=f"{round_idx}B",
+                policy_mode="actor",
+                bench=bench,
+                tmp_rollouts=tmp_rollouts,
+                out_dir=out_dir,
+                n_bench=n_bench,
+                probe_id=probe_id,
+            )
+            if valid_episodes < int(args.max_valid_episodes):
+                use_adv = bool(gate.critic_health) and valid_episodes >= int(
+                    getattr(args, "cfgrl_adv_start_episodes", 200)
+                )
+                last_phase_a = _run_cfgrl_phase_a(
+                    args,
+                    model,
+                    optimizers,
+                    replay,
+                    device,
+                    policy=policy,
+                    valid_episodes=valid_episodes,
+                    n_critic=int(getattr(args, "cfgrl_kq_online", args.cfgrl_kq)),
+                    n_actor=int(getattr(args, "cfgrl_kpi_online", args.cfgrl_kpi)),
+                    use_advantage=use_adv,
+                )
+                last_actor = {**last_actor, **last_phase_a}
+                _apply_cfgrl_w_schedule(model, args, last_phase_a)
+                probe_id += 1
+                _run_cfgrl_phase_probe(
+                    args,
+                    policy,
+                    phase=f"{round_idx + 1}A",
+                    policy_mode="actor",
+                    bench=bench,
+                    tmp_rollouts=tmp_rollouts,
+                    out_dir=out_dir,
+                    n_bench=n_bench,
+                    probe_id=probe_id,
+                )
         if rollout_ok and n_steps > 0 and not eval_only:
             empirical_tracker.record(
                 used_actor=bool(trajectory.get("episode_used_actor", False)),
@@ -5073,6 +6014,61 @@ def parse_args() -> argparse.Namespace:
     )
     parser.set_defaults(use_cf_guide=True)
 
+    parser.add_argument(
+        "--cfgrl",
+        action="store_true",
+        help="CFGRL actor: optimality-conditioned flow-matching, no CF guide.",
+    )
+    parser.add_argument("--cfgrl_w", type=float, default=0.0)
+    parser.add_argument("--cfgrl_w_after_warmup", type=float, default=0.5)
+    parser.add_argument(
+        "--cfgrl_uncond_mse_max",
+        type=float,
+        default=0.02,
+        help="Raise cfgrl_w only if uncond endpoint MSE to the VLA reference is below this.",
+    )
+    parser.add_argument("--cfgrl_dropout", type=float, default=0.1)
+    parser.add_argument("--cfgrl_o_dim", type=int, default=16)
+    parser.add_argument("--cfgrl_kq", type=int, default=2048)
+    parser.add_argument("--cfgrl_kpi", type=int, default=1024)
+    parser.add_argument("--cfgrl_kq_online", type=int, default=1024)
+    parser.add_argument("--cfgrl_kpi_online", type=int, default=512)
+    parser.add_argument("--cfgrl_round_episodes", type=int, default=100)
+    parser.add_argument("--cfgrl_adv_start_episodes", type=int, default=200)
+    parser.add_argument(
+        "--cfgrl_phase_probe",
+        action="store_true",
+        help="After each CFGRL phase, roll the worker's fixed train pose (no update) for SR.",
+    )
+    parser.add_argument("--cfgrl_phase_rounds", type=int, default=12)
+    parser.add_argument("--cfgrl_phase_b_episodes", type=int, default=1)
+    parser.add_argument(
+        "--cfgrl_n_shards",
+        type=int,
+        default=32,
+        help="Fleet size for the CFGRL phase barrier (V19: 32).",
+    )
+    barrier_group = parser.add_mutually_exclusive_group()
+    barrier_group.add_argument(
+        "--cfgrl_phase_barrier",
+        dest="cfgrl_phase_barrier",
+        action="store_true",
+        help="After each phase probe, wait until all shards have logged that phase.",
+    )
+    barrier_group.add_argument(
+        "--no_cfgrl_phase_barrier",
+        dest="cfgrl_phase_barrier",
+        action="store_false",
+        help="Do not wait for other shards after a phase probe.",
+    )
+    parser.set_defaults(cfgrl_phase_barrier=None)
+    parser.add_argument(
+        "--seed_replay",
+        type=str,
+        default="",
+        help="Offline chunk replay NPZ used to seed CFGRL Phase A.",
+    )
+
     token_group = parser.add_mutually_exclusive_group()
     token_group.add_argument(
         "--tune_token_online",
@@ -5413,6 +6409,13 @@ def parse_args() -> argparse.Namespace:
     else:
         args.v_source = "rlt"
 
+    if args.cfgrl:
+        args.cf_mode = CF_MODE_FLOW
+        args.use_cf_guide = False
+        args.tune_token_online = False
+        args.always_collect_actor = False
+        args.v_source = "rlt"
+
     if args.force_deploy_rlt:
         log.warning(
             "--force_deploy_rlt is deprecated; use --deploy_policy actor_guide"
@@ -5479,4 +6482,10 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == "--isolated_rollout":
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(levelname)s:%(name)s:%(message)s",
+        )
+        raise SystemExit(_isolated_rollout_main(Path(sys.argv[2])))
     train_rlt_online(parse_args())

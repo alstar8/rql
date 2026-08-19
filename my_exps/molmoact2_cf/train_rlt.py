@@ -9,6 +9,9 @@ import torch.nn.functional as F
 from torch import nn
 
 from rlt_models import (
+    CFGRL_O_POS,
+    CFGRL_O_UNCOND,
+    DEFAULT_CFGRL_DROPOUT,
     MolmoAct2RLTCF,
     bootstrap_scale,
     chunk_return,
@@ -2042,6 +2045,154 @@ def flow_actor_step(
         "alpha": float(alpha.detach()),
         "endpoint_steps": float(model.flow_steps),
         "endpoint_t": float(t_end.mean().detach()),
+    }
+
+
+def cfgrl_condition_and_target(
+    a_data: torch.Tensor,
+    a_ref: torch.Tensor,
+    *,
+    success: torch.Tensor | None = None,
+    advantage: torch.Tensor | None = None,
+    cond_dropout: float = DEFAULT_CFGRL_DROPOUT,
+    use_advantage_labels: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, float]]:
+    """Binary CFGRL labels: uncond clones ã, cond clones positive executed chunks.
+
+    Failures / A<0 are mapped to uncond rather than a dedicated o=NEG head so
+    the shared backbone is not trained mostly on unsuccessful actions.
+    """
+
+    batch_size = a_data.shape[0]
+    device = a_data.device
+    if use_advantage_labels:
+        if advantage is None:
+            raise ValueError("advantage is required when use_advantage_labels=True")
+        adv = advantage.reshape(batch_size).to(device=device)
+        positive = adv >= 0
+        adv_mean = float(adv.mean().detach())
+    else:
+        if success is None:
+            success = torch.zeros(batch_size, device=device)
+        success = success.reshape(batch_size).to(device=device, dtype=a_data.dtype)
+        positive = success > 0.5
+        adv_mean = float(success.mean().detach())
+    pos_frac = float(positive.float().mean().detach())
+    o = torch.where(
+        positive,
+        torch.full((batch_size,), CFGRL_O_POS, device=device, dtype=torch.long),
+        torch.full((batch_size,), CFGRL_O_UNCOND, device=device, dtype=torch.long),
+    )
+    drop = torch.rand(batch_size, device=device) < float(cond_dropout)
+    o = torch.where(
+        drop,
+        torch.full((batch_size,), CFGRL_O_UNCOND, device=device, dtype=torch.long),
+        o,
+    )
+    a_star = torch.where(o.view(batch_size, 1, 1) == CFGRL_O_POS, a_data, a_ref)
+    return o, a_star, {
+        "cfgrl_pos_frac": pos_frac,
+        "cfgrl_uncond_frac": float((o == CFGRL_O_UNCOND).float().mean().detach()),
+        "cfgrl_use_advantage": float(use_advantage_labels),
+        "cfgrl_adv_mean": adv_mean,
+    }
+
+
+@torch.no_grad()
+def cfgrl_endpoint_diagnostics(
+    model: MolmoAct2RLTCF,
+    batch: dict[str, torch.Tensor],
+) -> dict[str, float]:
+    """Endpoint MSE of w=0 (uncond) and w=1 (cond) samples vs ã and executed a."""
+
+    if not model.is_flow:
+        raise RuntimeError("cfgrl_endpoint_diagnostics requires cf_mode=flow")
+    was_training = bool(model.training)
+    model.eval()
+    state = _batch_state(model, batch, detach_token=True, use_target=False)
+    a_data = model.normalize_action(batch["executed_actions"])
+    a_ref = model.normalize_action(batch["reference_actions"])
+    mask = batch["action_mask"].unsqueeze(-1)
+
+    def _masked_mse(pred: torch.Tensor, target: torch.Tensor) -> float:
+        return float(
+            (((pred - target) * mask) ** 2).sum()
+            / mask.sum().clamp_min(1.0)
+            / pred.shape[-1]
+        )
+
+    uncond, _ = model.flow_sample(state, a_ref, cfg_w=0.0)
+    cond, _ = model.flow_sample(state, a_ref, cfg_w=1.0)
+    if was_training:
+        model.train()
+    return {
+        "cfgrl_uncond_ref_mse": _masked_mse(uncond, a_ref),
+        "cfgrl_cond_ref_mse": _masked_mse(cond, a_ref),
+        "cfgrl_uncond_data_mse": _masked_mse(uncond, a_data),
+        "cfgrl_cond_data_mse": _masked_mse(cond, a_data),
+    }
+
+
+def cfgrl_actor_step(
+    model: MolmoAct2RLTCF,
+    opt: torch.optim.Optimizer,
+    batch: dict[str, torch.Tensor],
+    *,
+    cond_dropout: float = DEFAULT_CFGRL_DROPOUT,
+    use_advantage_labels: bool = False,
+    snapshot_critic: nn.Module | None = None,
+) -> dict[str, float]:
+    """CFGRL flow-matching: uncond clones ã, cond clones positive executed a.
+
+    No Q-max actor term and no residual β. Labels come from stop-grad Q (A vs
+    VLA reference) once the critic is healthy, otherwise from episode success.
+    Negative / failed chunks are trained as uncond (clone ã), not as o=NEG BC.
+    """
+    if not model.is_flow:
+        raise RuntimeError("cfgrl_actor_step requires cf_mode=flow")
+    model.train()
+    with torch.no_grad():
+        state = _batch_state(model, batch, detach_token=True, use_target=False)
+    a_data = model.normalize_action(batch["executed_actions"])
+    a_ref = model.normalize_action(batch["reference_actions"])
+    b = a_data.shape[0]
+    device = a_data.device
+    adv = None
+    if use_advantage_labels:
+        t_end = torch.ones(b, 1, device=device, dtype=a_data.dtype)
+        critic_model = snapshot_critic if snapshot_critic is not None else model
+        with torch.no_grad():
+            q_a = critic_model.q_lower_tail_chunk(state, a_data, t=t_end)
+            q_ref = critic_model.q_lower_tail_chunk(state, a_ref, t=t_end)
+            adv = q_a - q_ref
+    success = batch.get("success")
+    if success is None:
+        success = batch.get("mc_return")
+    o, a_star, label_info = cfgrl_condition_and_target(
+        a_data,
+        a_ref,
+        success=success,
+        advantage=adv,
+        cond_dropout=cond_dropout,
+        use_advantage_labels=use_advantage_labels,
+    )
+    x0 = torch.randn_like(a_star)
+    t = torch.rand(b, 1, device=device, dtype=a_star.dtype)
+    x_t = (1.0 - t.view(b, 1, 1)) * x0 + t.view(b, 1, 1) * a_star
+    target_v = a_star - x0
+    v = model.flow_velocity(state, x_t, t, a_ref, o=o)
+    mask = batch["action_mask"].unsqueeze(-1)
+    bc = (((v - target_v.detach()) * mask) ** 2).sum() / mask.sum().clamp_min(1.0) / v.shape[-1]
+    opt.zero_grad(set_to_none=True)
+    bc.backward()
+    nn.utils.clip_grad_norm_(model.actor.parameters(), 1.0)
+    opt.step()
+    return {
+        "actor_loss": float(bc.detach()),
+        "bc_loss": float(bc.detach()),
+        **label_info,
+        "actor_q_coef": 0.0,
+        "cfgrl_w": float(model.cfgrl_w),
     }
 
 

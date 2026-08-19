@@ -1,0 +1,44 @@
+% ICRA two-column wrappers. Compile from this directory with pdflatex.
+\documentclass[letterpaper,10pt,conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{times}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[font=footnotesize]{caption}
+\usepackage{hyperref}
+\hypersetup{colorlinks=false}
+
+\input{v19_fig_style}
+
+\title{V19 schemes (not a submission)}
+\author{Internal figure check}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Placeholder so the figure pages use IEEEtran column geometry.
+\end{abstract}
+
+\begin{figure*}[!t]
+\centering
+\resizebox{\textwidth}{!}{\input{architecture.tikz}}
+\caption{A frozen VLA remains the reference policy $\hat\pi$; only a compact
+RL token, a chunk critic, and one CFGRL flow are trained. Guided sampling
+implements the product $\pi\propto\hat\pi\,p(o{=}1\mid x,a)^{w}$ without
+updating MolmoAct2.}
+\label{fig:v19-arch}
+\end{figure*}
+
+\begin{figure*}[!t]
+\centering
+\resizebox{\textwidth}{!}{\input{training_loop.tikz}}
+\caption{Conservative policy iteration on a fixed 24-pose train set.
+Phase~0 is the frozen-VLA baseline. Each round extracts a CFGRL actor,
+probes it, then collects with mix $p$ against $\hat\pi$ only if that probe
+is not worse than Phase~0. Guidance stays at $w=0$ until the uncond flow
+matches $\tilde{a}$, then $w=0.5$.}
+\label{fig:v19-loop}
+\end{figure*}
+
+\end{document}

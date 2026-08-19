@@ -18,6 +18,8 @@ from rlt_models import (
     FEATURE_DIM,
     STATE_DIM,
     Z_DIM,
+    CFGRL_O_POS,
+    CFGRL_O_UNCOND,
     CFGradientGuide,
     ChunkGaussianActor,
     MolmoAct2RLTCF,
@@ -31,6 +33,7 @@ from rlt_models import (
 from train_rlt import (
     actor_step,
     build_rlt_optimizers,
+    cfgrl_condition_and_target,
     critic_td_step,
     guide_step,
     predicted_lcb_advantage,
@@ -294,6 +297,34 @@ def test_reference_dropout_changes_input_path():
     assert not torch.allclose(mean_on, mean_off)
 
 
+def test_cfgrl_labels_map_failures_to_uncond():
+    torch.manual_seed(0)
+    a_data = torch.ones(4, CHUNK_SIZE, ACTION_DIM)
+    a_ref = torch.zeros(4, CHUNK_SIZE, ACTION_DIM)
+    success = torch.tensor([1.0, 0.0, 1.0, 0.0])
+    o, a_star, info = cfgrl_condition_and_target(
+        a_data,
+        a_ref,
+        success=success,
+        cond_dropout=0.0,
+        use_advantage_labels=False,
+    )
+    assert info["cfgrl_pos_frac"] == 0.5
+    assert float((o == CFGRL_O_POS).float().mean()) == 0.5
+    assert float((o == CFGRL_O_UNCOND).float().mean()) == 0.5
+    assert torch.allclose(a_star[0], a_data[0])
+    assert torch.allclose(a_star[1], a_ref[1])
+    o_drop, a_star_drop, _ = cfgrl_condition_and_target(
+        a_data,
+        a_ref,
+        success=torch.ones(4),
+        cond_dropout=1.0,
+        use_advantage_labels=False,
+    )
+    assert torch.equal(o_drop, torch.full((4,), CFGRL_O_UNCOND, dtype=torch.long))
+    assert torch.allclose(a_star_drop, a_ref)
+
+
 if __name__ == "__main__":
     tests = [
         test_rl_token_recon_and_mask,
@@ -307,6 +338,7 @@ if __name__ == "__main__":
         test_q_tail_config_roundtrip,
         test_explicit_critic_head_recovery_resets_target_copy,
         test_reference_dropout_changes_input_path,
+        test_cfgrl_labels_map_failures_to_uncond,
     ]
     for fn in tests:
         fn()

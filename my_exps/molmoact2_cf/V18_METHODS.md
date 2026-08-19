@@ -2,9 +2,9 @@
 
 **Goal.** Reach ~**80%** sim success rate (SR) with residual/flow **CF** online RL within **≤2000** valid episodes per shard, without collapsing below frozen-VLA SR during warmup.
 
-**Status (2026-08-17).** Online live under `runs/rlt_cf_v18_kettle/` (ports **8750–8757**). Early (~120–140 eps): residual cumSR **~0.09–0.14**, flow **~0.06–0.11**; gate **closed** (`actor_lcb_below_threshold`). Still in BC warmup (target 400). Not yet competitive with frozen VLA (~0.20–0.22).
+**Status (2026-08-17).** Stopped in favor of V19 (see [`V19_METHODS.md`](V19_METHODS.md)). Last live run was `runs/rlt_cf_v18_kettle/` (ports **8750–8757**). Early (~120–140 eps): residual cumSR **~0.09–0.14**, flow **~0.06–0.11**; gate **closed**. Not competitive with frozen VLA (~0.20–0.22).
 
-Launch: `V18_MODE=long FRESH=1 bash launch_v18_rlt_cf.sh`
+Launch (do not restart unless comparing extractors): `V18_MODE=long FRESH=1 bash launch_v18_rlt_cf.sh`
 
 ---
 

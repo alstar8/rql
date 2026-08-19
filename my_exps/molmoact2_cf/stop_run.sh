@@ -32,19 +32,32 @@ declare -A SEEN=()
 belongs_to_run() {
   local pid="$1"
   local environ="/proc/${pid}/environ"
-  [[ -r "${environ}" ]] || return 1
+  local cmdline="/proc/${pid}/cmdline"
   local entry
-  while IFS= read -r entry; do
-    case "${entry}" in
-      "RLT_CF_V4_RUN_DIR=${RUN_DIR}"|\
-      "RLT_CF_V13_RUN_DIR=${RUN_DIR}"|\
-      "RLT_CF_V14_RUN_DIR=${RUN_DIR}"|\
-      "RLT_CF_V15_RUN_DIR=${RUN_DIR}"|\
-      "RLT_CF_V16_RUN_DIR=${RUN_DIR}")
-        return 0
-        ;;
-    esac
-  done < <(tr '\0' '\n' < "${environ}")
+  # /proc/pid/environ is the *initial* exec env. Bash `export` after start
+  # does not appear there, so the launch watchdog would survive stop_run
+  # and immediately respawn trainers.
+  if [[ -r "${environ}" ]]; then
+    while IFS= read -r entry; do
+      case "${entry}" in
+        "RLT_CF_V4_RUN_DIR=${RUN_DIR}"|\
+        "RLT_CF_V13_RUN_DIR=${RUN_DIR}"|\
+        "RLT_CF_V14_RUN_DIR=${RUN_DIR}"|\
+        "RLT_CF_V15_RUN_DIR=${RUN_DIR}"|\
+        "RLT_CF_V16_RUN_DIR=${RUN_DIR}"|\
+        "RLT_CF_V17_RUN_DIR=${RUN_DIR}"|\
+        "RLT_CF_V18_RUN_DIR=${RUN_DIR}"|\
+        "RLT_CF_V19_RUN_DIR=${RUN_DIR}")
+          return 0
+          ;;
+      esac
+    done < <(tr '\0' '\n' < "${environ}")
+  fi
+  if [[ -r "${cmdline}" ]]; then
+    entry="$(tr '\0' ' ' < "${cmdline}")"
+    [[ "${entry}" == *"${RUN_DIR}"* ]] && return 0
+    [[ "${entry}" == *"launch_v19_rlt_cfgrl.sh"* ]] && return 0
+  fi
   return 1
 }
 

@@ -1,0 +1,125 @@
+% Architecture: observation → frozen VLA + RL token → CFGRL extractor.
+\begin{tikzpicture}[v19]
+  \def\pw{57.4}
+  \def\ph{76}
+  \def\gap{4.0}
+
+  % ========== 1. Observation ==========
+  \coordinate (P1) at (0,0);
+  \fill[datafill, rounded corners=2.2mm] (P1) rectangle ++(\pw,\ph);
+  \draw[dataedge, panel] (P1) rectangle ++(\pw,\ph);
+  \node[paneltitle] at ($(P1)+(0.5*\pw,\ph-2.0)$) {Observation};
+
+  \node[inner sep=0.3mm, draw=dataedge, fill=white, rounded corners=0.6mm]
+    (exo) at ($(P1)+(0.5*\pw,57.8)$)
+    {\includegraphics[width=46mm]{env/exo_kettle.png}};
+  \node[card=dataedge, fill=white, inner sep=1.0mm, font=\footnotesize]
+    at ($(P1)+(0.5*\pw,45.0)$) {exo RGB};
+
+  \node[inner sep=0.3mm, draw=dataedge, fill=white, rounded corners=0.6mm]
+    (wrist) at ($(P1)+(0.5*\pw,32.4)$)
+    {\includegraphics[width=46mm]{env/wrist_kettle.png}};
+  \node[card=dataedge, fill=white, inner sep=1.0mm, font=\footnotesize]
+    at ($(P1)+(0.5*\pw,20.0)$) {wrist RGB};
+
+  \node[pill=obsblue, fill=obsfill, minimum width=21mm, minimum height=7.2mm]
+    (prop) at ($(P1)+(15.0,10.0)$) {$s^{p}$};
+  \node[pill=dataedge, fill=white, minimum width=29mm, minimum height=7.2mm]
+    (lang) at ($(P1)+(41.6,10.0)$) {$\ell$: pick up the kettle};
+  \node[lab, font=\footnotesize, text=muted] at ($(P1)+(0.5*\pw,4.0)$)
+    {house0, same timestep};
+
+  % ========== 2. Frozen VLA + RL token ==========
+  \coordinate (P2) at ({\pw+\gap},0);
+  \fill[vlafill, rounded corners=2.2mm] (P2) rectangle ++(\pw,\ph);
+  \draw[vlaedge, panel] (P2) rectangle ++(\pw,\ph);
+  \node[paneltitle] at ($(P2)+(0.5*\pw,\ph-2.0)$) {Frozen VLA $+$ RL token};
+
+  \begin{scope}
+    \clip[rounded corners=1.2mm] ($(P2)+(3.8,60.2)$) rectangle ++(49.8,9.4);
+    \fill[white] ($(P2)+(3.8,60.2)$) rectangle ++(49.8,9.4);
+    \fill[hatchfr] ($(P2)+(3.8,60.2)$) rectangle ++(49.8,9.4);
+  \end{scope}
+  \node[card=vlaedge, fill=none, minimum width=49.8mm, minimum height=9.4mm, align=center]
+    (molmo) at ($(P2)+(0.5*\pw,64.9)$)
+    {\textbf{MolmoAct2}  {\footnotesize(frozen)}\\[-0.15mm]
+     {\footnotesize VLM $+$ flow action expert}};
+
+  \node[font=\footnotesize, text=muted] at ($(P2)+(0.5*\pw,56.6)$)
+    {last-layer tokens $\mathbf{z}_{1:M}$};
+  \foreach \i/\lab in {0/$z_1$, 1/$z_2$, 2/$z_3$, 3/$\cdots$, 4/$z_M$} {
+    \node[pill=obsblue, fill=obsfill, minimum width=8.0mm, minimum height=6.2mm]
+      (tok\i) at ($(P2)+(10.4+8.8*\i,50.6)$) {\lab};
+  }
+  % token collector bar (does not share the expert pipe)
+  \draw[tokpipe, -] (tok0.south) -- ++(0,-2.4) coordinate (tbarL);
+  \draw[tokpipe, -] (tok4.south) -- ++(0,-2.4) coordinate (tbarR);
+  \draw[tokpipe, -] (tbarL) -- (tbarR);
+  \draw[tokpipe] ($(tbarL)!0.35!(tbarR)$) -- ++(0,-3.2);
+
+  \begin{scope}
+    \clip[rounded corners=1.1mm] ($(P2)+(5.6,32.6)$) rectangle ++(22.4,7.4);
+    \fill[white] ($(P2)+(5.6,32.6)$) rectangle ++(22.4,7.4);
+    \fill[hatchfr] ($(P2)+(5.6,32.6)$) rectangle ++(22.4,7.4);
+  \end{scope}
+  \node[card=rlorange, fill=none, minimum width=22.4mm, minimum height=7.4mm]
+    (enc) at ($(P2)+(16.8,36.3)$) {$g_{\phi}$ (then freeze)};
+  \node[pill=rlorange, fill=rltoken, minimum width=26mm, minimum height=8.2mm]
+    (zrl) at ($(P2)+(16.8,24.4)$) {$\zrl\in\mathbb{R}^{256}$};
+  \draw[tokpipe] ($(tbarL)!0.35!(tbarR)+(0,-3.2)$) -- (enc.north);
+  \draw[tokpipe] (enc) -- (zrl);
+
+  \node[pill=vlagreen, fill=vgfill, minimum width=24mm, minimum height=8.2mm]
+    (aref) at ($(P2)+(43.2,30.6)$) {$\atil_{1:C}\sim\pihat$};
+  % expert pipe goes RIGHT of the token row, never through it
+  \draw[actpipe]
+    (molmo.east) -- ++(2.6,0) |- (aref.east);
+
+  \node[eq] at ($(P2)+(0.5*\pw,14.2)$)
+    {$\zrl=g_{\phi}([\mathbf{z}_{1:M},e_{\mathrm{rl}}])_{M+1}$};
+  \node[font=\footnotesize, text=muted] at ($(P2)+(0.5*\pw,7.6)$)
+    {solid orange: tokens \quad dashed green: $\pihat$};
+
+  % ========== 3. CFGRL extractor ==========
+  \coordinate (P3) at ({2*(\pw+\gap)},0);
+  \fill[rlfill, rounded corners=2.2mm] (P3) rectangle ++(\pw,\ph);
+  \draw[rledge, panel] (P3) rectangle ++(\pw,\ph);
+  \node[paneltitle] at ($(P3)+(0.5*\pw,\ph-2.0)$) {CFGRL extractor};
+
+  \node[card=rledge, fill=white, minimum width=49.5mm, minimum height=8.0mm]
+    (state) at ($(P3)+(0.5*\pw,64.6)$)
+    {RL state $x=(\zrl,\,s^{p})$};
+
+  \node[card=rledge, fill=white, minimum width=23.4mm, minimum height=16.0mm, align=center]
+    (critic) at ($(P3)+(15.3,48.8)$)
+    {\textbf{critic} $\Qpsi$\\[0.3mm]
+     {\footnotesize ensemble, chunk TD}};
+  \node[card=actedge, fill=actfill, minimum width=23.4mm, minimum height=16.0mm, align=center]
+    (actor) at ($(P3)+(41.9,48.8)$)
+    {\textbf{flow} $\vth$\\[0.3mm]
+     {\footnotesize $\vth(x,a_{t},t,o)$}\\[-0.05mm]
+     {\footnotesize $o\in\{\varnothing,1\}$}};
+
+  \draw[flow] (state.south) -- ++(0,-1.6) -| (critic.north);
+  \draw[flow] (state.south) -- ++(0,-1.6) -| (actor.north);
+
+  \node[card=rledge, fill=white, minimum width=44.5mm, minimum height=13.2mm, align=center]
+    (adv) at ($(P3)+(0.5*\pw+3.2,31.0)$)
+    {$A(x,a)=\Qpsi(x,a)-\Qpsi(x,\atil)$\\[0.5mm]
+     {\footnotesize $o{=}1$ if $A\ge 0$ or success; else $\varnothing$}};
+  \node[pill=vlagreen, fill=vgfill, minimum width=8.8mm, minimum height=7.2mm, left=1.4mm of adv]
+    (aport) {$\atil$};
+
+  \node[card=actedge, fill=white, minimum width=49.5mm, minimum height=14.4mm, align=center]
+    (sample) at ($(P3)+(0.5*\pw,13.4)$)
+    {$v=(1-w)\,\vth(\cdot,\varnothing)+w\,\vth(\cdot,o{=}1)$\\[0.7mm]
+     $\pi\propto\pihat\,p(o{=}1\mid x,a)^{w}$\\[0.4mm]
+     {\footnotesize $w{=}0$ then $0.5$}};
+
+  % Cross-panel pipes
+  \draw[obspipe, line width=0.9pt] ($(P1)+(\pw,64.9)$) -- ($(P2)+(0,64.9)$);
+  \draw[obspipe, line width=0.7pt]
+    ($(P1)+(\pw,10.0)$) -- ++(1.5,0) |- ($(P2)+(0,64.9)$);
+  \draw[tokpipe, line width=0.9pt] ($(P2)+(\pw,24.4)$) -- ($(P3)+(0,64.6)$);
+  \draw[actpipe, line width=0.9pt] (aref.east) -- ($(P2)+(\pw,30.6)$) -- (aport.west);
+\end{tikzpicture}
