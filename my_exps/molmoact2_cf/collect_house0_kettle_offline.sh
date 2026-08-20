@@ -12,11 +12,10 @@ B1K_TMP="${B1K_TMP:-${B1K_ROOT}/tmp}"
 OUT_DIR="${OUT_DIR:-${ROOT}/runs/rlt_pretrain_house0_kettle}"
 LOCAL_LOG="${LOCAL_LOG_DIR:-${B1K_TMP}/rlt_pretrain_house0_kettle_collect_logs}"
 BENCHMARK_ROOT="${BENCHMARK_ROOT:-${ROOT}/runs/benchmarks/house0_kettle_v13}"
-# Any residual ckpt works for collect; z is re-encoded after kettle AE warmup.
-INIT_CKPT="${INIT_CKPT:-${ROOT}/runs/rlt_pretrain_demo1k_z256_d512_l4/rlt_cf_pretrain_demo1k_z256_d512_l4.pt}"
-if [[ ! -f "${INIT_CKPT}" ]]; then
-  INIT_CKPT="${ROOT}/runs/rlt_pretrain_demo1k/rlt_cf_pretrain_demo1k.pt"
-fi
+# V20: collect with a FRESH random-init scaffold (identity norm stats) — no
+# previously trained artifact is reused. The scaffold only drives token export;
+# its token AE is warmed afterwards and every chunk z is re-encoded.
+INIT_CKPT="${INIT_CKPT:-${OUT_DIR}/fresh_scaffold.pt}"
 
 MOLMOACT2="${ROOT}/../../../molmoact2"
 MOLMOSPACES="${ROOT}/../../../molmospaces"
@@ -25,6 +24,8 @@ SERVE_PYTHON="${SERVE_PYTHON:-${MOLMOACT2}/.venv/bin/python}"
 
 NUM_SHARDS="${NUM_SHARDS:-8}"
 EPISODES_PER_SHARD="${EPISODES_PER_SHARD:-150}"
+# Match V20 online: every shard rolls the same benchmark episode (pose 0).
+BENCHMARK_EPISODE_IDX="${BENCHMARK_EPISODE_IDX:-0}"
 BASE_PORT="${BASE_PORT:-8740}"
 SERVER_WAIT_ATTEMPTS="${SERVER_WAIT_ATTEMPTS:-240}"
 RLT_EGL_LOCK_DIR="${RLT_EGL_LOCK_DIR:-${B1K_TMP}/rlt_egl_locks_v17_collect}"
@@ -34,11 +35,11 @@ mkdir -p "${OUT_DIR}/pids" "${LOCAL_LOG}" "${RLT_EGL_LOCK_DIR}" "${TMP_ROLLOUT_D
 ln -sfn "${LOCAL_LOG}" "${OUT_DIR}/logs"
 
 exec > >(tee -a "${LOCAL_LOG}/collect_launcher.log") 2>&1
-echo "[v17-collect $(date -Is)] out=${OUT_DIR} eps/shard=${EPISODES_PER_SHARD} shards=${NUM_SHARDS}"
+echo "[v17-collect $(date -Is)] out=${OUT_DIR} eps/shard=${EPISODES_PER_SHARD} shards=${NUM_SHARDS} episode_idx=${BENCHMARK_EPISODE_IDX}"
 
 if [[ ! -f "${INIT_CKPT}" ]]; then
-  echo "missing init ckpt: ${INIT_CKPT}" >&2
-  exit 1
+  echo "[v17-collect] building fresh scaffold ${INIT_CKPT}"
+  "${PYTHON}" -u "${ROOT}/make_fresh_scaffold.py" --out_ckpt "${INIT_CKPT}"
 fi
 if [[ ! -x "${PYTHON}" || ! -x "${SERVE_PYTHON}" ]]; then
   echo "python missing" >&2
@@ -133,7 +134,10 @@ for ((shard=0; shard<NUM_SHARDS; shard++)); do
         --config_name "house0_kettle_collect_s${shard}" \
         --rlt_ckpt "${INIT_CKPT}" \
         --benchmark_dir "${BENCHMARK_ROOT}/train" \
-        --benchmark_pose_cycle 24 \
+        --benchmark_episode_idx "${BENCHMARK_EPISODE_IDX}" \
+        --start_episode 0 \
+        --shard_size 1 \
+        --benchmark_pose_cycle 1 \
         --out_dir "${shard_dir}" \
         --replay_out "${shard_dir}/chunk_replay.npz" \
         --export_offline_tokens \

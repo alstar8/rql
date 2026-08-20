@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import random
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,10 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from models import FEATURE_DIM, MolmoAct2CF  # noqa: E402
+from molmo_ae_backend import (  # noqa: E402
+    apply_ae_lora_to_model,
+    load_ae_trainable_state,
+)
 from rlt_models import MolmoAct2RLTCF  # noqa: E402
 
 json_numpy.patch()
@@ -119,11 +125,13 @@ class CFPolicy:
         return_features: bool = True,
         feature_mode: str = "mean_pool",
         rlt_ckpt: str | None = None,
+        ae_trainable_ckpt: str | None = None,
     ) -> None:
         self.enable_g = enable_g and cf_ckpt is not None
         self.delta_clip = action_clip
         self.return_features = return_features
         self.feature_mode = str(feature_mode)
+        self.ae_trainable_ckpt = ae_trainable_ckpt
         local_dir = snapshot_download(repo_id=repo_id)
         log.info("Resolved snapshot dir: %s", local_dir)
         _patch_modeling_for_bf16(local_dir)
@@ -153,6 +161,9 @@ class CFPolicy:
 
         self.model._move_inputs_to_device = _move_and_cast
         self._lock = threading.Lock()
+        # Capture the modeling module now: after an optional PEFT wrap (AE LoRA
+        # checkpoint) self.model.__class__ would resolve to peft, not modeling_*.
+        self._modeling_module = sys.modules[self.model.__class__.__module__]
 
         self.cf: MolmoAct2CF | None = None
         self.rlt: MolmoAct2RLTCF | None = None
@@ -161,12 +172,43 @@ class CFPolicy:
         self.last_token_features: np.ndarray | None = None
         self.last_token_mask: np.ndarray | None = None
         self.last_z_rl: np.ndarray | None = None
+        self.last_source_seed: int | None = None
         if cf_ckpt:
             self.cf = MolmoAct2CF.load(cf_ckpt, map_location=device).to(device).eval()
             log.info("Loaded CF ckpt %s enable_g=%s", cf_ckpt, self.enable_g)
         if rlt_ckpt:
             self.rlt = MolmoAct2RLTCF.load(rlt_ckpt, map_location=device).to(device).eval()
             log.info("Loaded RLT ckpt %s feature_mode=%s", rlt_ckpt, self.feature_mode)
+        if ae_trainable_ckpt:
+            self._load_ae_trainable(ae_trainable_ckpt)
+
+    def _load_ae_trainable(self, path: str) -> None:
+        """Load offline-updated AE trainable (LoRA) weights into the served AE.
+
+        The checkpoint stores PEFT LoRA tensors, so the served model must be
+        wrapped with the same AE-scoped LoRA configuration before loading;
+        loading them into the raw model fails on unexpected keys.
+        """
+        blob = torch.load(path, map_location="cpu", weights_only=False)
+        meta = dict(blob.get("meta") or {}) if isinstance(blob, dict) else {}
+        lora = dict(meta.get("lora_config") or {})
+        target_dtype = next(self.model.parameters()).dtype
+        self.model = apply_ae_lora_to_model(
+            self.model,
+            device=torch.device(self.device),
+            dtype=target_dtype,
+            rank=int(lora.get("lora_rank", 16)),
+            alpha=int(lora.get("lora_alpha", 32)),
+            dropout=float(lora.get("lora_dropout", 0.05)),
+        )
+        # Serving is inference-only: freeze the fresh adapters and restore eval.
+        for parameter in self.model.parameters():
+            parameter.requires_grad_(False)
+        self.model.eval()
+        load_ae_trainable_state(
+            self.model, path, device=torch.device(self.device)
+        )
+        log.info("Loaded AE trainable ckpt %s with LoRA config %s", path, lora)
 
     def _extract_pooled_features(
         self,
@@ -186,8 +228,8 @@ class CFPolicy:
             stats.normalize_state(state_f32, norm_tag), dtype=np.float32
         )
         num_state_tokens = int(self.model.config.num_state_tokens or 0)
-        # Import helpers from the loaded modeling module.
-        modeling = sys.modules[self.model.__class__.__module__]
+        # Import helpers from the loaded modeling module (captured pre-PEFT).
+        modeling = self._modeling_module
         discrete_state_string = modeling._build_discrete_state_string(
             normalized_state, num_state_tokens
         )
@@ -237,6 +279,7 @@ class CFPolicy:
         instruction: str,
         state: np.ndarray,
         num_steps: int = DEFAULT_NUM_STEPS,
+        source_seed: int | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         ext_pil = _to_pil(external_cam)
         wri_pil = _to_pil(wrist_cam)
@@ -269,25 +312,58 @@ class CFPolicy:
 
         # Prefer hooking the inner VLM so we reuse the action-generation prefill
         # instead of a second full forward (4×/GPU was OOMing with dual forward).
+        # Unwrap PEFT first: PeftModel.model is the outer base, not the VLM.
         hook_handles = []
-        target = getattr(self.model, "model", None)
+        base_model = self.model
+        get_base = getattr(self.model, "get_base_model", None)
+        if callable(get_base):
+            base_model = get_base()
+        target = getattr(base_model, "model", None)
         if self.return_features and target is not None:
             hook_handles.append(target.register_forward_hook(_capture_hidden, with_kwargs=True))
 
         with self._lock:
             try:
-                out = self.model.predict_action(
-                    processor=self.processor,
-                    images=[ext_pil, wri_pil],
-                    task=instruction,
-                    state=state_f32,
-                    norm_tag=NORM_TAG,
-                    inference_action_mode="continuous",
-                    enable_depth_reasoning=False,
-                    num_steps=num_steps,
-                    normalize_language=True,
-                    enable_cuda_graph=False,
+                model_device = torch.device(self.device)
+                fork_devices = (
+                    [
+                        model_device.index
+                        if model_device.index is not None
+                        else torch.cuda.current_device()
+                    ]
+                    if model_device.type == "cuda"
+                    else []
                 )
+                rng_context = (
+                    torch.random.fork_rng(devices=fork_devices)
+                    if source_seed is not None
+                    else nullcontext()
+                )
+                python_state = random.getstate()
+                numpy_state = np.random.get_state()
+                try:
+                    with rng_context:
+                        if source_seed is not None:
+                            random.seed(int(source_seed))
+                            np.random.seed(int(source_seed) & 0xFFFFFFFF)
+                            torch.manual_seed(int(source_seed))
+                            if fork_devices:
+                                torch.cuda.manual_seed(int(source_seed))
+                        out = self.model.predict_action(
+                            processor=self.processor,
+                            images=[ext_pil, wri_pil],
+                            task=instruction,
+                            state=state_f32,
+                            norm_tag=NORM_TAG,
+                            inference_action_mode="continuous",
+                            enable_depth_reasoning=False,
+                            num_steps=num_steps,
+                            normalize_language=True,
+                            enable_cuda_graph=False,
+                        )
+                finally:
+                    random.setstate(python_state)
+                    np.random.set_state(numpy_state)
             finally:
                 for h in hook_handles:
                     h.remove()
@@ -338,6 +414,9 @@ class CFPolicy:
             raise ValueError(f"unexpected action shape {actions.shape}")
 
         self.last_residual_rms = 0.0
+        self.last_source_seed = (
+            None if source_seed is None else int(source_seed)
+        )
         self.last_features = features
         self.last_token_features = token_features
         self.last_token_mask = token_mask
@@ -407,6 +486,11 @@ def build_app(policy: CFPolicy) -> FastAPI:
             return Response(content=body, status_code=400, media_type="application/json")
 
         num_steps = int(payload.get("num_steps", DEFAULT_NUM_STEPS))
+        source_seed = (
+            None
+            if payload.get("source_seed") is None
+            else int(payload["source_seed"])
+        )
         t0 = time.perf_counter()
         try:
             actions, features = policy.predict(
@@ -415,6 +499,7 @@ def build_app(policy: CFPolicy) -> FastAPI:
                 instruction=instruction,
                 state=state,
                 num_steps=num_steps,
+                source_seed=source_seed,
             )
         except Exception as e:  # noqa: BLE001
             log.exception("inference failed")
@@ -437,6 +522,8 @@ def build_app(policy: CFPolicy) -> FastAPI:
             "residual_rms": policy.last_residual_rms,
             "enable_g": policy.enable_g,
         }
+        if policy.last_source_seed is not None:
+            payload_out["source_seed"] = int(policy.last_source_seed)
         if policy.last_token_features is not None:
             payload_out["token_features"] = policy.last_token_features
             payload_out["token_attention_mask"] = policy.last_token_mask
@@ -476,6 +563,7 @@ def main() -> None:
         help="mean_pool (v3), tokens (raw sequence), rl_token (requires --rlt_ckpt), both",
     )
     p.add_argument("--rlt_ckpt", type=str, default=None)
+    p.add_argument("--ae_trainable_ckpt", type=str, default=None)
     args = p.parse_args()
 
     dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[
@@ -492,6 +580,7 @@ def main() -> None:
         return_features=not bool(args.no_features),
         feature_mode=args.feature_mode,
         rlt_ckpt=args.rlt_ckpt,
+        ae_trainable_ckpt=args.ae_trainable_ckpt,
     )
     dummy = np.zeros((180, 320, 3), dtype=np.uint8)
     try:

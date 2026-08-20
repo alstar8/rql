@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Any
 
 import numpy as np
@@ -14,6 +15,31 @@ from rlt_models import ACTION_DIM, CHUNK_SIZE, FEATURE_DIM, Z_DIM
 
 FULL_ACTION_HORIZON = 15
 PADDED_ACTION_DIM = 32
+
+
+class ReplaySource(IntEnum):
+    """Provenance for one replay trajectory."""
+
+    UNKNOWN = 0
+    OFFLINE_REFERENCE = 1
+    ONLINE_REFERENCE = 2
+    INCUMBENT = 3
+    CHALLENGER = 4
+    EVALUATION = 5
+
+
+def _trajectory_uid(row: Any) -> int:
+    uid = int(getattr(row, "trajectory_uid", -1))
+    return uid if uid >= 0 else int(row.episode_id)
+
+
+def _row_pose_idx(row: Any, pose_cycle: int) -> int:
+    pose_idx = int(getattr(row, "pose_idx", -1))
+    if pose_idx >= 0:
+        return pose_idx
+    if pose_cycle > 0:
+        return int(row.episode_id) % int(pose_cycle)
+    return -1
 
 
 def _json_default(value: Any) -> Any:
@@ -68,7 +94,7 @@ def _outcome_counts(rows: list[Any]) -> tuple[int, int]:
 def _successful_episode_count(rows: list[Any]) -> int:
     return len(
         {
-            int(row.episode_id)
+            _trajectory_uid(row)
             for row in rows
             if float(row.success) > 0.5
         }
@@ -161,7 +187,7 @@ def _episode_balanced_indices(
         raise RuntimeError("empty replay")
     rows_by_episode: dict[int, list[int]] = {}
     for index, row in enumerate(rows):
-        rows_by_episode.setdefault(int(row.episode_id), []).append(index)
+        rows_by_episode.setdefault(_trajectory_uid(row), []).append(index)
 
     episode_ids = np.asarray(list(rows_by_episode), dtype=np.int64)
     episode_order = rng.permutation(episode_ids)
@@ -179,6 +205,126 @@ def _episode_balanced_indices(
                 replace=count > len(pool),
             ).tolist()
         )
+    indices = np.asarray(sampled, dtype=np.int64)
+    rng.shuffle(indices)
+    return indices
+
+
+def _trajectory_temporal_indices(
+    rows: list[Any],
+    candidates: np.ndarray,
+    count: int,
+    rng: np.random.Generator,
+    *,
+    temporal_bins: int = 4,
+) -> list[int]:
+    """Sample trajectories first, then uniformly sample a temporal bin."""
+
+    if count <= 0:
+        return []
+    if len(candidates) == 0:
+        raise RuntimeError("cannot sample from an empty replay stratum")
+    by_trajectory: dict[int, list[int]] = {}
+    for index_value in candidates.tolist():
+        index = int(index_value)
+        by_trajectory.setdefault(_trajectory_uid(rows[index]), []).append(index)
+    for indices in by_trajectory.values():
+        indices.sort(key=lambda value: int(rows[value].start_step))
+    trajectory_ids = np.asarray(list(by_trajectory), dtype=np.int64)
+    sampled: list[int] = []
+    n_bins_requested = max(1, int(temporal_bins))
+    for _ in range(int(count)):
+        trajectory_id = int(rng.choice(trajectory_ids))
+        pool = by_trajectory[trajectory_id]
+        n_bins = min(n_bins_requested, len(pool))
+        bin_idx = int(rng.integers(0, n_bins))
+        start = (bin_idx * len(pool)) // n_bins
+        stop = ((bin_idx + 1) * len(pool)) // n_bins
+        sampled.append(int(pool[int(rng.integers(start, max(start + 1, stop)))]))
+    return sampled
+
+
+def _sample_pose_aware_indices(
+    rows: list[Any],
+    batch_size: int,
+    pos_frac: float,
+    rng: np.random.Generator,
+    *,
+    target_pose_idx: int,
+    target_positive_fraction: float,
+    require_both_outcomes: bool,
+    temporal_bins: int,
+) -> np.ndarray:
+    """Sample outcomes and target-pose positives without chunk-length bias."""
+
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if not rows:
+        raise RuntimeError("empty replay")
+    target_fraction = float(target_positive_fraction)
+    if not 0.0 <= target_fraction <= 1.0:
+        raise ValueError("target_positive_fraction must be in [0, 1]")
+
+    success = np.asarray([float(row.success) > 0.5 for row in rows], dtype=np.bool_)
+    poses = np.asarray(
+        [_row_pose_idx(row, pose_cycle=0) for row in rows],
+        dtype=np.int64,
+    )
+    positive = np.flatnonzero(success)
+    negative = np.flatnonzero(~success)
+    target_positive = np.flatnonzero(success & (poses == int(target_pose_idx)))
+    anchor_positive = np.flatnonzero(success & (poses != int(target_pose_idx)))
+    if require_both_outcomes and (not len(positive) or not len(negative)):
+        raise RuntimeError(
+            "require_both_outcomes needs a replay with both outcomes"
+        )
+    if not len(target_positive):
+        raise RuntimeError(
+            f"no successful trajectories for target pose {int(target_pose_idx)}"
+        )
+
+    positive_count = int(round(int(batch_size) * float(pos_frac)))
+    if require_both_outcomes:
+        if batch_size < 2:
+            raise ValueError(
+                "require_both_outcomes needs batch_size of at least 2"
+            )
+        positive_count = min(max(positive_count, 1), batch_size - 1)
+    else:
+        positive_count = min(max(positive_count, 0), batch_size)
+    negative_count = batch_size - positive_count
+    target_count = int(round(positive_count * target_fraction))
+    target_count = min(max(target_count, 0), positive_count)
+    anchor_count = positive_count - target_count
+    if anchor_count and not len(anchor_positive):
+        target_count = positive_count
+        anchor_count = 0
+
+    sampled = _trajectory_temporal_indices(
+        rows,
+        target_positive,
+        target_count,
+        rng,
+        temporal_bins=temporal_bins,
+    )
+    sampled.extend(
+        _trajectory_temporal_indices(
+            rows,
+            anchor_positive,
+            anchor_count,
+            rng,
+            temporal_bins=temporal_bins,
+        )
+    )
+    sampled.extend(
+        _trajectory_temporal_indices(
+            rows,
+            negative,
+            negative_count,
+            rng,
+            temporal_bins=temporal_bins,
+        )
+    )
     indices = np.asarray(sampled, dtype=np.int64)
     rng.shuffle(indices)
     return indices
@@ -233,9 +379,21 @@ def _pose_outcome_retention_indices(
     capacity: int,
     pos_frac: float,
     pose_cycle: int,
+    pose_indices: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Retain recent rows evenly across outcome and benchmark-pose strata."""
-    if pose_cycle <= 0 or capacity >= len(success):
+    """Retain recent rows evenly across outcome and explicit pose strata."""
+
+    explicit_poses = (
+        None
+        if pose_indices is None
+        else np.asarray(pose_indices, dtype=np.int64)
+    )
+    if explicit_poses is not None and len(explicit_poses) != len(success):
+        raise ValueError("pose_indices and success must have the same length")
+    has_explicit_pose = bool(
+        explicit_poses is not None and np.any(explicit_poses >= 0)
+    )
+    if (pose_cycle <= 0 and not has_explicit_pose) or capacity >= len(success):
         return _outcome_retention_indices(success, capacity, pos_frac)
     outcome_only = _outcome_retention_indices(success, capacity, pos_frac)
     success_mask = np.asarray(success, dtype=np.float32) > 0.5
@@ -249,7 +407,16 @@ def _pose_outcome_retention_indices(
         outcome_indices = np.flatnonzero(success_mask == positive)
         by_pose: dict[int, list[int]] = {}
         for index in outcome_indices.tolist():
-            pose_id = int(episode_array[index]) % int(pose_cycle)
+            explicit = (
+                int(explicit_poses[index])
+                if explicit_poses is not None
+                else -1
+            )
+            pose_id = (
+                explicit
+                if explicit >= 0
+                else int(episode_array[index]) % max(1, int(pose_cycle))
+            )
             by_pose.setdefault(pose_id, []).append(int(index))
         depth = 0
         selected = 0
@@ -309,6 +476,12 @@ class ChunkTransition:
     success: float
     episode_id: int
     start_step: int
+    trajectory_uid: int = -1
+    pose_idx: int = -1
+    source_policy: int = int(ReplaySource.UNKNOWN)
+    worker_id: int = -1
+    round_id: int = -1
+    policy_version: int = -1
 
 
 class ChunkReplay:
@@ -350,6 +523,16 @@ class ChunkReplay:
     def successful_episode_count(self) -> int:
         return _successful_episode_count(self.rows)
 
+    def target_successful_episode_count(self, pose_idx: int) -> int:
+        return len(
+            {
+                _trajectory_uid(row)
+                for row in self.rows
+                if float(row.success) > 0.5
+                and _row_pose_idx(row, self.benchmark_pose_cycle) == int(pose_idx)
+            }
+        )
+
     def storage_nbytes(self) -> int:
         return _storage_nbytes(self.rows)
 
@@ -358,13 +541,52 @@ class ChunkReplay:
             raise ValueError(f"bad reference shape {tr.reference_actions.shape}")
         if tr.executed_actions.shape != (self.chunk_size, self.action_dim):
             raise ValueError(f"bad executed shape {tr.executed_actions.shape}")
+        if int(tr.trajectory_uid) < 0:
+            tr.trajectory_uid = int(tr.episode_id)
+        if int(tr.pose_idx) < 0 and self.benchmark_pose_cycle > 0:
+            tr.pose_idx = int(tr.episode_id) % self.benchmark_pose_cycle
         self.rows.append(tr)
+        self.trim_to_capacity()
+
+    def extend(self, transitions: list[ChunkTransition]) -> None:
+        for transition in transitions:
+            if transition.reference_actions.shape != (
+                self.chunk_size,
+                self.action_dim,
+            ):
+                raise ValueError(
+                    f"bad reference shape {transition.reference_actions.shape}"
+                )
+            if transition.executed_actions.shape != (
+                self.chunk_size,
+                self.action_dim,
+            ):
+                raise ValueError(
+                    f"bad executed shape {transition.executed_actions.shape}"
+                )
+            if int(transition.trajectory_uid) < 0:
+                transition.trajectory_uid = int(transition.episode_id)
+            if (
+                int(transition.pose_idx) < 0
+                and self.benchmark_pose_cycle > 0
+            ):
+                transition.pose_idx = (
+                    int(transition.episode_id) % self.benchmark_pose_cycle
+                )
+        self.rows.extend(transitions)
+        self.trim_to_capacity()
+
+    def trim_to_capacity(self) -> None:
         indices = _pose_outcome_retention_indices(
             np.asarray([row.success for row in self.rows], dtype=np.float32),
             np.asarray([row.episode_id for row in self.rows], dtype=np.int64),
             self.max_transitions,
             self.pos_frac,
             self.benchmark_pose_cycle,
+            pose_indices=np.asarray(
+                [row.pose_idx for row in self.rows],
+                dtype=np.int64,
+            ),
         )
         if len(indices) != len(self.rows):
             self.rows = [self.rows[int(index)] for index in indices]
@@ -380,6 +602,13 @@ class ChunkReplay:
         success: bool,
         gamma: float,
         episode_id: int | None = None,
+        *,
+        trajectory_uid: int | None = None,
+        pose_idx: int | None = None,
+        source_policy: int | ReplaySource = ReplaySource.UNKNOWN,
+        worker_id: int = -1,
+        round_id: int = -1,
+        policy_version: int = -1,
     ) -> int:
         """Add non-overlapping chunk transitions from one episode.
 
@@ -398,6 +627,14 @@ class ChunkReplay:
             raise ValueError("episode chunk list length mismatch")
         if episode_id is None:
             episode_id = self.n_episodes
+        if trajectory_uid is None:
+            trajectory_uid = int(episode_id)
+        if pose_idx is None:
+            pose_idx = (
+                int(episode_id) % self.benchmark_pose_cycle
+                if self.benchmark_pose_cycle > 0
+                else -1
+            )
         self.n_episodes += 1
         # Per-step sparse terminal reward already folded into rewards arrays.
         # MC return for chunk i: discounted remaining success from chunk start.
@@ -434,6 +671,12 @@ class ChunkReplay:
                     success=float(success),
                     episode_id=int(episode_id),
                     start_step=int(step),
+                    trajectory_uid=int(trajectory_uid),
+                    pose_idx=int(pose_idx),
+                    source_policy=int(source_policy),
+                    worker_id=int(worker_id),
+                    round_id=int(round_id),
+                    policy_version=int(policy_version),
                 )
             )
             added += 1
@@ -450,14 +693,40 @@ class ChunkReplay:
         device: torch.device | str = "cpu",
         *,
         require_both_outcomes: bool = False,
+        target_pose_idx: int | None = None,
+        target_positive_fraction: float | None = None,
+        trajectory_first: bool = False,
+        temporal_bins: int = 4,
     ) -> dict[str, torch.Tensor]:
-        indices = _sample_indices(
-            self.rows,
-            batch_size,
-            self.pos_frac,
-            self.rng,
-            require_both_outcomes=require_both_outcomes,
+        pose_aware = (
+            target_pose_idx is not None
+            or target_positive_fraction is not None
+            or trajectory_first
         )
+        if pose_aware:
+            if target_pose_idx is None or target_positive_fraction is None:
+                raise ValueError(
+                    "pose-aware sampling requires target_pose_idx and "
+                    "target_positive_fraction"
+                )
+            indices = _sample_pose_aware_indices(
+                self.rows,
+                batch_size,
+                self.pos_frac,
+                self.rng,
+                target_pose_idx=int(target_pose_idx),
+                target_positive_fraction=float(target_positive_fraction),
+                require_both_outcomes=require_both_outcomes,
+                temporal_bins=int(temporal_bins),
+            )
+        else:
+            indices = _sample_indices(
+                self.rows,
+                batch_size,
+                self.pos_frac,
+                self.rng,
+                require_both_outcomes=require_both_outcomes,
+            )
         batch = [self.rows[int(index)] for index in indices]
         return self._collate(batch, device)
 
@@ -504,6 +773,36 @@ class ChunkReplay:
                 np.asarray([r.episode_id for r in batch], dtype=np.int64),
                 device=device,
             ),
+            "trajectory_uid": torch.as_tensor(
+                np.asarray([_trajectory_uid(r) for r in batch], dtype=np.int64),
+                device=device,
+            ),
+            "pose_idx": torch.as_tensor(
+                np.asarray(
+                    [
+                        _row_pose_idx(r, self.benchmark_pose_cycle)
+                        for r in batch
+                    ],
+                    dtype=np.int64,
+                ),
+                device=device,
+            ),
+            "source_policy": torch.as_tensor(
+                np.asarray([r.source_policy for r in batch], dtype=np.int64),
+                device=device,
+            ),
+            "worker_id": torch.as_tensor(
+                np.asarray([r.worker_id for r in batch], dtype=np.int64),
+                device=device,
+            ),
+            "round_id": torch.as_tensor(
+                np.asarray([r.round_id for r in batch], dtype=np.int64),
+                device=device,
+            ),
+            "policy_version": torch.as_tensor(
+                np.asarray([r.policy_version for r in batch], dtype=np.int64),
+                device=device,
+            ),
             "start_step": torch.as_tensor(
                 np.asarray([r.start_step for r in batch], dtype=np.int64),
                 device=device,
@@ -526,8 +825,36 @@ class ChunkReplay:
             "terminal": np.asarray([r.terminal for r in self.rows], dtype=np.bool_),
             "mc_return": np.asarray([r.mc_return for r in self.rows], dtype=np.float32),
             "success": np.asarray([r.success for r in self.rows], dtype=np.float32),
-            "episode_id": np.asarray([r.episode_id for r in self.rows], dtype=np.int32),
+            "episode_id": np.asarray([r.episode_id for r in self.rows], dtype=np.int64),
+            "trajectory_uid": np.asarray(
+                [_trajectory_uid(r) for r in self.rows],
+                dtype=np.int64,
+            ),
+            "pose_idx": np.asarray(
+                [
+                    _row_pose_idx(r, self.benchmark_pose_cycle)
+                    for r in self.rows
+                ],
+                dtype=np.int32,
+            ),
+            "source_policy": np.asarray(
+                [r.source_policy for r in self.rows],
+                dtype=np.int8,
+            ),
+            "worker_id": np.asarray(
+                [r.worker_id for r in self.rows],
+                dtype=np.int16,
+            ),
+            "round_id": np.asarray(
+                [r.round_id for r in self.rows],
+                dtype=np.int32,
+            ),
+            "policy_version": np.asarray(
+                [r.policy_version for r in self.rows],
+                dtype=np.int32,
+            ),
             "start_step": np.asarray([r.start_step for r in self.rows], dtype=np.int32),
+            "replay_schema_version": np.asarray(2, dtype=np.int64),
             "chunk_size": self.chunk_size,
             "action_dim": self.action_dim,
             "z_dim": self.z_dim,
@@ -582,6 +909,25 @@ class ChunkReplay:
                 **load_kwargs,
             )
             count = len(arrays["z"])
+            episode_ids = np.asarray(arrays["episode_id"], dtype=np.int64)
+            optional_defaults: dict[str, np.ndarray] = {
+                "trajectory_uid": episode_ids,
+                "pose_idx": (
+                    episode_ids % int(buf.benchmark_pose_cycle)
+                    if buf.benchmark_pose_cycle > 0
+                    else np.full(count, -1, dtype=np.int64)
+                ),
+                "source_policy": np.full(
+                    count,
+                    int(ReplaySource.UNKNOWN),
+                    dtype=np.int64,
+                ),
+                "worker_id": np.full(count, -1, dtype=np.int64),
+                "round_id": np.full(count, -1, dtype=np.int64),
+                "policy_version": np.full(count, -1, dtype=np.int64),
+            }
+            for key, default in optional_defaults.items():
+                arrays[key] = data[key] if key in data else default
             for key, values in arrays.items():
                 if len(values) != count:
                     raise ValueError(
@@ -596,6 +942,7 @@ class ChunkReplay:
                 buf.max_transitions,
                 buf.pos_frac,
                 buf.benchmark_pose_cycle,
+                pose_indices=arrays["pose_idx"],
             )
             copy_rows = len(indices) < count
 
@@ -624,6 +971,12 @@ class ChunkReplay:
                         success=float(arrays["success"][index]),
                         episode_id=int(arrays["episode_id"][index]),
                         start_step=int(arrays["start_step"][index]),
+                        trajectory_uid=int(arrays["trajectory_uid"][index]),
+                        pose_idx=int(arrays["pose_idx"][index]),
+                        source_policy=int(arrays["source_policy"][index]),
+                        worker_id=int(arrays["worker_id"][index]),
+                        round_id=int(arrays["round_id"][index]),
+                        policy_version=int(arrays["policy_version"][index]),
                     )
                 )
             buf.n_episodes = (

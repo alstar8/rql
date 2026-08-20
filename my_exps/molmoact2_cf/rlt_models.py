@@ -22,7 +22,7 @@ from models import (
 CHUNK_SIZE = 8
 ACTION_DIM = 8
 STATE_DIM = Z_DIM + PROPRIO_DIM  # 264
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 CF_MODE_RESIDUAL = "residual"
 CF_MODE_FLOW = "flow"
 DEFAULT_FLOW_STEPS = 10
@@ -40,6 +40,9 @@ CFGRL_O_CLASSES = 3
 DEFAULT_CFGRL_O_DIM = 16
 DEFAULT_CFGRL_W = 1.0
 DEFAULT_CFGRL_DROPOUT = 0.1
+DEFAULT_N_HIDDEN_ACTOR = 3
+DEFAULT_N_HIDDEN_CRITIC = 2
+DEFAULT_Z_EXPAND_DIM = 0
 
 
 def lower_tail_mean(
@@ -307,11 +310,19 @@ class TimeCriticHead(nn.Module):
         hidden: int = 256,
         time_dim: int = 64,
         bounded: bool = True,
+        n_hidden: int = DEFAULT_N_HIDDEN_CRITIC,
+        layernorm: bool = False,
     ) -> None:
         super().__init__()
         self.bounded = bool(bounded)
         self.time_dim = int(time_dim)
-        self.net = mlp(state_dim + action_dim + time_dim, 1, hidden, n_hidden=2)
+        self.net = mlp(
+            state_dim + action_dim + time_dim,
+            1,
+            hidden,
+            n_hidden=int(n_hidden),
+            layernorm=bool(layernorm),
+        )
 
     def forward(self, state: torch.Tensor, actions: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         flat = actions.reshape(actions.shape[0], -1)
@@ -333,13 +344,23 @@ class EnsembleTimeCQL(nn.Module):
         hidden: int = 256,
         time_dim: int = 64,
         bounded: bool = True,
+        n_hidden: int = DEFAULT_N_HIDDEN_CRITIC,
+        layernorm: bool = False,
     ) -> None:
         super().__init__()
         self.action_dim = int(action_dim)
         self.bounded = bool(bounded)
         self.critics = nn.ModuleList(
             [
-                TimeCriticHead(state_dim, action_dim, hidden, time_dim, bounded=bounded)
+                TimeCriticHead(
+                    state_dim,
+                    action_dim,
+                    hidden,
+                    time_dim,
+                    bounded=bounded,
+                    n_hidden=n_hidden,
+                    layernorm=layernorm,
+                )
                 for _ in range(n_critics)
             ]
         )
@@ -398,6 +419,43 @@ class EnsembleTimeCQL(nn.Module):
         }
 
 
+class RLTZExpander(nn.Module):
+    """Keep pretrained z and append a learned extra embedding.
+
+    Online replay stores frozen-token z (256-d). The expander concatenates z
+    with a zero-init tail so actor/critic still see the pretrained code at
+    step 0, then grow capacity as the extra MLP trains.
+    """
+
+    def __init__(self, z_dim: int, out_dim: int) -> None:
+        super().__init__()
+        self.z_dim = int(z_dim)
+        self.out_dim = int(out_dim)
+        if self.out_dim < self.z_dim:
+            raise ValueError(
+                f"z_expand_dim ({self.out_dim}) must be >= z_dim ({self.z_dim})"
+            )
+        extra = self.out_dim - self.z_dim
+        if extra == 0:
+            self.extra: nn.Module | None = None
+            return
+        self.extra = nn.Sequential(
+            nn.Linear(self.z_dim, extra),
+            nn.LayerNorm(extra),
+            nn.GELU(),
+            nn.Linear(extra, extra),
+            nn.LayerNorm(extra),
+        )
+        last_linear = self.extra[3]
+        nn.init.zeros_(last_linear.weight)
+        nn.init.zeros_(last_linear.bias)
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        if self.extra is None:
+            return z
+        return torch.cat([z, self.extra(z)], dim=-1)
+
+
 class FlowVelocityActor(nn.Module):
     """VLA-conditioned flow velocity: v_θ(s, x_t, t, a_VLA[, o])."""
 
@@ -409,6 +467,8 @@ class FlowVelocityActor(nn.Module):
         hidden: int = 256,
         time_dim: int = 64,
         o_dim: int = 0,
+        n_hidden: int = DEFAULT_N_HIDDEN_ACTOR,
+        layernorm: bool = False,
     ) -> None:
         super().__init__()
         self.action_dim = int(action_dim)
@@ -424,8 +484,9 @@ class FlowVelocityActor(nn.Module):
             state_dim + 2 * self.flat_action + time_dim + self.o_dim,
             self.flat_action,
             hidden,
-            n_hidden=3,
+            n_hidden=int(n_hidden),
             zero_out=False,
+            layernorm=bool(layernorm),
         )
 
     def forward(
@@ -457,21 +518,26 @@ class FlowVelocityActor(nn.Module):
         v = self.net(torch.cat(pieces, dim=-1))
         return v.reshape(b, self.chunk_size, self.action_dim)
 
-    def copy_pretrained_into_o_actor(self, source: "FlowVelocityActor") -> None:
-        """Keep a pretrained flow net; zero-init extra o columns so v(·,o) starts as v_pre."""
+    def copy_pretrained_into_o_actor(self, source: "FlowVelocityActor") -> bool:
+        """Keep a pretrained flow net; zero-init extra o columns so v(·,o) starts as v_pre.
+
+        Returns True when the first-layer copy actually ran; False when the
+        source architecture is incompatible (caller must decide whether that
+        is acceptable).
+        """
         if self.o_embed is not None:
             nn.init.zeros_(self.o_embed.weight)
         src_first = source.net[0]
         dst_first = self.net[0]
         if not isinstance(src_first, nn.Linear) or not isinstance(dst_first, nn.Linear):
-            return
+            return False
         old_in = int(src_first.weight.shape[1])
         new_in = int(dst_first.weight.shape[1])
         if (
             src_first.weight.shape[0] != dst_first.weight.shape[0]
             or new_in < old_in
         ):
-            return
+            return False
         with torch.no_grad():
             dst_first.weight[:, :old_in].copy_(src_first.weight)
             if new_in > old_in:
@@ -485,6 +551,7 @@ class FlowVelocityActor(nn.Module):
                 if key in dst_sd and dst_sd[key].shape == value.shape:
                     dst_sd[key].copy_(value)
             self.net.load_state_dict(dst_sd)
+        return True
 
 
 class FlowCFGuide(nn.Module):
@@ -674,6 +741,10 @@ class MolmoAct2RLTCF(nn.Module):
         use_cfgrl: bool = False,
         cfgrl_o_dim: int = DEFAULT_CFGRL_O_DIM,
         cfgrl_w: float = DEFAULT_CFGRL_W,
+        n_hidden_actor: int = DEFAULT_N_HIDDEN_ACTOR,
+        n_hidden_critic: int = DEFAULT_N_HIDDEN_CRITIC,
+        z_expand_dim: int = DEFAULT_Z_EXPAND_DIM,
+        layernorm_heads: bool = False,
     ) -> None:
         super().__init__()
         mode = str(cf_mode).lower().strip()
@@ -707,6 +778,12 @@ class MolmoAct2RLTCF(nn.Module):
         self.use_cfgrl = bool(use_cfgrl)
         self.cfgrl_o_dim = int(cfgrl_o_dim) if self.use_cfgrl else 0
         self.cfgrl_w = float(cfgrl_w)
+        self.n_hidden_actor = int(n_hidden_actor)
+        self.n_hidden_critic = int(n_hidden_critic)
+        self.z_expand_dim = int(z_expand_dim) if int(z_expand_dim) > 0 else 0
+        self.layernorm_heads = bool(layernorm_heads)
+        if self.n_hidden_actor < 1 or self.n_hidden_critic < 1:
+            raise ValueError("n_hidden_actor and n_hidden_critic must be >= 1")
         if not 0.0 < self.q_tail_fraction <= 1.0:
             raise ValueError("q_tail_fraction must be in (0, 1]")
         if self.q_tail_min_heads < 1:
@@ -714,6 +791,11 @@ class MolmoAct2RLTCF(nn.Module):
         self.loaded_meta: dict[str, Any] = {}
         # "rlt" = FlowVelocityActor; "molmo_ae" = MolmoAct2 Action Expert (V11_1).
         self.v_source = "rlt"
+        if self.z_expand_dim > 0:
+            self.z_expand: nn.Module | None = RLTZExpander(self.z_dim, self.z_expand_dim)
+            self.state_dim = self.z_expand_dim + self.proprio_dim
+        else:
+            self.z_expand = None
 
         self.token_ae = RLTokenAutoencoder(
             token_dim=self.feature_dim,
@@ -742,6 +824,8 @@ class MolmoAct2RLTCF(nn.Module):
                 hidden=hidden,
                 time_dim=time_dim,
                 o_dim=self.cfgrl_o_dim,
+                n_hidden=self.n_hidden_actor,
+                layernorm=self.layernorm_heads,
             )
             self.critic = EnsembleTimeCQL(
                 self.state_dim,
@@ -750,6 +834,8 @@ class MolmoAct2RLTCF(nn.Module):
                 hidden=hidden,
                 time_dim=time_dim,
                 bounded=self.bounded_critic,
+                n_hidden=self.n_hidden_critic,
+                layernorm=self.layernorm_heads,
             )
             self.target_critic = EnsembleTimeCQL(
                 self.state_dim,
@@ -758,6 +844,8 @@ class MolmoAct2RLTCF(nn.Module):
                 hidden=hidden,
                 time_dim=time_dim,
                 bounded=self.bounded_critic,
+                n_hidden=self.n_hidden_critic,
+                layernorm=self.layernorm_heads,
             )
             self.guide = (
                 FlowCFGuide(
@@ -862,6 +950,8 @@ class MolmoAct2RLTCF(nn.Module):
         return z.detach() if detach else z
 
     def encode_state_from_z(self, z: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
+        if self.z_expand is not None:
+            z = self.z_expand(z)
         return torch.cat([z, self.normalize_proprio(proprio)], dim=-1)
 
     def encode_state(
@@ -876,10 +966,19 @@ class MolmoAct2RLTCF(nn.Module):
         z = self.encode_z(tokens, attention_mask, use_target=use_target, detach=detach_token)
         return self.encode_state_from_z(z, proprio)
 
+    def rlt_adapter_parameters(self) -> list[nn.Parameter]:
+        """Trainable z expander; kept unfrozen when the token AE is frozen."""
+
+        if self.z_expand is None:
+            return []
+        return list(self.z_expand.parameters())
+
     def freeze_token_encoder(self) -> None:
         for p in self.token_ae.parameters():
             p.requires_grad_(False)
         self.tune_token_online = False
+        for p in self.rlt_adapter_parameters():
+            p.requires_grad_(True)
 
     def unfreeze_token_encoder(self) -> None:
         for p in self.token_ae.parameters():
@@ -913,13 +1012,14 @@ class MolmoAct2RLTCF(nn.Module):
         apply_guide: bool = False,
         n_steps: int | None = None,
         x0: torch.Tensor | None = None,
+        flow_noise_seed: int | None = None,
         cfg_w: float | None = None,
         o_cond: int = CFGRL_O_POS,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Euler integrate dx/dt = v_θ(+G) from noise to action chunk.
 
-        When ``use_cfgrl`` is set, compose uncond and o=1 velocities:
-        v = (1-w) v(∅) + w v(o=1). Guide is not used on the CFGRL arm.
+        When ``use_cfgrl`` is set, compose uncond and o=POS velocities:
+        v = (1-w) v(∅) + w v(o=POS). Guide is not used on the CFGRL arm.
         """
         if not self.is_flow:
             raise RuntimeError("flow_sample requires cf_mode=flow")
@@ -927,7 +1027,19 @@ class MolmoAct2RLTCF(nn.Module):
         ref = reference_n.detach()
         steps = int(n_steps or self.flow_steps)
         b = s.shape[0]
-        x = torch.randn_like(ref) if x0 is None else x0
+        if x0 is not None and flow_noise_seed is not None:
+            raise ValueError("pass either x0 or flow_noise_seed, not both")
+        if x0 is None and flow_noise_seed is not None:
+            generator = torch.Generator(device=ref.device)
+            generator.manual_seed(int(flow_noise_seed) & ((1 << 63) - 1))
+            x = torch.randn(
+                ref.shape,
+                dtype=ref.dtype,
+                device=ref.device,
+                generator=generator,
+            )
+        else:
+            x = torch.randn_like(ref) if x0 is None else x0
         dt = 1.0 / float(steps)
         guide_norm = s.new_zeros(())
         weight = float(self.cfgrl_w if cfg_w is None else cfg_w)
@@ -962,6 +1074,7 @@ class MolmoAct2RLTCF(nn.Module):
         deterministic: bool = True,
         apply_guide: bool = False,
         reference_present: torch.Tensor | None = None,
+        flow_noise_seed: int | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         # Actor/guide see stop-grad state so token updates come only from recon/critic.
         s = state.detach()
@@ -971,7 +1084,12 @@ class MolmoAct2RLTCF(nn.Module):
             if reference_present is not None:
                 present = reference_present.reshape(-1, 1, 1).to(dtype=ref.dtype)
                 ref = ref * present
-            return self.flow_sample(s, ref, apply_guide=apply_guide)
+            return self.flow_sample(
+                s,
+                ref,
+                apply_guide=apply_guide,
+                flow_noise_seed=flow_noise_seed,
+            )
 
         sample, mean = self.actor.sample(
             s, reference_n, reference_present=reference_present, deterministic=deterministic
@@ -1108,6 +1226,10 @@ class MolmoAct2RLTCF(nn.Module):
             "use_cfgrl": self.use_cfgrl,
             "cfgrl_o_dim": self.cfgrl_o_dim,
             "cfgrl_w": self.cfgrl_w,
+            "n_hidden_actor": self.n_hidden_actor,
+            "n_hidden_critic": self.n_hidden_critic,
+            "z_expand_dim": self.z_expand_dim,
+            "layernorm_heads": self.layernorm_heads,
             "meta": meta or {},
         }
         torch.save(payload, path)
@@ -1144,6 +1266,10 @@ class MolmoAct2RLTCF(nn.Module):
             use_cfgrl=bool(payload.get("use_cfgrl", False)),
             cfgrl_o_dim=int(payload.get("cfgrl_o_dim", DEFAULT_CFGRL_O_DIM)),
             cfgrl_w=float(payload.get("cfgrl_w", DEFAULT_CFGRL_W)),
+            n_hidden_actor=int(payload.get("n_hidden_actor", DEFAULT_N_HIDDEN_ACTOR)),
+            n_hidden_critic=int(payload.get("n_hidden_critic", DEFAULT_N_HIDDEN_CRITIC)),
+            z_expand_dim=int(payload.get("z_expand_dim", DEFAULT_Z_EXPAND_DIM)),
+            layernorm_heads=bool(payload.get("layernorm_heads", False)),
         )
         src = payload["state_dict"]
         dst = model.state_dict()
@@ -1161,11 +1287,38 @@ class MolmoAct2RLTCF(nn.Module):
         *,
         cfgrl_w: float = DEFAULT_CFGRL_W,
         o_dim: int = DEFAULT_CFGRL_O_DIM,
+        hidden: int | None = None,
+        n_hidden_actor: int | None = None,
+        n_hidden_critic: int | None = None,
+        z_expand_dim: int | None = None,
+        layernorm_heads: bool | None = None,
+        require_transfer: bool = True,
     ) -> "MolmoAct2RLTCF":
-        """Upgrade a flow model to CFGRL (fresh o-conditioned actor, keep token/critic)."""
+        """Upgrade a flow model to CFGRL (fresh o-conditioned actor, keep token AE).
+
+        With require_transfer=True (default), any pretrained weight that fails
+        to carry over because of an architecture mismatch raises instead of
+        being silently re-initialized. The only legitimate shape changes are
+        the actor's first layer (grows o_dim input columns, copied explicitly)
+        and the o_embed table (new, zero-initialized).
+        """
         if not self.is_flow:
             raise RuntimeError("CFGRL requires cf_mode=flow")
-        if self.use_cfgrl:
+        want_hidden = int(self.hidden if hidden is None else hidden)
+        want_n_act = int(self.n_hidden_actor if n_hidden_actor is None else n_hidden_actor)
+        want_n_q = int(self.n_hidden_critic if n_hidden_critic is None else n_hidden_critic)
+        want_z = int(self.z_expand_dim if z_expand_dim is None else z_expand_dim)
+        want_ln = bool(self.layernorm_heads if layernorm_heads is None else layernorm_heads)
+        already = (
+            self.use_cfgrl
+            and int(self.cfgrl_o_dim) == int(o_dim)
+            and want_hidden == self.hidden
+            and want_n_act == self.n_hidden_actor
+            and want_n_q == self.n_hidden_critic
+            and want_z == self.z_expand_dim
+            and want_ln == self.layernorm_heads
+        )
+        if already:
             self.cfgrl_w = float(cfgrl_w)
             self.guide = None
             self.use_cf_guide = False
@@ -1179,7 +1332,7 @@ class MolmoAct2RLTCF(nn.Module):
             bounded_critic=self.bounded_critic,
             use_cf_guide=False,
             tune_token_online=False,
-            hidden=self.hidden,
+            hidden=want_hidden,
             n_critics=self.n_critics,
             residual_actor=self.residual_actor,
             max_delta=self.max_delta,
@@ -1195,16 +1348,60 @@ class MolmoAct2RLTCF(nn.Module):
             use_cfgrl=True,
             cfgrl_o_dim=int(o_dim),
             cfgrl_w=float(cfgrl_w),
+            n_hidden_actor=want_n_act,
+            n_hidden_critic=want_n_q,
+            z_expand_dim=want_z,
+            layernorm_heads=want_ln,
         )
         src = self.state_dict()
         dst = upgraded.state_dict()
-        compatible = {
-            key: value
-            for key, value in src.items()
-            if key in dst and dst[key].shape == value.shape
-        }
+        compatible = {}
+        mismatched: list[str] = []
+        for key, value in src.items():
+            if key not in dst:
+                continue
+            if dst[key].shape == value.shape:
+                compatible[key] = value
+            else:
+                mismatched.append(key)
         upgraded.load_state_dict(compatible, strict=False)
-        upgraded.actor.copy_pretrained_into_o_actor(self.actor)
+        # actor.net.0.weight legitimately grows by o_dim columns (handled by
+        # copy_pretrained_into_o_actor below); actor.o_embed.weight is new.
+        # Anything else failing to transfer means the requested architecture
+        # does not match the checkpoint and the pretrained weights would be
+        # silently re-initialized.
+        _ALLOWED_RESIZE = {"actor.net.0.weight", "actor.o_embed.weight"}
+        unexpected = [key for key in mismatched if key not in _ALLOWED_RESIZE]
+        if require_transfer and unexpected:
+            raise RuntimeError(
+                "as_cfgrl: pretrained weights do not fit the requested "
+                f"architecture; {len(unexpected)} tensors would be silently "
+                f"re-initialized (e.g. {unexpected[:5]}). Build the pretrain "
+                "at the target architecture instead, or pass "
+                "require_transfer=False if a fresh start is intended."
+            )
+        arch_matches = (
+            want_hidden == self.hidden
+            and want_n_act == self.n_hidden_actor
+            and want_z == self.z_expand_dim
+        )
+        if arch_matches:
+            transferred = upgraded.actor.copy_pretrained_into_o_actor(self.actor)
+            if require_transfer and not transferred:
+                raise RuntimeError(
+                    "as_cfgrl: pretrained actor weights did not transfer into "
+                    "the o-conditioned actor despite matching architecture."
+                )
+        elif require_transfer:
+            raise RuntimeError(
+                "as_cfgrl: requested architecture "
+                f"(hidden={want_hidden}, n_hidden_actor={want_n_act}, "
+                f"z_expand_dim={want_z}) differs from the checkpoint "
+                f"(hidden={self.hidden}, n_hidden_actor={self.n_hidden_actor}, "
+                f"z_expand_dim={self.z_expand_dim}); refusing to silently "
+                "re-initialize actor/critic. Pass require_transfer=False if a "
+                "fresh start is intended."
+            )
         upgraded.loaded_meta = dict(self.loaded_meta)
         upgraded.freeze_token_encoder()
         upgraded.guide = None
@@ -1222,9 +1419,30 @@ class MolmoAct2RLTCF(nn.Module):
         guidance_coef: float = DEFAULT_GUIDANCE_COEF,
         q_tail_fraction: float = DEFAULT_Q_TAIL_FRACTION,
         q_tail_min_heads: int = DEFAULT_Q_TAIL_MIN_HEADS,
+        hidden: int | None = None,
+        n_hidden_actor: int | None = None,
+        n_hidden_critic: int | None = None,
+        z_expand_dim: int | None = None,
+        layernorm_heads: bool | None = None,
+        use_cfgrl: bool | None = None,
+        cfgrl_o_dim: int | None = None,
+        cfgrl_w: float = DEFAULT_CFGRL_W,
     ) -> "MolmoAct2RLTCF":
-        """Build a flow-CF model, copying token AE + norm stats from a residual/token ckpt."""
+        """Build a flow-CF model, copying token AE + norm stats from a residual/token ckpt.
+
+        Head architecture and CFGRL settings default to the values stored in
+        the checkpoint payload (falling back to module defaults), and can be
+        overridden explicitly. This lets the flow pretrain build a born-CFGRL
+        model at the exact architecture the online run will use, so no
+        weight-transfer guessing is needed downstream.
+        """
         payload = torch.load(path, map_location=map_location, weights_only=False)
+
+        def _pick(override: Any, key: str, default: Any) -> Any:
+            if override is not None:
+                return override
+            return payload.get(key, default)
+
         model = cls(
             feature_dim=int(payload.get("feature_dim", FEATURE_DIM)),
             z_dim=int(payload.get("z_dim", Z_DIM)),
@@ -1234,7 +1452,7 @@ class MolmoAct2RLTCF(nn.Module):
             bounded_critic=bool(payload.get("bounded_critic", True)),
             use_cf_guide=use_cf_guide,
             tune_token_online=False,
-            hidden=int(payload.get("hidden", 256)),
+            hidden=int(_pick(hidden, "hidden", 256)),
             n_critics=int(n_critics),
             token_d_model=int(payload.get("token_d_model", 256)),
             token_layers=int(payload.get("token_layers", 2)),
@@ -1245,6 +1463,13 @@ class MolmoAct2RLTCF(nn.Module):
             time_dim=64,
             q_tail_fraction=q_tail_fraction,
             q_tail_min_heads=q_tail_min_heads,
+            n_hidden_actor=int(_pick(n_hidden_actor, "n_hidden_actor", DEFAULT_N_HIDDEN_ACTOR)),
+            n_hidden_critic=int(_pick(n_hidden_critic, "n_hidden_critic", DEFAULT_N_HIDDEN_CRITIC)),
+            z_expand_dim=int(_pick(z_expand_dim, "z_expand_dim", DEFAULT_Z_EXPAND_DIM)),
+            layernorm_heads=bool(_pick(layernorm_heads, "layernorm_heads", False)),
+            use_cfgrl=bool(_pick(use_cfgrl, "use_cfgrl", False)),
+            cfgrl_o_dim=int(_pick(cfgrl_o_dim, "cfgrl_o_dim", DEFAULT_CFGRL_O_DIM)),
+            cfgrl_w=float(payload.get("cfgrl_w", cfgrl_w)),
         )
         src = payload["state_dict"]
         dst = model.state_dict()
@@ -1257,6 +1482,9 @@ class MolmoAct2RLTCF(nn.Module):
         }
         dst.update(copied)
         model.load_state_dict(dst, strict=True)
+        if model.use_cfgrl and model.actor.o_embed is not None:
+            # v(·,o) starts identical across o; the o-path is neutral at birth.
+            nn.init.zeros_(model.actor.o_embed.weight)
         model.freeze_token_encoder()
         return model
 

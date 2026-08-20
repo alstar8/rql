@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -36,16 +37,50 @@ def build_rlt_optimizers(
     lr_actor: float = 1e-4,
     lr_guide: float = 1e-4,
     lr_alpha: float = 1e-4,
+    *,
+    separate_actor_adapter: bool = False,
 ) -> dict[str, torch.optim.Optimizer]:
+    adapter_params = list(model.rlt_adapter_parameters())
+    critic_params = list(model.critic.parameters())
+    actor_params = list(model.actor.parameters())
+    if separate_actor_adapter:
+        actor_params.extend(adapter_params)
+    else:
+        critic_params.extend(adapter_params)
     opts: dict[str, torch.optim.Optimizer] = {
         "token": torch.optim.Adam(model.token_ae.parameters(), lr=lr_token),
-        "critic": torch.optim.Adam(model.critic.parameters(), lr=lr_critic),
-        "actor": torch.optim.Adam(model.actor.parameters(), lr=lr_actor),
+        "critic": torch.optim.Adam(critic_params, lr=lr_critic),
+        "actor": torch.optim.Adam(actor_params, lr=lr_actor),
         "alpha": torch.optim.Adam(model.log_alpha.parameters(), lr=lr_alpha),
     }
     if model.guide is not None:
         opts["guide"] = torch.optim.Adam(model.guide.parameters(), lr=lr_guide)
     return opts
+
+
+def _parameter_grad_norm_sq(parameters: list[nn.Parameter]) -> float:
+    squared = 0.0
+    for parameter in parameters:
+        if parameter.grad is None:
+            continue
+        gn = float(parameter.grad.detach().float().norm().item())
+        squared += gn * gn
+    return squared
+
+
+def _assert_frozen_token_and_adapter_grads(model: MolmoAct2RLTCF) -> dict[str, float]:
+    """Fail closed if frozen token AE gets grads, or a live expander gets none."""
+
+    token_sq = _parameter_grad_norm_sq(list(model.token_ae.parameters()))
+    adapter_sq = _parameter_grad_norm_sq(model.rlt_adapter_parameters())
+    if token_sq > 0.0 and not model.tune_token_online:
+        raise RuntimeError("Frozen token AE received gradients")
+    if model.rlt_adapter_parameters() and adapter_sq <= 0.0:
+        raise RuntimeError("RLT z-expander received no gradient")
+    return {
+        "cfgrl_token_grad_norm": token_sq**0.5,
+        "cfgrl_adapter_grad_norm": adapter_sq**0.5,
+    }
 
 
 def token_step(
@@ -245,14 +280,30 @@ def critic_td_step(
     td = ((qs - y_td.unsqueeze(0)) ** 2).mean()
     mc = ((qs - y_mc.unsqueeze(0)) ** 2).mean()
     flat_a = a.reshape(a.shape[0], -1)
-    cql, cql_info = model.critic.cql_penalty(
-        state.detach() if detach_token else state,
-        flat_a.detach(),
-        n_actions=cql_n_actions,
-        coef=cql_coef,
-        action_radius=cql_action_radius,
-        far_scale=1.0,
-    )
+    cql_state = state.detach() if detach_token else state
+    # TimeCQL (flow) critic requires an endpoint time tensor; EnsembleCQL does not.
+    if model.is_flow:
+        cql_t = torch.ones(
+            cql_state.shape[0], 1, device=cql_state.device, dtype=cql_state.dtype
+        )
+        cql, cql_info = model.critic.cql_penalty(
+            cql_state,
+            flat_a.detach(),
+            cql_t,
+            n_actions=cql_n_actions,
+            coef=cql_coef,
+            action_radius=cql_action_radius,
+            far_scale=1.0,
+        )
+    else:
+        cql, cql_info = model.critic.cql_penalty(
+            cql_state,
+            flat_a.detach(),
+            n_actions=cql_n_actions,
+            coef=cql_coef,
+            action_radius=cql_action_radius,
+            far_scale=1.0,
+        )
     # Action-ranking suite: v6 local noise alone left |Q(a)-Q(a+ε)| ~ 1e-3.
     # Add far noise + cross-batch shuffled actions so Q must depend on a.
     rank = a.new_zeros(())
@@ -312,9 +363,11 @@ def critic_td_step(
     loss = td + float(mc_coef) * mc + cql + rank + float(actor_cql_coef) * actor_cql
     opt.zero_grad(set_to_none=True)
     loss.backward()
+    grad_info = _assert_frozen_token_and_adapter_grads(model)
     params = list(model.critic.parameters())
     if model.tune_token_online:
         params += list(model.token_ae.encoder.parameters())
+    params += list(model.rlt_adapter_parameters())
     nn.utils.clip_grad_norm_(params, 1.0)
     opt.step()
     model.soft_update_targets(0.005)
@@ -328,6 +381,7 @@ def critic_td_step(
         "q_mean": float(qs.mean().detach()),
         "q_std": float(qs.std(unbiased=False).detach()),
         "q_target": float(y_td.mean().detach()),
+        **grad_info,
     }
 
 
@@ -1660,9 +1714,11 @@ def flow_critic_td_step(
     loss = td + float(mc_coef) * mc + cql + rank + float(actor_cql_coef) * actor_cql
     opt.zero_grad(set_to_none=True)
     loss.backward()
+    grad_info = _assert_frozen_token_and_adapter_grads(model)
     params = list(model.critic.parameters())
     if model.tune_token_online:
         params += list(model.token_ae.encoder.parameters())
+    params += list(model.rlt_adapter_parameters())
     nn.utils.clip_grad_norm_(params, 1.0)
     opt.step()
     model.soft_update_targets(0.005)
@@ -1677,6 +1733,7 @@ def flow_critic_td_step(
         "q_std": float(qs_end.std(unbiased=False).detach()),
         "q_target": float(y_td.mean().detach()),
         "flow_t_mean": float(t.mean().detach()),
+        **grad_info,
     }
 
 
@@ -2133,26 +2190,93 @@ def cfgrl_endpoint_diagnostics(
     }
 
 
+def _cfgrl_actor_gradient_diagnostics(model: MolmoAct2RLTCF) -> dict[str, float]:
+    """Confirm CFGRL grads reach the shared backbone and both o embeddings."""
+
+    named = list(model.actor.named_parameters())
+    if not named:
+        raise RuntimeError("CFGRL actor has no parameters")
+    sq = 0.0
+    n_param = 0
+    n_nonzero = 0
+    o_embed_sq = 0.0
+    o_uncond = 0.0
+    o_pos = 0.0
+    backbone_sq = 0.0
+    token_sq = 0.0
+    adapter_sq = 0.0
+    for name, parameter in named:
+        n_param += 1
+        if parameter.grad is None:
+            continue
+        g = parameter.grad.detach().float()
+        gn = float(g.norm().item())
+        sq += gn * gn
+        n_nonzero += 1
+        if "o_embed" in name:
+            o_embed_sq += gn * gn
+            if g.ndim == 2 and g.shape[0] >= CFGRL_O_POS + 1:
+                o_uncond = float(g[CFGRL_O_UNCOND].norm().item())
+                o_pos = float(g[CFGRL_O_POS].norm().item())
+        else:
+            backbone_sq += gn * gn
+    for parameter in model.token_ae.parameters():
+        if parameter.grad is not None:
+            gn = float(parameter.grad.detach().float().norm().item())
+            token_sq += gn * gn
+    adapter_sq = _parameter_grad_norm_sq(model.rlt_adapter_parameters())
+    return {
+        "cfgrl_actor_grad_norm": sq**0.5,
+        "cfgrl_actor_grad_nonzero_frac": float(n_nonzero) / float(max(n_param, 1)),
+        "cfgrl_o_embed_grad_norm": o_embed_sq**0.5,
+        "cfgrl_o_uncond_grad_norm": o_uncond,
+        "cfgrl_o_pos_grad_norm": o_pos,
+        "cfgrl_backbone_grad_norm": backbone_sq**0.5,
+        "cfgrl_token_grad_norm": token_sq**0.5,
+        "cfgrl_adapter_grad_norm": adapter_sq**0.5,
+    }
+
+
 def cfgrl_actor_step(
     model: MolmoAct2RLTCF,
     opt: torch.optim.Optimizer,
     batch: dict[str, torch.Tensor],
     *,
     cond_dropout: float = DEFAULT_CFGRL_DROPOUT,
+    ref_dropout: float = 0.5,
     use_advantage_labels: bool = False,
     snapshot_critic: nn.Module | None = None,
+    train_adapter: bool = False,
 ) -> dict[str, float]:
     """CFGRL flow-matching: uncond clones ã, cond clones positive executed a.
 
     No Q-max actor term and no residual β. Labels come from stop-grad Q (A vs
     VLA reference) once the critic is healthy, otherwise from episode success.
     Negative / failed chunks are trained as uncond (clone ã), not as o=NEG BC.
+
+    Reference-action dropout (RLT): for a random subset of rows the reference
+    input is zeroed before the velocity evaluation, so the actor keeps an
+    independent action-generation pathway instead of learning to copy ã. This
+    also matches the regime the critic's TD bootstrap samples next actions in
+    (``flow_critic_td_step`` zeroes the reference with the same probability),
+    keeping the bootstrap in-distribution.
     """
     if not model.is_flow:
         raise RuntimeError("cfgrl_actor_step requires cf_mode=flow")
     model.train()
-    with torch.no_grad():
+    opt.zero_grad(set_to_none=True)
+    for parameter in model.rlt_adapter_parameters():
+        parameter.grad = None
+    if train_adapter:
         state = _batch_state(model, batch, detach_token=True, use_target=False)
+    else:
+        with torch.no_grad():
+            state = _batch_state(
+                model,
+                batch,
+                detach_token=True,
+                use_target=False,
+            )
     a_data = model.normalize_action(batch["executed_actions"])
     a_ref = model.normalize_action(batch["reference_actions"])
     b = a_data.shape[0]
@@ -2162,8 +2286,26 @@ def cfgrl_actor_step(
         t_end = torch.ones(b, 1, device=device, dtype=a_data.dtype)
         critic_model = snapshot_critic if snapshot_critic is not None else model
         with torch.no_grad():
-            q_a = critic_model.q_lower_tail_chunk(state, a_data, t=t_end)
-            q_ref = critic_model.q_lower_tail_chunk(state, a_ref, t=t_end)
+            critic_state = (
+                state.detach()
+                if snapshot_critic is None
+                else _batch_state(
+                    critic_model,
+                    batch,
+                    detach_token=True,
+                    use_target=False,
+                )
+            )
+            q_a = critic_model.q_lower_tail_chunk(
+                critic_state,
+                a_data,
+                t=t_end,
+            )
+            q_ref = critic_model.q_lower_tail_chunk(
+                critic_state,
+                a_ref,
+                t=t_end,
+            )
             adv = q_a - q_ref
     success = batch.get("success")
     if success is None:
@@ -2180,17 +2322,46 @@ def cfgrl_actor_step(
     t = torch.rand(b, 1, device=device, dtype=a_star.dtype)
     x_t = (1.0 - t.view(b, 1, 1)) * x0 + t.view(b, 1, 1) * a_star
     target_v = a_star - x0
-    v = model.flow_velocity(state, x_t, t, a_ref, o=o)
+    if float(ref_dropout) > 0.0:
+        ref_present = (
+            torch.rand(b, device=device) >= float(ref_dropout)
+        ).to(dtype=a_ref.dtype)
+        ref_in = a_ref * ref_present.view(b, 1, 1)
+    else:
+        ref_present = torch.ones(b, device=device, dtype=a_ref.dtype)
+        ref_in = a_ref
+    v = model.flow_velocity(state, x_t, t, ref_in, o=o)
     mask = batch["action_mask"].unsqueeze(-1)
     bc = (((v - target_v.detach()) * mask) ** 2).sum() / mask.sum().clamp_min(1.0) / v.shape[-1]
-    opt.zero_grad(set_to_none=True)
     bc.backward()
-    nn.utils.clip_grad_norm_(model.actor.parameters(), 1.0)
+    grad_info = _cfgrl_actor_gradient_diagnostics(model)
+    if float(grad_info["cfgrl_actor_grad_norm"]) <= 0.0:
+        raise RuntimeError(
+            "CFGRL actor gradient is zero; optimality embedding or backbone is disconnected"
+        )
+    if model.use_cfgrl and float((o == CFGRL_O_POS).float().sum()) > 0:
+        if float(grad_info["cfgrl_o_pos_grad_norm"]) <= 0.0:
+            raise RuntimeError("CFGRL o=POS embedding received no gradient")
+        if float(grad_info["cfgrl_backbone_grad_norm"]) <= 0.0:
+            raise RuntimeError("CFGRL shared actor backbone received no gradient")
+    if float(grad_info["cfgrl_token_grad_norm"]) > 0.0 and not model.tune_token_online:
+        raise RuntimeError("Frozen token AE received CFGRL actor gradients")
+    if train_adapter and model.rlt_adapter_parameters():
+        if float(grad_info["cfgrl_adapter_grad_norm"]) <= 0.0:
+            raise RuntimeError("Trainable RLT adapter received no actor gradient")
+    optimizer_parameters = [
+        parameter
+        for group in opt.param_groups
+        for parameter in group["params"]
+    ]
+    nn.utils.clip_grad_norm_(optimizer_parameters, 1.0)
     opt.step()
     return {
         "actor_loss": float(bc.detach()),
         "bc_loss": float(bc.detach()),
+        "cfgrl_ref_present_frac": float(ref_present.mean().detach()),
         **label_info,
+        **grad_info,
         "actor_q_coef": 0.0,
         "cfgrl_w": float(model.cfgrl_w),
     }
@@ -2426,6 +2597,127 @@ def ae_flow_actor_step(
         "native_horizon": float(AE_NATIVE_HORIZON),
         "endpoint_steps": float(model.flow_steps),
         "endpoint_t": float(t_end.mean().detach()),
+        "v_source": 1.0,  # marker: molmo_ae
+        **gradient_diagnostics,
+    }
+
+
+def _index_batch_rows(
+    batch: dict[str, Any],
+    row_index: torch.Tensor,
+    batch_size: int,
+) -> dict[str, Any]:
+    """Select a subset of rows from a replay batch (tensor/ndarray/list values)."""
+    index_np = row_index.detach().cpu().numpy()
+    sub: dict[str, Any] = {}
+    for key, value in batch.items():
+        if isinstance(value, torch.Tensor) and value.shape[:1] == (batch_size,):
+            sub[key] = value[row_index.to(device=value.device)]
+        elif isinstance(value, np.ndarray) and value.shape[:1] == (batch_size,):
+            sub[key] = value[index_np]
+        elif isinstance(value, (list, tuple)) and len(value) == batch_size:
+            sub[key] = [value[int(i)] for i in index_np]
+        else:
+            sub[key] = value
+    return sub
+
+
+def ae_cfgrl_actor_step(
+    model: MolmoAct2RLTCF,
+    ae_backend: Any,
+    opt: torch.optim.Optimizer,
+    batch: dict[str, Any],
+    *,
+    zero_grad: bool = True,
+    optimizer_step: bool = True,
+    loss_scale: float = 1.0,
+) -> dict[str, float]:
+    """CFGRL flow matching for the Molmo AE LoRA (no Q-backprop, no ODE unroll).
+
+    LoRA-as-CFG: the frozen base AE is the unconditional policy (reference ã);
+    base+LoRA is the positive-conditioned policy. LoRA is trained only on
+    successful rows toward the executed actions a_data with the standard
+    conditional flow-matching loss. Deployment composes
+    v = v_base + w·(v_lora − v_base). The RLT critic never backprops into the
+    AE, which keeps memory at a single velocity evaluation per row.
+    """
+    if not model.is_flow:
+        raise RuntimeError("ae_cfgrl_actor_step requires cf_mode=flow")
+    _require_ae_full_fields(batch, "full_executed_actions", "source_native")
+    model.eval()
+    ae_backend.train(True)
+    invalidate_cache = getattr(ae_backend, "invalidate_modulation_cache", None)
+    if callable(invalidate_cache):
+        invalidate_cache()
+
+    success = batch.get("success")
+    if success is None:
+        success = batch.get("mc_return")
+    if success is None:
+        raise KeyError("AE CFGRL batch needs 'success' (or 'mc_return') labels")
+    success_t = torch.as_tensor(success).reshape(-1)
+    pos_index = torch.nonzero(success_t > 0.5, as_tuple=False).reshape(-1)
+    batch_size = int(success_t.shape[0])
+    pos_frac = float(pos_index.shape[0]) / float(max(batch_size, 1))
+    if pos_index.shape[0] == 0:
+        return {
+            "actor_loss": 0.0,
+            "bc_loss": 0.0,
+            "ae_pos_frac": 0.0,
+            "ae_lora_delta_mse": 0.0,
+            "ae_cfg_skipped": 1.0,
+            "v_source": 1.0,
+        }
+
+    pos_batch = _index_batch_rows(batch, pos_index, batch_size)
+    contexts = _ae_batch_contexts(model, ae_backend, pos_batch)
+    a_data = _ae_normalized_full_actions(
+        model, ae_backend, pos_batch, "full_executed_actions"
+    )
+    source_native = _ae_source_native(
+        model, ae_backend, contexts, pos_batch, "source_native", template=a_data
+    )
+    b = a_data.shape[0]
+    device = a_data.device
+    t = torch.rand(b, 1, device=device, dtype=torch.float32)
+    t_full = t.view(b, 1, 1).to(dtype=a_data.dtype)
+    x_t = _mask_ae_native((1.0 - t_full) * source_native + t_full * a_data)
+    target_v = _mask_ae_native(a_data - source_native)
+    velocity = _ae_native_velocity(ae_backend, contexts, x_t, t)
+    valid = (~_ae_pad_mask(b, device=device)).expand_as(velocity)
+    bc = (((velocity - target_v.detach()) * valid) ** 2).sum()
+    bc = bc / valid.sum().clamp_min(1)
+
+    if zero_grad:
+        opt.zero_grad(set_to_none=True)
+    (bc * float(loss_scale)).backward()
+    gradient_diagnostics: dict[str, float] = {}
+    if optimizer_step:
+        gradient_diagnostics = _ae_actor_gradient_diagnostics(ae_backend, opt)
+        trainable_parameters = ae_backend.trainable_parameters()
+        nn.utils.clip_grad_norm_(trainable_parameters, 1.0)
+        opt.step()
+        if callable(invalidate_cache):
+            invalidate_cache()
+
+    # Diagnostic: magnitude of the CFG delta the deploy-time w scales.
+    with torch.no_grad():
+        disabled = getattr(ae_backend, "adapter_disabled", None)
+        if callable(disabled):
+            with disabled():
+                v_base = _ae_native_velocity(ae_backend, contexts, x_t, t)
+            delta_mse = float(
+                ((((velocity.detach() - v_base) * valid) ** 2).sum() / valid.sum().clamp_min(1)).cpu()
+            )
+        else:
+            delta_mse = float("nan")
+
+    return {
+        "actor_loss": float(bc.detach()),
+        "bc_loss": float(bc.detach()),
+        "ae_pos_frac": pos_frac,
+        "ae_lora_delta_mse": delta_mse,
+        "ae_cfg_skipped": 0.0,
         "v_source": 1.0,  # marker: molmo_ae
         **gradient_diagnostics,
     }

@@ -23,11 +23,15 @@ def mlp(
     hidden: int = 256,
     n_hidden: int = 2,
     zero_out: bool = False,
+    layernorm: bool = False,
 ) -> nn.Sequential:
     layers: list[nn.Module] = []
     d = in_dim
     for _ in range(n_hidden):
-        layers.extend([nn.Linear(d, hidden), nn.ReLU()])
+        layers.append(nn.Linear(d, hidden))
+        if layernorm:
+            layers.append(nn.LayerNorm(hidden))
+        layers.append(nn.ReLU())
         d = hidden
     out = nn.Linear(d, out_dim)
     if zero_out:

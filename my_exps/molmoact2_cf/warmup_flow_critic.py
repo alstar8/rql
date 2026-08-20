@@ -27,6 +27,7 @@ from rlt_models import MolmoAct2RLTCF  # noqa: E402
 from train_rlt import (  # noqa: E402
     action_sensitivity,
     build_rlt_optimizers,
+    cfgrl_actor_step,
     critic_is_healthy,
     flow_actor_step,
     flow_critic_td_step,
@@ -51,15 +52,26 @@ def warmup(args: argparse.Namespace) -> None:
         n_critics=args.n_critics,
         flow_steps=args.flow_steps,
         guidance_coef=args.guidance_coef,
+        hidden=args.hidden,
+        n_hidden_actor=args.n_hidden_actor,
+        n_hidden_critic=args.n_hidden_critic,
+        z_expand_dim=args.z_expand_dim,
+        layernorm_heads=args.layernorm_heads,
+        use_cfgrl=args.use_cfgrl,
+        cfgrl_o_dim=args.cfgrl_o_dim,
+        cfgrl_w=args.cfgrl_w,
     ).to(device)
     model.freeze_token_encoder()
     log.info(
-        "built flow CF from %s | params critic=%d actor=%d guide=%d",
+        "built flow CF from %s | params critic=%d actor=%d guide=%d cfgrl=%s",
         args.rlt_ckpt,
         sum(p.numel() for p in model.critic.parameters()),
         sum(p.numel() for p in model.actor.parameters()),
         sum(p.numel() for p in model.guide.parameters()) if model.guide is not None else 0,
+        model.use_cfgrl,
     )
+    if args.use_cfgrl and not model.use_cfgrl:
+        raise RuntimeError("born-CFGRL pretrain requested but model is not CFGRL")
 
     optimizers = build_rlt_optimizers(model, lr_critic=args.lr, lr_actor=args.lr_actor)
     metrics_path = Path(args.out_ckpt).with_name("flow_critic_warmup_metrics.jsonl")
@@ -87,17 +99,30 @@ def warmup(args: argparse.Namespace) -> None:
             target_noise=args.target_noise,
         )
         if step % args.actor_every == 0:
-            last_actor = flow_actor_step(
-                model,
-                optimizers["actor"],
-                optimizers["alpha"],
-                batch,
-                beta=args.actor_beta,
-                target_divergence=args.target_divergence,
-                ref_dropout=args.ref_dropout,
-                bc_coef=args.bc_coef,
-                q_coef=float(getattr(args, "actor_q_coef", 0.0)),
-            )
+            if model.use_cfgrl:
+                # Born-CFGRL pretrain: success-labeled flow matching with
+                # condition dropout, so the o-conditional actor the online
+                # run inherits is already trained (no handoff re-init).
+                last_actor = cfgrl_actor_step(
+                    model,
+                    optimizers["actor"],
+                    batch,
+                    cond_dropout=args.cfgrl_dropout,
+                    ref_dropout=args.cfgrl_ref_dropout,
+                    use_advantage_labels=False,
+                )
+            else:
+                last_actor = flow_actor_step(
+                    model,
+                    optimizers["actor"],
+                    optimizers["alpha"],
+                    batch,
+                    beta=args.actor_beta,
+                    target_divergence=args.target_divergence,
+                    ref_dropout=args.ref_dropout,
+                    bc_coef=args.bc_coef,
+                    q_coef=float(getattr(args, "actor_q_coef", 0.0)),
+                )
         if step % args.log_every == 0 or step == args.steps:
             sens = action_sensitivity(model, batch, noise=args.rank_noise)
             healthy = critic_is_healthy(model, batch)
@@ -152,6 +177,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n_critics", type=int, default=10)
     parser.add_argument("--flow_steps", type=int, default=10)
     parser.add_argument("--guidance_coef", type=float, default=0.5)
+    # Head architecture: must match the online run so the handoff is a pure
+    # load (as_cfgrl fast-path), not a silent re-init.
+    parser.add_argument("--hidden", type=int, default=1_024)
+    parser.add_argument("--n_hidden_actor", type=int, default=10)
+    parser.add_argument("--n_hidden_critic", type=int, default=5)
+    parser.add_argument("--z_expand_dim", type=int, default=512)
+    parser.add_argument(
+        "--layernorm_heads",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--use_cfgrl",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="build a born-CFGRL actor (o-conditioned) and pretrain it with CFGRL labels",
+    )
+    parser.add_argument("--cfgrl_o_dim", type=int, default=16)
+    parser.add_argument("--cfgrl_w", type=float, default=1.0)
+    parser.add_argument("--cfgrl_dropout", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--lr_actor", type=float, default=1e-4)
     parser.add_argument("--actor_every", type=int, default=1)
@@ -165,6 +210,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--target_divergence", type=float, default=0.0025)
     parser.add_argument("--ref_dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--cfgrl_ref_dropout",
+        type=float,
+        default=0.5,
+        help="reference-action dropout for the CFGRL actor; matches the "
+        "critic bootstrap regime and the V20 online phase",
+    )
     parser.add_argument("--log_every", type=int, default=100)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--gamma", type=float, default=0.99)

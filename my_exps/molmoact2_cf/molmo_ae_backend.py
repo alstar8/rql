@@ -119,6 +119,132 @@ def _mean_pool_hidden(
     return (h * mask).sum(dim=1) / denom
 
 
+def apply_ae_lora_to_model(
+    model: torch.nn.Module,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+    rank: int,
+    alpha: int,
+    dropout: float,
+) -> torch.nn.Module:
+    """Wrap ``model`` with AE-scoped LoRA (shared by training backend and server).
+
+    Only action_expert Linear layers (excluding time/action embeds) receive
+    adapters; every non-LoRA parameter stays frozen. Returns the PEFT-wrapped
+    model (the input module is wrapped in place by peft and the wrapper must
+    be used going forward).
+    """
+    # Prefer explicit Linear module names under action_expert (more reliable
+    # than regex across Peft/HF wrapping variants).
+    linear_names: list[str] = []
+    for name, module in model.named_modules():
+        if "action_expert" not in name:
+            continue
+        # Keep time/action embeds on native bf16 Linear (no Peft dtype mix).
+        if ".time_embed." in name or name.endswith(".time_embed") or ".action_embed" in name:
+            continue
+        if isinstance(module, torch.nn.Linear):
+            linear_names.append(name)
+    if not linear_names:
+        raise RuntimeError("No action_expert Linear modules found for LoRA")
+    # peft matches against the *suffix* / leaf; use unique full-path-safe leaves
+    # by passing the full names when supported, else leaf set.
+    cfg = LoraConfig(
+        r=int(rank),
+        lora_alpha=int(alpha),
+        lora_dropout=float(dropout),
+        bias="none",
+        target_modules=linear_names,
+    )
+    # Full AE-scoped names are deliberate.  A generic leaf-name fallback
+    # (for example ``out_proj``) can attach adapters to the frozen VLM.
+    wrapped = get_peft_model(model, cfg)
+    # Peft adapters default to float32; keep them on the backbone dtype
+    # (bf16) so time_embed / AE Linear matmuls do not mix Float/BFloat16.
+    wrapped.to(device=device, dtype=dtype)
+    for name, p in wrapped.named_parameters():
+        if "lora_" not in name.lower() and "action_expert" not in name:
+            p.requires_grad_(False)
+        elif "lora_" not in name.lower() and "action_expert" in name:
+            # Keep base AE frozen; only LoRA adapters train.
+            p.requires_grad_(False)
+        elif p.dtype != dtype:
+            p.data = p.data.to(dtype=dtype)
+    trainable_names = [
+        name for name, parameter in wrapped.named_parameters() if parameter.requires_grad
+    ]
+    if not trainable_names or any(
+        "action_expert" not in name or "lora_" not in name.lower()
+        for name in trainable_names
+    ):
+        raise RuntimeError(
+            "AE LoRA scope violation: every trainable tensor must be an "
+            "action_expert LoRA parameter"
+        )
+    for required in ("context_k_proj", "context_v_proj"):
+        if not any(required in name for name in trainable_names):
+            raise RuntimeError(
+                f"AE LoRA is missing required trainable {required} tensors"
+            )
+    return wrapped
+
+
+def load_ae_trainable_state(
+    model: torch.nn.Module,
+    path: str | Path,
+    *,
+    device: torch.device | None = None,
+) -> dict[str, Any]:
+    """Strictly load PEFT LoRA trainable weights into an already-wrapped model.
+
+    Validates that the checkpoint's keys are exactly the model's trainable
+    (LoRA) parameters with matching shapes. Returns the checkpoint meta dict.
+    """
+    blob = torch.load(path, map_location="cpu", weights_only=False)
+    state = blob.get("ae_trainable", blob) if isinstance(blob, dict) else blob
+    if not isinstance(state, dict):
+        raise TypeError(f"AE trainable checkpoint must contain a state dict, got {type(state)}")
+    if device is not None:
+        state = {k: v.to(device=device) for k, v in state.items()}
+    expected = {
+        name: parameter
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    }
+    if not expected:
+        # A serving model is fully frozen; validate against the LoRA keys it
+        # would train instead.
+        expected = {
+            name: parameter
+            for name, parameter in model.named_parameters()
+            if "lora_" in name.lower()
+        }
+    missing_trainable = sorted(set(expected) - set(state))
+    unexpected_trainable = sorted(set(state) - set(expected))
+    bad_shapes = sorted(
+        name
+        for name in set(expected) & set(state)
+        if tuple(expected[name].shape) != tuple(state[name].shape)
+    )
+    if missing_trainable or unexpected_trainable or bad_shapes:
+        raise RuntimeError(
+            "AE trainable checkpoint mismatch: "
+            f"missing={missing_trainable[:8]} "
+            f"unexpected={unexpected_trainable[:8]} "
+            f"bad_shapes={bad_shapes[:8]}"
+        )
+    missing = model.load_state_dict(state, strict=False)
+    if missing.unexpected_keys:
+        raise RuntimeError(
+            "AE trainable checkpoint had unmatched keys: "
+            f"{missing.unexpected_keys[:8]}"
+        )
+    meta = dict(blob.get("meta") or {}) if isinstance(blob, dict) else {}
+    log.info("Loaded AE trainable weights from %s missing=%s", path, missing.missing_keys[:8])
+    return meta
+
+
 @dataclass
 class AEFlowContext:
     """Detached VLM KV context for AE velocity / guided ODE."""
@@ -156,6 +282,7 @@ class MolmoAEBackend:
         self.feature_mode = str(feature_mode)
         self.rlt = rlt
         self._lock = threading.Lock()
+        self._lora_config: dict[str, Any] | None = None
 
         local_dir = snapshot_download(repo_id=repo_id)
         log.info("Resolved MolmoAct2 snapshot: %s", local_dir)
@@ -238,60 +365,19 @@ class MolmoAEBackend:
         return ae
 
     def _apply_ae_lora(self, *, rank: int, alpha: int, dropout: float) -> None:
-        # Prefer explicit Linear module names under action_expert (more reliable
-        # than regex across Peft/HF wrapping variants).
-        linear_names: list[str] = []
-        for name, module in self.model.named_modules():
-            if "action_expert" not in name:
-                continue
-            # Keep time/action embeds on native bf16 Linear (no Peft dtype mix).
-            if ".time_embed." in name or name.endswith(".time_embed") or ".action_embed" in name:
-                continue
-            if isinstance(module, torch.nn.Linear):
-                linear_names.append(name)
-        if not linear_names:
-            raise RuntimeError("No action_expert Linear modules found for LoRA")
-        # peft matches against the *suffix* / leaf; use unique full-path-safe leaves
-        # by passing the full names when supported, else leaf set.
-        cfg = LoraConfig(
-            r=int(rank),
-            lora_alpha=int(alpha),
-            lora_dropout=float(dropout),
-            bias="none",
-            target_modules=linear_names,
+        self.model = apply_ae_lora_to_model(
+            self.model,
+            device=self.device,
+            dtype=self.dtype,
+            rank=rank,
+            alpha=alpha,
+            dropout=dropout,
         )
-        # Full AE-scoped names are deliberate.  A generic leaf-name fallback
-        # (for example ``out_proj``) can attach adapters to the frozen VLM.
-        self.model = get_peft_model(self.model, cfg)
-        # Peft adapters default to float32; keep them on the backbone dtype
-        # (bf16) so time_embed / AE Linear matmuls do not mix Float/BFloat16.
-        self.model.to(device=self.device, dtype=self.dtype)
-        for name, p in self.model.named_parameters():
-            if "lora_" not in name.lower() and "action_expert" not in name:
-                p.requires_grad_(False)
-            elif "lora_" not in name.lower() and "action_expert" in name:
-                # Keep base AE frozen; only LoRA adapters train.
-                p.requires_grad_(False)
-            elif p.dtype != self.dtype:
-                p.data = p.data.to(dtype=self.dtype)
-        trainable_names = [
-            name
-            for name, parameter in self.model.named_parameters()
-            if parameter.requires_grad
-        ]
-        if not trainable_names or any(
-            "action_expert" not in name or "lora_" not in name.lower()
-            for name in trainable_names
-        ):
-            raise RuntimeError(
-                "AE LoRA scope violation: every trainable tensor must be an "
-                "action_expert LoRA parameter"
-            )
-        for required in ("context_k_proj", "context_v_proj"):
-            if not any(required in name for name in trainable_names):
-                raise RuntimeError(
-                    f"AE LoRA is missing required trainable {required} tensors"
-                )
+        self._lora_config = {
+            "lora_rank": int(rank),
+            "lora_alpha": int(alpha),
+            "lora_dropout": float(dropout),
+        }
 
     def _unfreeze_action_expert(self) -> None:
         found = False
@@ -1084,42 +1170,18 @@ class MolmoAEBackend:
             for name, param in self.model.named_parameters()
             if param.requires_grad
         }
-        torch.save({"ae_trainable": payload, "meta": meta or {}}, path)
+        full_meta = dict(meta or {})
+        # Persist the LoRA configuration so serving code can reconstruct the
+        # exact PEFT wrapper before loading these weights.
+        full_meta.setdefault("lora_config", getattr(self, "_lora_config", None))
+        torch.save({"ae_trainable": payload, "meta": full_meta}, path)
 
     def load_trainable(self, path: str | Path) -> dict[str, Any]:
-        blob = torch.load(path, map_location="cpu", weights_only=False)
-        state = blob.get("ae_trainable", blob)
-        expected = {
-            name: parameter
-            for name, parameter in self.model.named_parameters()
-            if parameter.requires_grad
-        }
-        if not isinstance(state, dict):
-            raise TypeError(f"AE trainable checkpoint must contain a state dict, got {type(state)}")
-        missing_trainable = sorted(set(expected) - set(state))
-        unexpected_trainable = sorted(set(state) - set(expected))
-        bad_shapes = sorted(
-            name
-            for name in set(expected) & set(state)
-            if tuple(expected[name].shape) != tuple(state[name].shape)
+        meta = load_ae_trainable_state(
+            self.model, path, device=getattr(self, "device", None)
         )
-        if missing_trainable or unexpected_trainable or bad_shapes:
-            raise RuntimeError(
-                "AE trainable checkpoint mismatch: "
-                f"missing={missing_trainable[:8]} "
-                f"unexpected={unexpected_trainable[:8]} "
-                f"bad_shapes={bad_shapes[:8]}"
-            )
-        missing = self.model.load_state_dict(state, strict=False)
-        if missing.unexpected_keys:
-            raise RuntimeError(
-                "AE trainable checkpoint had unmatched keys: "
-                f"{missing.unexpected_keys[:8]}"
-            )
-        meta = dict(blob.get("meta") or {}) if isinstance(blob, dict) else {}
         self.invalidate_modulation_cache()
         self.loaded_trainable_meta = meta
-        log.info("Loaded AE trainable weights from %s missing=%s", path, missing.missing_keys[:8])
         return meta
 
 

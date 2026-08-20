@@ -25,7 +25,7 @@ TRAIN_SEED = 20260817
 N_CRITICS = v13.N_CRITICS
 FLOW_STEPS = v13.FLOW_STEPS
 
-PHASE_ROUNDS = int(os.environ.get("V19_PHASE_ROUNDS", "12"))
+PHASE_ROUNDS = int(os.environ.get("V19_PHASE_ROUNDS", "100"))
 PHASE_B_EPISODES = int(os.environ.get("V19_PHASE_B_EPISODES", "1"))
 PHASE_PROBE = os.environ.get("V19_PHASE_PROBE", "1") != "0"
 PHASE_BARRIER = os.environ.get("V19_PHASE_BARRIER", "1") != "0"
@@ -56,19 +56,29 @@ MAX_UPDATE_SEC_PER_EPISODE = float(
     os.environ.get("V19_MAX_UPDATE_SEC_PER_EPISODE", "45")
 )
 UPDATES_PER_EPISODE = int(os.environ.get("V19_UPDATES_PER_EPISODE", "16"))
-BENCHMARK_POSE_CYCLE = TRAIN_EPISODES
+BENCHMARK_POSE_CYCLE = max(
+    1, int(os.environ.get("V19_POSE_CYCLE", str(TRAIN_EPISODES)))
+)
 
 ACTOR_MIXTURE_PROB_PRE_GATE = float(os.environ.get("V19_MIX_PRE_GATE", "0.0"))
 ACTOR_MIXTURE_PROB_POST_GATE = float(os.environ.get("V19_MIX_POST_GATE", "0.25"))
+ACTOR_MIXTURE_PROB_STRONG = float(os.environ.get("V19_MIX_STRONG", "0.5"))
+ACTOR_MIXTURE_PROB_VERY = float(os.environ.get("V19_MIX_VERY", "0.75"))
 POS_FRAC = float(os.environ.get("V19_POS_FRAC", "0.5"))
 EMPIRICAL_MIN_EPISODES = int(os.environ.get("V19_EMPIRICAL_MIN_EPISODES", "16"))
 CFGRL_W = float(os.environ.get("V19_CFGRL_W", "0.0"))
 CFGRL_W_AFTER = float(os.environ.get("V19_CFGRL_W_AFTER", "0.5"))
 CFGRL_UNCOND_MSE_MAX = float(os.environ.get("V19_CFGRL_UNCOND_MSE_MAX", "0.02"))
-CFGRL_KQ = int(os.environ.get("V19_CFGRL_KQ", "2048"))
-CFGRL_KPI = int(os.environ.get("V19_CFGRL_KPI", "1024"))
-CFGRL_KQ_ONLINE = int(os.environ.get("V19_CFGRL_KQ_ONLINE", "1024"))
-CFGRL_KPI_ONLINE = int(os.environ.get("V19_CFGRL_KPI_ONLINE", "512"))
+CFGRL_KQ = int(os.environ.get("V19_CFGRL_KQ", "4096"))
+CFGRL_KPI = int(os.environ.get("V19_CFGRL_KPI", "2048"))
+CFGRL_KQ_ONLINE = int(os.environ.get("V19_CFGRL_KQ_ONLINE", "2048"))
+CFGRL_KPI_ONLINE = int(os.environ.get("V19_CFGRL_KPI_ONLINE", "1024"))
+CFGRL_O_DIM = int(os.environ.get("V19_CFGRL_O_DIM", "128"))
+HIDDEN = int(os.environ.get("V19_HIDDEN", "1024"))
+N_HIDDEN_ACTOR = int(os.environ.get("V19_N_HIDDEN_ACTOR", "5"))
+N_HIDDEN_CRITIC = int(os.environ.get("V19_N_HIDDEN_CRITIC", "4"))
+Z_EXPAND_DIM = int(os.environ.get("V19_Z_EXPAND_DIM", "512"))
+LAYERNORM_HEADS = os.environ.get("V19_LAYERNORM_HEADS", "1") != "0"
 CFGRL_ROUND = int(os.environ.get("V19_CFGRL_ROUND", str(max(1, PHASE_B_EPISODES))))
 SEED_REPLAY = os.environ.get("V19_SEED_REPLAY", "")
 N_SHARDS = int(os.environ.get("V19_N_SHARDS", "32"))
@@ -95,9 +105,26 @@ def isolated_rollout_attempts() -> int:
 
 
 def isolated_rollout_timeout_sec(horizon: int) -> float:
-    """Wall budget for one 500-step VLA episode (~25 min) plus scene load."""
+    """Wall budget for one healthy isolated episode, including scene load.
 
-    return float(min(2700.0, max(900.0, int(horizon) * 6 + 180)))
+    This host finishes a 500-step probe in ~2–4 min. The old 45 min cap let a
+    silent import hang block the 32-shard phase barrier. Override with
+    ``RLT_ISOLATED_TIMEOUT_SEC``.
+    """
+
+    override = os.environ.get("RLT_ISOLATED_TIMEOUT_SEC", "").strip()
+    if override:
+        return float(max(60.0, float(override)))
+    return float(min(900.0, max(480.0, int(horizon) * 1.5 + 180)))
+
+
+def isolated_rollout_startup_sec() -> float:
+    """Kill a child that never reaches isolated main (import/init hang)."""
+
+    override = os.environ.get("RLT_ISOLATED_STARTUP_SEC", "").strip()
+    if override:
+        return float(max(15.0, float(override)))
+    return 180.0
 
 
 def is_egl_crash_returncode(code: int | None) -> bool:
@@ -134,6 +161,19 @@ def phase_schedule(n_rounds: int = PHASE_ROUNDS) -> tuple[str, ...]:
         labels.append(f"{round_idx}A")
         labels.append(f"{round_idx}B")
     return tuple(labels)
+
+
+def next_phase_label(phase: str, n_rounds: int = PHASE_ROUNDS) -> str | None:
+    """Phase after ``phase`` in the CPI schedule, or None if it is the last."""
+
+    labels = phase_schedule(n_rounds)
+    try:
+        idx = labels.index(str(phase))
+    except ValueError as error:
+        raise ValueError(f"unknown phase {phase!r}") from error
+    if idx + 1 >= len(labels):
+        return None
+    return labels[idx + 1]
 
 
 def phase_slot(phase: str) -> int:
@@ -372,13 +412,16 @@ def cfgrl_collect_mixture_prob(
     n_rounds: int = PHASE_ROUNDS,
     n_poses: int = TRAIN_EPISODES,
     variant: str = "flow_cfgrl",
-    pre: float = 0.0,
-    post: float = 0.25,
+    pre: float = ACTOR_MIXTURE_PROB_PRE_GATE,
+    post: float = ACTOR_MIXTURE_PROB_POST_GATE,
+    strong: float = ACTOR_MIXTURE_PROB_STRONG,
+    very: float = ACTOR_MIXTURE_PROB_VERY,
 ) -> float:
     """Actor collect p after Phase A if the latest complete rA probe is not worse than Phase 0.
 
     Phase 0 is the frozen-VLA baseline on the *same* pose set. Ignore rB (same
     actor, different noise). Allow 1/n noise so a true tie still mixes.
+    Raise p as the extractor pulls ahead of the prior (0.25 / 0.5 / 0.75).
     """
 
     rows = aggregate_phase_sr(
@@ -406,14 +449,19 @@ def cfgrl_collect_mixture_prob(
     if latest is None:
         return float(pre)
     n_expected = max(1, int(baseline.get("n_expected") or n_shards))
-    if float(latest["sr"]) + 1.0 / float(n_expected) >= float(baseline["sr"]):
-        return float(post)
-    return float(pre)
+    gap = float(latest["sr"]) - float(baseline["sr"])
+    if gap + 1.0 / float(n_expected) < 0.0:
+        return float(pre)
+    if gap >= 0.10:
+        return float(very)
+    if gap >= 0.03:
+        return float(strong)
+    return float(post)
 
 
 def format_phase_sr_table(rows: Sequence[dict[str, Any]]) -> str:
     lines = [
-        "# V19 phase SR (fixed poses; 8 workers × 3 covers all 24, 32 workers × 1 repeats 0–7)",
+        "# V19 phase SR (fixed pose set; no rotation by phase)",
         "",
         "| Phase | n | successes | SR | status |",
         "| --- | ---: | ---: | ---: | --- |",
@@ -527,6 +575,14 @@ def _apply_v19_flags(command: list[str], variant: VariantSpec) -> list[str]:
             MAX_UPDATE_SEC_PER_EPISODE,
         )
     _append_option(command, "--no_critic_target_use_guide")
+    if "--shard_size" in command:
+        _set_argument(command, "--shard_size", BENCHMARK_POSE_CYCLE)
+    else:
+        _append_option(command, "--shard_size", BENCHMARK_POSE_CYCLE)
+    if "--start_episode" in command:
+        _set_argument(command, "--start_episode", 0)
+    else:
+        _append_option(command, "--start_episode", 0)
     _append_option(command, "--benchmark_pose_cycle", BENCHMARK_POSE_CYCLE)
     while "--use_cf_guide" in command:
         command.remove("--use_cf_guide")
@@ -539,6 +595,13 @@ def _apply_v19_flags(command: list[str], variant: VariantSpec) -> list[str]:
     _append_option(command, "--cfgrl_kpi", CFGRL_KPI)
     _append_option(command, "--cfgrl_kq_online", CFGRL_KQ_ONLINE)
     _append_option(command, "--cfgrl_kpi_online", CFGRL_KPI_ONLINE)
+    _append_option(command, "--cfgrl_o_dim", CFGRL_O_DIM)
+    _append_option(command, "--hidden", HIDDEN)
+    _append_option(command, "--n_hidden_actor", N_HIDDEN_ACTOR)
+    _append_option(command, "--n_hidden_critic", N_HIDDEN_CRITIC)
+    _append_option(command, "--z_expand_dim", Z_EXPAND_DIM)
+    if LAYERNORM_HEADS:
+        _append_option(command, "--layernorm_heads")
     _append_option(command, "--cfgrl_round_episodes", CFGRL_ROUND)
     _append_option(command, "--cfgrl_phase_rounds", PHASE_ROUNDS)
     _append_option(command, "--cfgrl_phase_b_episodes", PHASE_B_EPISODES)
@@ -652,6 +715,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     agg.add_argument("--run-dir", type=Path, required=True)
     agg.add_argument("--shards", type=int, default=N_SHARDS)
     agg.add_argument("--rounds", type=int, default=PHASE_ROUNDS)
+    agg.add_argument("--poses", type=int, default=BENCHMARK_POSE_CYCLE)
     agg.add_argument("--variant", default="flow_cfgrl")
 
     args = parser.parse_args(argv)
@@ -660,6 +724,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.run_dir,
             n_shards=int(args.shards),
             n_rounds=int(args.rounds),
+            n_poses=int(args.poses),
             variant=str(args.variant),
         )
         print(path.read_text(encoding="utf-8"), end="")

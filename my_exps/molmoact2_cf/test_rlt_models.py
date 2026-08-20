@@ -18,11 +18,13 @@ from rlt_models import (
     FEATURE_DIM,
     STATE_DIM,
     Z_DIM,
+    CFGRL_O_CLASSES,
     CFGRL_O_POS,
     CFGRL_O_UNCOND,
     CFGradientGuide,
     ChunkGaussianActor,
     MolmoAct2RLTCF,
+    RLTZExpander,
     RLTokenAutoencoder,
     bootstrap_scale,
     chunk_return,
@@ -33,8 +35,10 @@ from rlt_models import (
 from train_rlt import (
     actor_step,
     build_rlt_optimizers,
+    cfgrl_actor_step,
     cfgrl_condition_and_target,
     critic_td_step,
+    flow_critic_td_step,
     guide_step,
     predicted_lcb_advantage,
     stochastic_target_critic_gradient,
@@ -325,6 +329,222 @@ def test_cfgrl_labels_map_failures_to_uncond():
     assert torch.allclose(a_star_drop, a_ref)
 
 
+def _toy_chunk_batch(*, n: int = 8, success_frac: float = 0.5) -> dict:
+    buf = ChunkReplay()
+    for i in range(n):
+        succ = i < int(n * success_frac)
+        rewards = np.zeros(CHUNK_SIZE, dtype=np.float32)
+        if succ:
+            rewards[-1] = 1.0
+        buf.add(
+            ChunkTransition(
+                z=np.random.randn(Z_DIM).astype(np.float32),
+                proprio=np.random.randn(8).astype(np.float32),
+                reference_actions=np.random.randn(CHUNK_SIZE, ACTION_DIM).astype(np.float32) * 0.01,
+                executed_actions=np.random.randn(CHUNK_SIZE, ACTION_DIM).astype(np.float32) * 0.01,
+                rewards=rewards,
+                action_mask=np.ones(CHUNK_SIZE, dtype=np.float32),
+                next_z=np.random.randn(Z_DIM).astype(np.float32),
+                next_proprio=np.random.randn(8).astype(np.float32),
+                next_reference_actions=np.random.randn(CHUNK_SIZE, ACTION_DIM).astype(np.float32) * 0.01,
+                terminal=True,
+                mc_return=float(succ),
+                success=float(succ),
+                episode_id=i,
+                start_step=0,
+            )
+        )
+    return buf.sample(n)
+
+
+def test_z_expander_preserves_pretrained_z_at_init():
+    torch.manual_seed(0)
+    expander = RLTZExpander(z_dim=8, out_dim=16)
+    z = torch.randn(4, 8)
+    out = expander(z)
+    assert out.shape == (4, 16)
+    assert torch.allclose(out[:, :8], z, atol=1e-5)
+    assert torch.allclose(out[:, 8:], torch.zeros_like(out[:, 8:]), atol=1e-5)
+
+
+def test_as_cfgrl_widens_heads_and_keeps_frozen_token():
+    torch.manual_seed(0)
+    base = MolmoAct2RLTCF(
+        token_layers=1,
+        token_d_model=64,
+        n_critics=2,
+        cf_mode="flow",
+        use_cf_guide=False,
+        hidden=32,
+        n_hidden_actor=2,
+        n_hidden_critic=2,
+    )
+    base.freeze_token_encoder()
+    token_before = [p.detach().clone() for p in base.token_ae.parameters()]
+    # Widening must fail loudly by default: silently re-initializing the
+    # actor/critic while keeping the token AE was the I1 pretrain-loss bug.
+    try:
+        base.as_cfgrl(
+            hidden=64,
+            n_hidden_actor=4,
+            n_hidden_critic=3,
+            z_expand_dim=Z_DIM + 16,
+            o_dim=16,
+            layernorm_heads=True,
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("as_cfgrl must refuse silent re-init on arch change")
+    # Explicit opt-out keeps the legacy widening path (token AE preserved).
+    wide = base.as_cfgrl(
+        hidden=64,
+        n_hidden_actor=4,
+        n_hidden_critic=3,
+        z_expand_dim=Z_DIM + 16,
+        o_dim=16,
+        layernorm_heads=True,
+        require_transfer=False,
+    )
+    assert wide.hidden == 64
+    assert wide.n_hidden_actor == 4
+    assert wide.n_hidden_critic == 3
+    assert wide.z_expand_dim == Z_DIM + 16
+    assert wide.state_dim == Z_DIM + 16 + 8
+    assert wide.use_cfgrl
+    assert wide.layernorm_heads
+    assert not any(p.requires_grad for p in wide.token_ae.parameters())
+    assert wide.rlt_adapter_parameters()
+    assert all(p.requires_grad for p in wide.rlt_adapter_parameters())
+    for old, new in zip(token_before, wide.token_ae.parameters()):
+        assert torch.equal(old, new.detach())
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "wide.pt"
+        wide.save(str(path))
+        loaded = MolmoAct2RLTCF.load(str(path))
+    assert loaded.hidden == 64
+    assert loaded.z_expand_dim == Z_DIM + 16
+    assert loaded.n_hidden_actor == 4
+
+
+def test_as_cfgrl_same_arch_transfers_actor_weights():
+    torch.manual_seed(0)
+    base = MolmoAct2RLTCF(
+        token_layers=1,
+        token_d_model=64,
+        n_critics=2,
+        cf_mode="flow",
+        use_cf_guide=False,
+        hidden=32,
+        n_hidden_actor=2,
+        n_hidden_critic=2,
+    )
+    with torch.no_grad():
+        for param in base.actor.parameters():
+            param.add_(torch.randn_like(param) * 0.05)
+    upgraded = base.as_cfgrl(o_dim=8)
+    assert upgraded.use_cfgrl
+    state = torch.randn(3, base.state_dim)
+    x_t = torch.randn(3, base.chunk_size, base.action_dim)
+    ref = torch.randn(3, base.chunk_size, base.action_dim)
+    t = torch.rand(3)
+    with torch.no_grad():
+        v_pre = base.actor(state, x_t, t, ref)
+        for o in range(CFGRL_O_CLASSES):
+            v_o = upgraded.actor(
+                state,
+                x_t,
+                t,
+                ref,
+                o=torch.full((3,), o, dtype=torch.long),
+            )
+            assert torch.allclose(v_o, v_pre, atol=1e-5), f"o={o} changed v at birth"
+    again = upgraded.as_cfgrl(o_dim=8)
+    assert again is upgraded or again.use_cfgrl
+
+
+def test_cfgrl_actor_and_critic_gradient_flow():
+    torch.manual_seed(0)
+    model = MolmoAct2RLTCF(
+        token_layers=1,
+        token_d_model=64,
+        n_critics=2,
+        cf_mode="flow",
+        use_cf_guide=False,
+        use_cfgrl=True,
+        cfgrl_o_dim=8,
+        hidden=32,
+        n_hidden_actor=2,
+        n_hidden_critic=2,
+        z_expand_dim=Z_DIM + 8,
+        layernorm_heads=True,
+    )
+    model.set_norm_stats(torch.zeros(8), torch.ones(8), torch.zeros(8), torch.ones(8))
+    model.freeze_token_encoder()
+    opts = build_rlt_optimizers(model)
+    assert any(id(p) in {id(q) for g in opts["critic"].param_groups for q in g["params"]}
+               for p in model.rlt_adapter_parameters())
+    batch = _toy_chunk_batch(n=8, success_frac=1.0)
+    qinfo = flow_critic_td_step(model, opts["critic"], batch)
+    assert qinfo["cfgrl_adapter_grad_norm"] > 0.0
+    assert qinfo["cfgrl_token_grad_norm"] == 0.0
+    ainfo = cfgrl_actor_step(
+        model,
+        opts["actor"],
+        batch,
+        cond_dropout=0.0,
+        use_advantage_labels=False,
+    )
+    assert ainfo["cfgrl_actor_grad_norm"] > 0.0
+    assert ainfo["cfgrl_backbone_grad_norm"] > 0.0
+    assert ainfo["cfgrl_o_pos_grad_norm"] > 0.0
+    assert ainfo["cfgrl_token_grad_norm"] == 0.0
+    assert all(p.grad is None or float(p.grad.abs().sum()) == 0.0 for p in model.token_ae.parameters())
+
+
+def test_cfgrl_actor_step_reference_dropout():
+    torch.manual_seed(0)
+    model = MolmoAct2RLTCF(
+        token_layers=1,
+        token_d_model=64,
+        n_critics=2,
+        cf_mode="flow",
+        use_cf_guide=False,
+        use_cfgrl=True,
+        cfgrl_o_dim=8,
+        hidden=32,
+        n_hidden_actor=2,
+        n_hidden_critic=2,
+        z_expand_dim=Z_DIM + 8,
+        layernorm_heads=True,
+    )
+    model.set_norm_stats(torch.zeros(8), torch.ones(8), torch.zeros(8), torch.ones(8))
+    model.freeze_token_encoder()
+    opts = build_rlt_optimizers(model)
+    batch = _toy_chunk_batch(n=8, success_frac=1.0)
+    full = cfgrl_actor_step(
+        model,
+        opts["actor"],
+        batch,
+        cond_dropout=0.0,
+        ref_dropout=0.0,
+        use_advantage_labels=False,
+    )
+    assert full["cfgrl_ref_present_frac"] == 1.0
+    dropped = cfgrl_actor_step(
+        model,
+        opts["actor"],
+        batch,
+        cond_dropout=0.0,
+        ref_dropout=1.0,
+        use_advantage_labels=False,
+    )
+    assert dropped["cfgrl_ref_present_frac"] == 0.0
+    # The actor must still learn (gradients flow) with the reference zeroed.
+    assert dropped["cfgrl_actor_grad_norm"] > 0.0
+    assert dropped["cfgrl_backbone_grad_norm"] > 0.0
+
+
 if __name__ == "__main__":
     tests = [
         test_rl_token_recon_and_mask,
@@ -339,6 +559,11 @@ if __name__ == "__main__":
         test_explicit_critic_head_recovery_resets_target_copy,
         test_reference_dropout_changes_input_path,
         test_cfgrl_labels_map_failures_to_uncond,
+        test_z_expander_preserves_pretrained_z_at_init,
+        test_as_cfgrl_widens_heads_and_keeps_frozen_token,
+        test_as_cfgrl_same_arch_transfers_actor_weights,
+        test_cfgrl_actor_and_critic_gradient_flow,
+        test_cfgrl_actor_step_reference_dropout,
     ]
     for fn in tests:
         fn()

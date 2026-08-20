@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # V19 CFGRL extractor: 1 Molmo server / GPU, 4 trainers / GPU.
-# 2-GPU host: ports 8760-8761, 8 trainers. 1 EGL context / GPU (3 of 4 wait).
-# Concurrent EGL on one device SIGABRTs in mjr_readPixels after the first chunk.
+# 8-GPU host: ports 8760-8767, 32 trainers. 3 EGL contexts / GPU (1 of 4 waits).
+# Wide RLT heads (hidden=1024, z_expand=512) and 100 CPI rounds.
 # Train split only.
-#   GPU_IDS=0,1 V19_MODE=long FRESH=1 bash launch_v19_rlt_cfgrl.sh
+#   GPU_IDS=0,1,2,3,4,5,6,7 V19_MODE=long FRESH=1 bash launch_v19_rlt_cfgrl.sh
 
 set -euo pipefail
 
@@ -30,16 +30,20 @@ SERVER_STAGGER_SEC="${SERVER_STAGGER_SEC:-4}"
 TRAINER_STAGGER_SEC="${TRAINER_STAGGER_SEC:-8}"
 BASE_HTTP_PORT="${BASE_HTTP_PORT:-8760}"
 # Isolated CUDA-free children own EGL, so parents can pack 4 trainers / GPU
-# without stacking 4 CUDA+EGL contexts. One EGL slot / GPU; the other 3 wait.
+# without stacking 4 CUDA+EGL contexts. 3 EGL slots / GPU; 1 of 4 waits.
 INSTANCES_PER_GPU="${INSTANCES_PER_GPU:-4}"
 VARIANT="flow_cfgrl"
 
 case "${V19_MODE}" in
   full|long)
-    V19_PHASE_ROUNDS="${V19_PHASE_ROUNDS:-12}"
+    V19_PHASE_ROUNDS="${V19_PHASE_ROUNDS:-100}"
     V19_PHASE_B_EPISODES="${V19_PHASE_B_EPISODES:-1}"
     V19_CFGRL_ROUND="${V19_CFGRL_ROUND:-${V19_PHASE_B_EPISODES}}"
     V19_LOG_EVERY_EPISODES="${V19_LOG_EVERY_EPISODES:-1}"
+    V19_CFGRL_KQ="${V19_CFGRL_KQ:-4096}"
+    V19_CFGRL_KPI="${V19_CFGRL_KPI:-2048}"
+    V19_CFGRL_KQ_ONLINE="${V19_CFGRL_KQ_ONLINE:-2048}"
+    V19_CFGRL_KPI_ONLINE="${V19_CFGRL_KPI_ONLINE:-1024}"
     ;;
   smoke)
     V19_PHASE_ROUNDS="${V19_PHASE_ROUNDS:-1}"
@@ -114,11 +118,14 @@ export RLT_EGL_COOLDOWN_SEC="${RLT_EGL_COOLDOWN_SEC:-2.0}"
 export RLT_VLA_PREFETCH="${RLT_VLA_PREFETCH:-0}"
 export RLT_VLA_PREFETCH_K="${RLT_VLA_PREFETCH_K:-2}"
 export RLT_VLA_PREFETCH_REQUIRE_OBS_MATCH="${RLT_VLA_PREFETCH_REQUIRE_OBS_MATCH:-0}"
+if [[ -z "${HF_HOME:-}" && -d /workspace-SR008.nfs2/users/staroverov/.cache/huggingface ]]; then
+  HF_HOME=/workspace-SR008.nfs2/users/staroverov/.cache/huggingface
+fi
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
 export V19_MODE
-export V19_PHASE_ROUNDS="${V19_PHASE_ROUNDS:-12}"
+export V19_PHASE_ROUNDS="${V19_PHASE_ROUNDS:-100}"
 export V19_PHASE_B_EPISODES="${V19_PHASE_B_EPISODES:-1}"
 export V19_PHASE_PROBE="${V19_PHASE_PROBE:-1}"
 export V19_PHASE_BARRIER="${V19_PHASE_BARRIER:-1}"
@@ -129,10 +136,21 @@ export V19_MAX_UPDATE_SEC_PER_EPISODE V19_UPDATES_PER_EPISODE
 export V19_LOG_EVERY_EPISODES="${V19_LOG_EVERY_EPISODES:-1}"
 export V19_CFGRL_ROUND="${V19_CFGRL_ROUND:-${V19_PHASE_B_EPISODES}}"
 export V19_SEED_REPLAY
-export V19_CFGRL_KQ="${V19_CFGRL_KQ:-2048}"
-export V19_CFGRL_KPI="${V19_CFGRL_KPI:-1024}"
-export V19_CFGRL_KQ_ONLINE="${V19_CFGRL_KQ_ONLINE:-1024}"
-export V19_CFGRL_KPI_ONLINE="${V19_CFGRL_KPI_ONLINE:-512}"
+export V19_CFGRL_KQ="${V19_CFGRL_KQ:-4096}"
+export V19_CFGRL_KPI="${V19_CFGRL_KPI:-2048}"
+export V19_CFGRL_KQ_ONLINE="${V19_CFGRL_KQ_ONLINE:-2048}"
+export V19_CFGRL_KPI_ONLINE="${V19_CFGRL_KPI_ONLINE:-1024}"
+export V19_CFGRL_O_DIM="${V19_CFGRL_O_DIM:-128}"
+export V19_HIDDEN="${V19_HIDDEN:-1024}"
+export V19_N_HIDDEN_ACTOR="${V19_N_HIDDEN_ACTOR:-5}"
+export V19_N_HIDDEN_CRITIC="${V19_N_HIDDEN_CRITIC:-4}"
+export V19_Z_EXPAND_DIM="${V19_Z_EXPAND_DIM:-512}"
+export V19_LAYERNORM_HEADS="${V19_LAYERNORM_HEADS:-1}"
+export V19_POSE_CYCLE="${V19_POSE_CYCLE:-24}"
+if (( V19_POSE_CYCLE < 1 )); then
+  echo "[v19] V19_POSE_CYCLE must be >= 1" >&2
+  exit 1
+fi
 export RLT_CF_V19_RUN_DIR="${RUN_DIR}"
 # Re-exec so RLT_CF_V19_RUN_DIR is in the *initial* /proc/pid/environ.
 # stop_run.sh keys off that file, which does not see later bash exports.
@@ -150,11 +168,9 @@ if (( NUM_GPUS < 1 || NUM_GPUS > 8 )); then
   echo "[v19] need 1-8 GPUs, got ${NUM_GPUS}" >&2
   exit 1
 fi
-# 4 workers / GPU, 1 EGL context / GPU (3 workers wait). Three concurrent
-# MjOpenGLRenderer contexts on one device abort in mjr_readPixels after the
-# first env chunk, so the sim looks stuck at 100% GPU with n_steps≈8.
-# Machine-wide cap is per_gpu × n_gpus so both devices still render.
-RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU:-1}"
+# 4 workers / GPU, 3 EGL contexts / GPU (1 worker waits). Isolated CUDA-free
+# children own EGL. Machine-wide cap is per_gpu × n_gpus so all devices render.
+RLT_EGL_PER_GPU="${RLT_EGL_PER_GPU:-3}"
 if (( RLT_EGL_PER_GPU < 1 )); then
   echo "[v19] RLT_EGL_PER_GPU must be >= 1" >&2
   exit 1
@@ -305,6 +321,9 @@ start_trainer() {
   set_cli_arg --tmp_rollout_dir "${TMP_ROLLOUT_DIR}/${VARIANT}_s${shard}"
   set_cli_arg --server_port "${port}"
   set_cli_arg --seed "$((20260817 + shard * 17))"
+  set_cli_arg --start_episode "0"
+  set_cli_arg --shard_size "${V19_POSE_CYCLE}"
+  set_cli_arg --benchmark_pose_cycle "${V19_POSE_CYCLE}"
   set_cli_arg --cfgrl_n_shards "${TOTAL_SHARDS}"
   local quota
   quota="$(shard_quota "${shard}")"
@@ -332,7 +351,10 @@ start_trainer() {
       RLT_VLA_PREFETCH_REQUIRE_OBS_MATCH="${RLT_VLA_PREFETCH_REQUIRE_OBS_MATCH}" \
       RLT_ISOLATED_ROLLOUT="${RLT_ISOLATED_ROLLOUT:-1}" \
       RLT_ISOLATED_ATTEMPTS="${RLT_ISOLATED_ATTEMPTS:-4}" \
+      RLT_ISOLATED_TIMEOUT_SEC="${RLT_ISOLATED_TIMEOUT_SEC:-720}" \
+      RLT_ISOLATED_STARTUP_SEC="${RLT_ISOLATED_STARTUP_SEC:-180}" \
       RLT_ISOLATED_GL="${RLT_ISOLATED_GL:-egl}" \
+      V19_POSE_CYCLE="${V19_POSE_CYCLE}" \
       PYTHONFAULTHANDLER=1 \
       PYTHONUNBUFFERED=1 \
       "${GENERATED_COMMAND[@]}"
@@ -363,16 +385,17 @@ cat > "${RUN_DIR}/MANIFEST.json" <<EOF
   "phase_rounds": ${V19_PHASE_ROUNDS},
   "phase_b_episodes_per_shard": ${V19_PHASE_B_EPISODES},
   "phase_probe": true,
-  "phase_probe_n": 24,
+  "phase_probe_n": ${V19_POSE_CYCLE},
   "phase_barrier": true,
   "online_collect_eps_pooled": ${V19_TOTAL_VALID_EPISODES},
   "benchmark_train": "${TRAIN_BENCHMARK}",
   "benchmark_val_holdout": "${VAL_BENCHMARK}",
   "val_episodes_unused": 12,
+  "pose_cycle": ${V19_POSE_CYCLE},
   "flow_checkpoint": "${FLOW_CKPT}",
   "seed_replay": "${V19_SEED_REPLAY}",
   "ports": {"base": ${BASE_HTTP_PORT}, "count": ${NUM_GPUS}},
-  "note": "Phase SR covers all 24 train poses with a fixed set (8 workers x 3 or 32 x 1). Barrier waits after each phase. Collect is ${V19_TOTAL_VALID_EPISODES} random-pose eps pooled. Val split unused.",
+  "note": "Phase SR covers ${V19_POSE_CYCLE} train pose(s); every worker uses start_episode=0. Barrier waits after each phase. Collect is ${V19_TOTAL_VALID_EPISODES} eps pooled from that pose set. Val split unused.",
   "launched_at": "$(date -Is)"
 }
 EOF
@@ -404,7 +427,7 @@ echo "[v19 $(date -Is)] initial launch complete; polling every ${POLL_SEC}s"
 echo "[v19] val holdout unused: ${VAL_BENCHMARK}"
 echo "[v19] packing: ${NUM_GPUS} GPU x ${INSTANCES_PER_GPU} = ${TOTAL_SHARDS} shards, ports ${BASE_HTTP_PORT}-$((BASE_HTTP_PORT + NUM_GPUS - 1))"
 echo "[v19] EGL: PER_GPU=${RLT_EGL_PER_GPU} MAX_CONCURRENT=${RLT_EGL_MAX_CONCURRENT} (both GPUs render; $((INSTANCES_PER_GPU - RLT_EGL_PER_GPU)) of ${INSTANCES_PER_GPU} workers wait per GPU)"
-echo "[v19] phase SR: fixed 24-pose set across ${V19_PHASE_ROUNDS} A/B rounds; collect pose is random; barrier waits after each probe"
+echo "[v19] phase SR: pose_cycle=${V19_POSE_CYCLE} (all workers start_episode=0) across ${V19_PHASE_ROUNDS} A/B rounds; barrier waits after each probe"
 
 while true; do
   sleep "${POLL_SEC}"
@@ -441,6 +464,7 @@ while true; do
     --run-dir "${RUN_DIR}" \
     --shards "${TOTAL_SHARDS}" \
     --rounds "${V19_PHASE_ROUNDS}" \
+    --poses "${V19_POSE_CYCLE}" \
     --variant "${VARIANT}" >/dev/null || true
   if (( done_shards == TOTAL_SHARDS )); then
     echo "[v19 $(date -Is)] all ${TOTAL_SHARDS} shards complete"
@@ -448,6 +472,7 @@ while true; do
       --run-dir "${RUN_DIR}" \
       --shards "${TOTAL_SHARDS}" \
       --rounds "${V19_PHASE_ROUNDS}" \
+      --poses "${V19_POSE_CYCLE}" \
       --variant "${VARIANT}" || true
     break
   fi

@@ -30,6 +30,7 @@ from rlt_models import (
 from train_rlt import (
     _batch_state,
     _flow_reverse_state,
+    _index_batch_rows,
     ae_flow_critic_td_step,
     flow_gate_metrics,
     guide_step,
@@ -612,6 +613,22 @@ def test_zero_rl_feature_is_rejected():
             None,
             None,
         )
+
+
+def test_index_batch_rows_handles_numpy_and_tensors() -> None:
+    batch_size = 4
+    row_index = torch.tensor([0, 2])
+    batch = {
+        "t": torch.arange(4),
+        "n": np.arange(4),
+        "l": ["a", "b", "c", "d"],
+        "scalar": 7,
+    }
+    sub = _index_batch_rows(batch, row_index, batch_size)
+    assert list(sub["t"].tolist()) == [0, 2]
+    assert list(sub["n"]) == [0, 2]
+    assert sub["l"] == ["a", "c"]
+    assert sub["scalar"] == 7
 
 
 def test_eval_only_configuration_disables_training_and_exploration(monkeypatch):

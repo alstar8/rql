@@ -1,12 +1,14 @@
 # V19: iterated CFGRL extractor on frozen MolmoAct2 (corrected)
 
-**Status (2026-08-19).** 3 concurrent EGL/GPU aborted in `mjr_readPixels` after the first chunk (~8 steps, then SIGABRT ~10 min). Phase 0 stayed 0/24. Packing is now **4 workers/GPU**, **1 EGL/GPU** (3 wait), machine-wide cap `n_gpu×1` so **both GPUs still render**. Isolated CUDA-free children; parents retry on abort. `runs/rlt_cf_v19_kettle/`. Train split only.
+**Status (2026-08-20).** Live **single-pose learnability** run in `runs/rlt_cf_v19_kettle/` (launched 2026-08-19T19:12Z). 8 H100 × 4 trainers, 3 EGL/GPU (1 of 4 waits), isolated CUDA-free children. All 32 workers share **one** house0 kettle spec (`house0_kettle_v13` train[0], seed `1479405276`). 100 CPI rounds scheduled; through **4B complete**, **5A** in progress. Val still unused. See §10 for packing, protocol deltas, and the phase-SR chain.
 
-**Intent (unchanged).** Same kettle task, same frozen VLA prior, RLT token + critic + a small actor, in an offline-fit / online-collect loop.
+Earlier 2-GPU attempt: 3 concurrent EGL/GPU aborted in `mjr_readPixels` after the first chunk. Isolated children + per-GPU EGL flock recovered it; this 8-GPU run has had **no** SIGABRT / watchdog restarts.
+
+**Intent (unchanged).** Same kettle task, same frozen VLA prior, RLT token + critic + a small actor, in an offline-fit / online-collect loop. The one-pose cut is only to ask whether CFGRL can move SR on a *fixed* seed, not a new algorithm.
 
 **What changed vs the original V19 sketch.** That sketch stacked CFGRL + CF \(\nabla Q\) guide + Q-max actor, moved the VLA prior (LoRA VLM / full AE), and froze \(Q\) while collecting. CFGRL replaces the *actor / BC extractor*, not the critic and not ConsensusFlow. Molmo stays frozen (no VLM LoRA, no AE full-tune, no joint denoising). One flow net, not actor+AE+guide stacked on the same ODE.
 
-**What the 100-round run showed (do not ignore).**
+**What the previous 24-pose 100-round run showed (do not ignore).**
 - Phase SR oscillated 0–19% with **no trend**. A vs next B deltas were \(\pm 12\)pp — binomial noise, not learning. Phase B does not update the actor.
 - **Four train poses** (ids 1, 2, 16, 19) sit at ~30–39% SR; most of the other 20 are ~0%. Rotating the extra 8/32 probes by phase made “SR went up” equal “this phase double-counted easy poses.”
 - Frozen VLA on this 32-ep set is ~3–8%, **not** the 22% buffer SR (buffer sampling is not this pose set).
@@ -249,4 +251,70 @@ Stop: `bash stop_run.sh runs/rlt_cf_v19_kettle`
 Live table: `runs/rlt_cf_v19_kettle/PHASE_SR.md` (rewritten every watchdog poll). Per-shard rows: `flow_cfgrl/shard_*/phase_probe.jsonl`. Collect pose is random; **probe poses are fixed per worker**. After each probe the worker waits until all shards have that phase.
 
 The 12-episode val directory is recorded in `MANIFEST.json` as holdout and is never passed to `--benchmark_dir`.
+
+One-pose learnability relaunch (what is running now):
+
+```bash
+GPU_IDS=0,1,2,3,4,5,6,7 INSTANCES_PER_GPU=4 RLT_EGL_PER_GPU=3 \
+  V19_MODE=long V19_POSE_CYCLE=1 FRESH=1 \
+  BENCHMARK_ROOT=runs/benchmarks/house0_kettle_v19_one \
+  bash launch_v19_rlt_cfgrl.sh
+```
+
+---
+
+## 10. This run: single-pose learnability (2026-08-19 →)
+
+### Why this cut
+
+The 24-pose probe mixed four easy ids (1, 2, 16, 19 at ~30–39% SR) with ~20 zeros. Fleet SR then moved when the extra 8/32 workers rotated which easy pose they double-counted. A vs B deltas of \(\pm 12\)pp were binomial, not learning. To test whether CFGRL can improve *anything*, every worker now rolls the **same** train spec: `runs/benchmarks/house0_kettle_v19_one/train` = `house0_kettle_v13/train[0]` (`traj_0_3`, seed `1479405276`). Matching 1-ep val json exists and is still **not** passed to trainers. Probe assignment is pose \(0\) for all 32 shards (`--start_episode 0`, `--shard_size 1`, `--benchmark_pose_cycle 1`). Collect is the same pose (uniform draw over \(\{0\}\)).
+
+The 1200-traj offline buffer is **unchanged** (mixed poses, ~22% SR). Phase A still fits on that buffer plus the new same-pose collect. Only env episodes (probe + Phase B) are pinned.
+
+### What actually launched (vs the sketch above)
+
+| Item | Sketch (§1–9) | This run |
+| --- | --- | --- |
+| GPUs / trainers | 2×4 or 8×4 | **8×4 = 32** shards, ports 8760–8767 |
+| EGL | 1/GPU (3 wait) | **3/GPU**, cap 24; 1 of 4 waits. Isolated children (`RLT_ISOLATED_ROLLOUT=1`) |
+| Pose set | 24 train specs | **1** spec, 32 independent trials / phase |
+| CPI rounds | 12 | **100** (`V19_PHASE_ROUNDS=100`) |
+| \(K_Q / K_\pi\) | 2048/1024 then 1024/512 | **4096/2048** round 0, then **2048/1024** |
+| Actor width | — | `hidden=1024`, `z_expand=512`, `o_dim=128`, layernorm |
+| Collect pooled | \(N\times 12\) | \(32\times 100=3200\) (1 ep / worker / round) |
+| Barrier | on | on; `PHASE_SR.md` shows one in-progress phase |
+
+### Phase SR (n=32 repeats of episode 0)
+
+From `runs/rlt_cf_v19_kettle/PHASE_SR.md` at 2026-08-19T21:44Z. \(1/n=3.1\)pp. Criterion in §7: a later actor probe beats Phase 0 by **more than** \(1/n\) (SR \(>6.2\%\)).
+
+| Phase | Policy | successes | SR | vs Phase 0 |
+| --- | --- | ---: | ---: | --- |
+| 0 | frozen VLA | 1/32 | **3.1%** | baseline |
+| 1A | actor \(w=0.5\) | 0/32 | 0.0% | −3.1pp |
+| 1B | actor \(w=0.5\) | 2/32 | 6.2% | +3.1pp (tie at \(1/n\)) |
+| 2A | actor \(w=0.5\) | 2/32 | 6.2% | +3.1pp |
+| 2B | actor \(w=0.5\) | 4/32 | **12.5%** | +9.4pp (only clear beat) |
+| 3A | actor \(w=0.5\) | 2/32 | 6.2% | +3.1pp |
+| 3B | actor \(w=0.5\) | 2/32 | 6.2% | +3.1pp |
+| 4A | actor \(w=0.5\) | 0/32 | 0.0% | −3.1pp |
+| 4B | actor \(w=0.5\) | 1/32 | 3.1% | 0 |
+| 5A | actor \(w=0.5\) | 23/32 in flight | ~4% | pending |
+
+A vs next B still jumps by 0–6pp on this *fixed* pose. That is \(n=32\) Bernoulli noise (se \(\approx 3\)pp at \(p=0.03\)), not a new extractor: Phase B does not update actor weights.
+
+### What the extractor did do (do not ignore)
+
+- **Uncond clone worked.** Shard 0 Phase A: `uncond_ref_mse` 0.0065 → 0.0014 (\(\le 0.02\)). Deploy \(w=0.5\) from round 0 onward (`cfgrl_w=0.5` on every actor probe). This is the CFGRL product-policy mix, not the last run’s \(w=1\) that discarded \(\hat\pi\).
+- **Stratified batches.** Every Phase A log has `pos=0.50`. No `o=NEG` failure BC.
+- **`adv=False` every round.** Critic not healthy (`critic_healthy=false`, LCB 0, `empirical_insufficient_episodes`). Labels stay episode-success (CFGRL-GCBC), not \(A\ge 0\).
+- **BC drifted 0.094 → 0.048** over rounds 0–4 (flow-matching residual, not a success-rate).
+- **Collect mixture followed the rA rule.** After **1A = 0%** \(<\) Phase 0, round-1 collect was VLA (`episode_collect_policy=reference`). After **2A = 6.2%** \(\ge\) Phase 0 \(-\,1/n\), some shards mixed actor (`mixture_actor`). After **4A = 0%** the gate closes again. Ignore rB for this decision (same actor, extra noise).
+- **EGL packing held.** No `mjr_readPixels` abort, no watchdog restarts, 32/32 trainers live through 4B.
+
+### What it did not do
+
+CFGRL is **not** yet a reliable extractor on this seed. Phase 0 is 3% (this pose is hard; the 22% buffer SR is a different distribution). The only complete probe that clearly beat the prior is **2B 12.5%**, and the next two A/B pairs fell back to 0–6%. Actor Phase A still trains on the **mixed 1200-traj buffer** (~267 success eps / 1200), so the cond head is not overfitting this one pose. Critic never crossed the health gate, so advantage labels never replaced the success bit.
+
+**Read the chain 0 → 1A → … → 4B as “clone is good, SR is still binomial.”** Keep the run going; do not declare a win from 2B alone, and do not revert \(w=0.5\) or re-open 24-pose rotation.
  
