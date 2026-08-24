@@ -1,0 +1,9 @@
+{
+  "template": "train_k00 (v13 train[0])",
+  "jitter_m": 0.02,
+  "train_repeats": 48,
+  "eval_repeats": 48,
+  "train_seed": 0,
+  "eval_seed": 1000,
+  "note": "Mug-style: same hard pose, \u00b12cm XY, disjoint train/eval samples."
+}

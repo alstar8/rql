@@ -1,0 +1,18 @@
+{
+  "token_replay": "/home/jovyan/users/staroverov/pi05_molmospaces/rlt_tokens_step_time/desk_mug/*.npz",
+  "token_cache": "",
+  "out": "/home/jovyan/users/staroverov/pi05_molmospaces/pi05_runs/token_ae_step_time/ae_desk_mug.pt",
+  "z_dim": 256,
+  "d_model": 256,
+  "n_heads": 4,
+  "n_layers": 2,
+  "steps": 8000,
+  "batch_size": 8,
+  "lr": 0.0001,
+  "grad_clip": 1.0,
+  "max_sequences": 6000,
+  "device": "cuda:2",
+  "seed": 0,
+  "log_every": 100,
+  "tb_dir": ""
+}

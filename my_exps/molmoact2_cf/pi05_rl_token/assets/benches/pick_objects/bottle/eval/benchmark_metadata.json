@@ -1,0 +1,43 @@
+{
+  "description": "JSON benchmark from FrankaPickDroidMiniBench_20251231_benchmark",
+  "created_at": "2026-01-23T19:04:14.057288",
+  "source_datagen_path": "/weka/prior/datasets/robomolmo/bench/FrankaPickDroidMiniBench_20251231_benchmark",
+  "num_episodes": 1000,
+  "num_houses": 666,
+  "task_cls_counts": {
+    "molmo_spaces.tasks.pick_task.PickTask": 1000
+  },
+  "object_category_counts": {
+    "kettle": 56,
+    "spatula": 56,
+    "knife": 56,
+    "spray bottle": 56,
+    "pot": 56,
+    "mug": 56,
+    "bowl": 56,
+    "fork": 56,
+    "s/p shaker": 56,
+    "cup": 56,
+    "remote control": 55,
+    "ladle": 55,
+    "tissue paper": 55,
+    "spoon": 55,
+    "soap dispenser": 55,
+    "bottle": 55,
+    "fruit": 55,
+    "box": 55
+  },
+  "robot_counts": {
+    "franka_droid": 1000
+  },
+  "episode_length_stats": {
+    "min": 30.0,
+    "max": 101.0,
+    "mean": 47.382,
+    "median": 47.0
+  },
+  "house_counts": null,
+  "camera_system_class": "FrankaDroidCameraSystem",
+  "source_data_date": "2025-12-31",
+  "benchmark_created_date": "2026-01-23"
+}

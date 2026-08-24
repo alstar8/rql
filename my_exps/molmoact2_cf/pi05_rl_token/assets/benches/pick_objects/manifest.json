@@ -1,0 +1,174 @@
+{
+  "source": "/home/jovyan/users/staroverov/B1K/mlspaces/cache/benchmarks/molmospaces-bench-v1/20260408/procthor-10k/FrankaPickDroidMiniBench/FrankaPickDroidMiniBench_json_benchmark_20251231",
+  "jitter_m": 0.02,
+  "train_repeats": 48,
+  "eval_repeats": 48,
+  "train_seed": 0,
+  "eval_seed": 1000,
+  "skipped": [
+    "mug (desk_mug ep 9)",
+    "kettle (house0 ep 0)"
+  ],
+  "objects": [
+    {
+      "name": "remote",
+      "val_episode": 1,
+      "task": "pick up the remote.",
+      "house": 1,
+      "asset": "remotecontrol_488ea7924f7cb4d329c991926df62222_2_0_2",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 1, house 1), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "ladle",
+      "val_episode": 2,
+      "task": "pick up the ladle.",
+      "house": 10,
+      "asset": "ladle_7a7203c58f86b622645b1721d02cab3c_1_0_6",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 2, house 10), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "tissue",
+      "val_episode": 3,
+      "task": "pick up the tissue.",
+      "house": 10,
+      "asset": "tissuepaper_1f28299e6e99a63de7abb400051cb351_1_0_4",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 3, house 10), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "spoon",
+      "val_episode": 5,
+      "task": "pick up the spoon.",
+      "house": 101,
+      "asset": "spoon_573130d7496422c068be3abf14b0dcf0_1_0_6",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 5, house 101), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "spatula",
+      "val_episode": 6,
+      "task": "pick up the spatula.",
+      "house": 101,
+      "asset": "spatula_291e31b285474249721c8a7b1bac877a_1_0_6",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 6, house 101), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "pot",
+      "val_episode": 10,
+      "task": "pick up the pot.",
+      "house": 104,
+      "asset": "pot_e48cd3dc3aab8474de97f333d916c74d_1_0_8",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 10, house 104), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "soap_dispenser",
+      "val_episode": 12,
+      "task": "pick up the bottle.",
+      "house": 105,
+      "asset": "soapdispenser_b8726504edf0a781770524a38cc81949_1_0_8",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 12, house 105), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "spray_bottle",
+      "val_episode": 14,
+      "task": "pick up the bottle.",
+      "house": 106,
+      "asset": "atomizer_e0cab0ef1fe80f6fe596048b9bc862a1_1_0_2",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 14, house 106), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "cup",
+      "val_episode": 18,
+      "task": "pick up the cup.",
+      "house": 108,
+      "asset": "cup_ff2c6ab62ccb690220c97cdcfeb658c5_1_0_2",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 18, house 108), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "shaker",
+      "val_episode": 20,
+      "task": "pick up the pepper.",
+      "house": 109,
+      "asset": "peppershaker_3a733d98b3ae7ba0be9ab3ea786d56b0_1_0_2",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 20, house 109), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "fork",
+      "val_episode": 29,
+      "task": "pick up the fork.",
+      "house": 115,
+      "asset": "fork_a17d780ca6a79038b069eb7768c962c4_1_0_8",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 29, house 115), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "bottle",
+      "val_episode": 41,
+      "task": "pick up the bottle.",
+      "house": 126,
+      "asset": "winebottle_201eb4050e30f10e57909e4c975910e9_1_0_6",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 41, house 126), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "fruit",
+      "val_episode": 43,
+      "task": "pick up the apple.",
+      "house": 127,
+      "asset": "apple_038a0ea9b393da66a161da588e6ecc2a_1_0_2",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 43, house 127), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "bowl",
+      "val_episode": 44,
+      "task": "pick up the bowl.",
+      "house": 128,
+      "asset": "bowl_be7868e9f68042e57983c0b0aeec19df_1_0_2",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 44, house 128), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "knife",
+      "val_episode": 54,
+      "task": "pick up the knife.",
+      "house": 136,
+      "asset": "butterknife_b2b8a251c5e331c4017267a6e05c76d5_1_0_6",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 54, house 136), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    },
+    {
+      "name": "box",
+      "val_episode": 55,
+      "task": "pick up the box.",
+      "house": 137,
+      "asset": "box_f6e09f3868d4ffa7924a0719511c099d_1_0_4",
+      "gate_step": 40,
+      "horizon": 500,
+      "note": "Pick-v1.1 object dataset, mug/kettle construction: first held-out episode (val 55, house 137), \u00b12 cm XY jitter, 48 train / 48 eval. Frozen pi0.5 collect of 100 train trajectories. Gate 40 is the project default (no contact sheet)."
+    }
+  ]
+}

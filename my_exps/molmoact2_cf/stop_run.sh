@@ -47,7 +47,8 @@ belongs_to_run() {
         "RLT_CF_V16_RUN_DIR=${RUN_DIR}"|\
         "RLT_CF_V17_RUN_DIR=${RUN_DIR}"|\
         "RLT_CF_V18_RUN_DIR=${RUN_DIR}"|\
-        "RLT_CF_V19_RUN_DIR=${RUN_DIR}")
+        "RLT_CF_V19_RUN_DIR=${RUN_DIR}"|\
+        "RLT_CF_V20_RUN_DIR=${RUN_DIR}")
           return 0
           ;;
       esac
@@ -57,6 +58,7 @@ belongs_to_run() {
     entry="$(tr '\0' ' ' < "${cmdline}")"
     [[ "${entry}" == *"${RUN_DIR}"* ]] && return 0
     [[ "${entry}" == *"launch_v19_rlt_cfgrl.sh"* ]] && return 0
+    [[ "${entry}" == *"launch_v20_rlt_cfgrl.sh"* ]] && return 0
   fi
   return 1
 }
