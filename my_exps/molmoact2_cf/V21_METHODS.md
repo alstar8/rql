@@ -34,9 +34,9 @@ RGB, proprio, language
 ```
 
 The actor emits the action chunk in **one forward pass** and is anchored to the
-VLA reference by the Eq. 5 term `-Q(s, a) + beta * ||a - ã||²`. `beta=1` for the
-original mug/kettle runs; later work uses `beta=100` (calibrated for the delta
-action space).
+VLA reference by the Eq. 5 term `-Q(s, a) + beta * ||a - ã||²`. **Default
+`beta=1`** (paper value). Some later mug-comparison and Pick-18 runs were
+launched with `beta=100`; those are labeled below.
 
 - AE training: `python -m rlt.train_token_ae`, 8000 steps, cap 6000 sequences.
   Tokens are recorded for the whole episode.
@@ -84,11 +84,11 @@ the stored-actor series.
 The finished 1-GPU kettle run (`runs/beta1_1gpu/kettle`, probe off) reached
 238/300 = 79.3% online, last-10 **9/10 = 90%**, same 62/64 held-out.
 
-## Controlled mug comparison (beta=100, shared buffer + AE + pi0.5)
+## Controlled mug comparison (those runs used beta=100, shared buffer + AE + pi0.5)
 
 The V21 arm of `pipeline_mug_compare.sh` — same 100-trajectory buffer
 (`beta1_jitter_ac` mug collect, 3112 rows), same `beta1_from_scratch` AE,
-frozen pi0.5, beta=100, 300 episodes. That table used catalog gate 56 (the
+frozen pi0.5, **beta=100** (not the current default), 300 episodes. That table used catalog gate 56 (the
 default at the time). Run dir `runs/compare_mug/`. Probe 10, not stored.
 
 | Arm | Gate | Probe | Online SR | Last-10 | Held-out eval48 |

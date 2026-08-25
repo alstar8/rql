@@ -659,25 +659,11 @@ class RLConfig:
 
     # --- learning knobs worth seeing at this level; the rest are in rlt/config.py ---
     sigma: float = 0.02  #: exploration std of the Gaussian actor
-    #: Pull toward the VLA reference chunk (paper Eq. 5).
-    #:
-    #: 100, measured on desk_mug 2026-08-21. The paper's 1.0 is calibrated for an actor
-    #: working on ABSOLUTE joint targets, where the reference has magnitude ~0.7 rad. We
-    #: refine DELTAS, magnitude ~0.009 rad, and the penalty beta*||a - a_ref||^2 scales
-    #: with the square of that -- so the same 1.0 is roughly four orders of magnitude
-    #: weaker here, and the actor simply ignored the plan:
-    #:
-    #:     beta      rolling SR       deviation from plan   roughness vs plan
-    #:        1          0.91              197%                  x7.5
-    #:       10          0.97               72%                  x3.6
-    #:      100          1.00               67%                  x3.5
-    #:     1000          0.59              100%                  x4.3
-    #:
-    #: Raising it improved the rate AND the motion together -- there was no trade-off to
-    #: balance, only a mis-scaled constant. At x3.5 the roughness matches the MolmoAct2
-    #: runs (x4.4) that looked smooth on video. 1000 breaks learning instead of tightening
-    #: it: the rate falls back to the frozen VLA's own 62.5%.
-    beta: float = 100.0
+    #: Pull toward the VLA reference chunk (paper Eq. 5). Default is the paper
+    #: value 1.0. A 2026-08-21 desk_mug sweep found 100 tighter in delta space
+    #: (deviation 67% vs 197% at 1.0); those runs are labeled beta=100. 1000
+    #: collapses back to the frozen VLA.
+    beta: float = 1.0
     gamma: float = 0.99  #: per env step; the bootstrap carries gamma^chunk_size
     utd: int = 5  #: update-to-data ratio, per stored transition
     seed: int = 0

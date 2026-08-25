@@ -11,8 +11,8 @@ run), trained on real mug rollouts with the TD target clipped to [0, 1]. Frozen
 alone is not enough: a ReLU MLP critic extrapolates without bound off its data
 manifold, and a bare -Q ascent finds those rays within a few dozen steps (measured
 2026-08-24: actor_q ~ 1e22 by offline step 50). So the actor keeps the paper's
-Eq. 5 anchor, -Q(s, a) + beta * ||a - a_ref||^2 with beta = 100, the value this
-project calibrated for the delta action space. The anchor gradient grows linearly
+Eq. 5 anchor, -Q(s, a) + beta * ||a - a_ref||^2 with beta = 1 (paper default).
+The anchor gradient grows linearly
 with the deviation while the critic's is piecewise constant, so the ascent is
 confined to the trust region where the frozen critic is meaningful. The flow actor
 is the only RL-trained module: pi0.5, the token encoder that builds z_rl, and the
@@ -82,7 +82,7 @@ class FlowRLTAgent:
         # Eq. 5 anchor weight. RLConfig passes its calibrated delta-space value
         # (100); OnlineConfig's own default 1.0 is calibrated for absolute actions
         # and leaves the flow actor free to walk off the critic's data manifold.
-        self.beta = float(getattr(cfg, "beta", 100.0))
+        self.beta = float(getattr(cfg, "beta", 1.0))
         self.ema = float(getattr(cfg, "cf_ema", 0.999))
         self.ae_coef = float(getattr(cfg, "ae_finetune_coef", 1.0))
 

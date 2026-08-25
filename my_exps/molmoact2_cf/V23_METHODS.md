@@ -15,6 +15,7 @@ CFTrunk, ensemble critic heads, zero-init guide head).
   `W` zero-init MLP on top of a shared trunk; state features `x = (z_rl, proprio)`.
 - Actor loss (Eq. 5): `E[ ||x'_1 - x_ref||^2 - beta * min_k Q_k(s, x'_1) ]`,
   endpoint from a 10-step guided unroll, anchor to the VLA reference chunk.
+  **Default `beta=1`** (same as V21/V22).
 - Critic: twin Q (min over ensemble), TD with target networks, clipped targets,
   bootstrapped with `a'(s')` from the target actor.
 - Pretrain AC on 100 frozen-VLA episodes (actor_coef=0), then probe, then online RL.
@@ -72,8 +73,7 @@ Actor (Eq. 5 anchor + Q-ascent):
 - `x_guided` = 10-step unroll with `v = sg(v_theta) - guidance_coef * W(phi, x_t, t)`,
   gradients flow through `W` (and the pool/trunk via `phi`).
 - `L_actor = ||x_guided - x_ref||^2 / D  -  beta * min_k Q_k(s, x_guided)`,
-  `D = 32*32 = 1024`, `beta = cf_anchor_beta = 6.25` (calibrated to the 1024-dim
-  chunk so the anchor trust region matches V22's).
+  `D = 32*32 = 1024`, **`beta = cf_anchor_beta = 1`** (paper / V21–V22 default).
 - `L = L_td + cf_actor_coef * L_actor + cf_w_l2 * ||W||^2`.
 - No SPSA distill, no `safe()` shaping, no `t_max` gate (V17 leftovers removed from
   the V23 path). Guide acts on all 10 Euler steps, deployed the same way.

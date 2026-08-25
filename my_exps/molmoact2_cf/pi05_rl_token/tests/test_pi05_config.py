@@ -352,10 +352,7 @@ def test_evaluating_an_actor_with_catalog_gate_on_a_scene_without_one_is_refused
     assert "gate_step" in problem
 
 
-def test_beta_is_scaled_for_the_delta_action_space():
-    """The paper's beta=1.0 assumes a reference of ~0.7 rad (absolute joint targets). We
-    refine deltas of ~0.009 rad and the penalty goes as the square of that, so 1.0 leaves
-    the actor free to ignore the plan: measured deviation was 197% of the reference and
-    the motion was 7.5x rougher. At 100 it is 67% and 3.5x, with a higher success rate."""
-    assert RLConfig().beta == 100.0
+def test_beta_defaults_to_the_paper_value():
+    """Eq. 5 pull toward the VLA reference chunk. Default is the paper's 1.0."""
+    assert RLConfig().beta == 1.0
     assert RLConfig().rl_action_space == "delta"

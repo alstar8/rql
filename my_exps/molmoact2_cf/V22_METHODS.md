@@ -26,7 +26,8 @@ AE-ft 3/64 = 4.7%, kettle no-AE 1/64 = 1.6%, kettle AE-ft 0/64 = 0%.
 
 The Q signal is a **DoubleCritic** trained by TD with the target clipped to
 [0, 1]. The actor keeps the paper's Eq. 5 anchor, `-Q(s, a) + beta *
-||a - ã||²` with **beta=100** (the calibrated delta-space value). The anchor
+||a - ã||²` with **default beta=1**. Some mug-comparison and Pick-18 runs used
+`beta=100`; those are labeled below. The anchor
 gradient grows linearly with deviation while the critic's is piecewise constant,
 so the ascent stays in the trust region where the critic is meaningful. A frozen
 critic alone is not enough — a ReLU MLP extrapolates without bound off its data
@@ -58,11 +59,11 @@ offline-pretrained critic for the online phase (arm 2) or keeps TD running
   is **last-10** stored-actor SR (`sr_last10`).
 - Held-out eval: `agent.pt` on eval48, `--episodes 16` → 64 rollouts, same gate.
 
-## Controlled mug comparison (beta=100, shared buffer + AE + pi0.5)
+## Controlled mug comparison (those runs used beta=100, shared buffer + AE + pi0.5)
 
 `pipeline_mug_compare.sh`. All arms share the same 100-trajectory buffer
 (`beta1_jitter_ac` mug collect, 3112 rows), the same `beta1_from_scratch` mug AE
-(frozen encoder), frozen pi0.5, beta=100, 300 episodes. That table used catalog
+(frozen encoder), frozen pi0.5, **beta=100** (not the current default), 300 episodes. That table used catalog
 **gate 56**. Run dir `runs/compare_mug/`. Probe 10, not stored. Last-10 is
 recomputed from each `metrics.jsonl` success series (last 10 stored actor
 episodes).
@@ -109,7 +110,7 @@ requested.
 
 `pipeline_mug_flow_rlt.sh`, run dir `runs/v22_cf/mug_flow_rlt/`. Uses the
 finished V21 `beta1_jitter_ac` critic as a frozen external critic, reference-
-conditioned flow corrector, beta=100, base-AE finetune online. Catalog gate 56.
+conditioned flow corrector, **beta=100**, base-AE finetune online. Catalog gate 56.
 This was the first evidence the fix works before the controlled comparison.
 
 | Metric | s0 |
@@ -136,7 +137,8 @@ Construction matches mug/kettle: the chosen val episode is repeated with **±2 c
 XY jitter**, 48 train specs (seed 0) and 48 eval specs (seed 1000; unjittered
 template dropped so the halves are disjoint). Frozen pi0.5 then rolls **100 train
 trajectories** per task (horizon 500, kettle 400). Catalog `gate_step` is 56 for
-mug and 40 for the rest; **new runs use `gate_step=0`**.
+mug and 40 for the rest; **new runs use `gate_step=0`**. **Default `beta=1`**;
+the in-flight Pick-18 V21/cf_ae sweep was launched with `beta=100`.
 
 Collect SR is frozen-pi0.5 on those 100 train traj (not held-out eval). Mug:
 `runs/beta1_1gpu/desk_mug` (`collect_desk_mug_a`). Kettle: `runs/beta1_jitter_ac`

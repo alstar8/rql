@@ -11,7 +11,7 @@
 # isolate whether the flow actor needs an online critic.
 #
 # All arms share: the same 100-trajectory buffer, the beta1_from_scratch mug AE
-# (frozen encoder), beta=100, gate_step=0 (RL from the first env step),
+# (frozen encoder), beta=1, gate_step=0 (RL from the first env step),
 # episode_pool 0-11, 300 episodes.
 #
 #   GPUS="4 1 7" bash pipeline_mug_compare.sh      # one GPU per arm: v21 flow_frz flow_td
@@ -42,7 +42,7 @@ HORIZON=500
 EPISODES="${EPISODES:-300}"
 WARMUP=0
 OFFLINE_STEPS="${OFFLINE_STEPS:-8000}"
-BETA="${BETA:-100}"
+BETA="${BETA:-1}"
 AE_PATH="${RUN_DIR}/ae/ae_desk_mug.pt"
 
 for f in "${V21_AE}" "${BUFFER}"; do

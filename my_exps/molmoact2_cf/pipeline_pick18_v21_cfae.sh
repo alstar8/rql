@@ -6,7 +6,7 @@
 #      (mug/kettle reuse the already-trained AEs).
 #   2. Offline AC pretrain (8000 steps) then 300-ep online + held-out eval.
 #      V21 = one-pass Gaussian (rl_token). cf_ae = V = v_pi05_base + G with
-#      AE finetune. Same recipe as the mug comparison (beta=100, gate=0).
+#      AE finetune. Same recipe as the mug comparison (beta=1, gate=0).
 #
 # Collect did not dump replay shards, so the first AC pretrain per task
 # re-rolls 100 frozen-VLA train episodes (actor off) and writes buffer.npz.
@@ -30,7 +30,7 @@ read -r -a GPUS <<< "${GPUS:-0 1 2 3 4 5 6 7}"
 SLOTS_PER_GPU="${SLOTS_PER_GPU:-2}"
 EPISODES="${EPISODES:-300}"
 OFFLINE_STEPS="${OFFLINE_STEPS:-8000}"
-BETA="${BETA:-100}"
+BETA="${BETA:-1}"
 WARMUP=0
 
 OBJECTS=(remote ladle tissue spoon spatula pot soap_dispenser spray_bottle cup shaker fork bottle fruit bowl knife box)

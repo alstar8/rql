@@ -2,7 +2,7 @@
 # Mug cf_ae ablation: RL from env step 0 (no frozen-pi0.5 prefix).
 #
 # Same method as compare_mug/cf_ae (flow compose V=v_base+G, TD critic, AE finetune,
-# beta=100, shared buffer + AE + pretrained actor) except the actor drives from the
+# beta=1, shared buffer + AE + pretrained actor) except the actor drives from the
 # first env step. The previous cf_ae arm used the scene catalog gate (56).
 #
 #   GPU=0 PORT=8620 bash pipeline_mug_cf_ae_gate0.sh
@@ -23,7 +23,7 @@ PORT="${PORT:-8620}"
 HORIZON=500
 EPISODES="${EPISODES:-300}"
 WARMUP=0
-BETA="${BETA:-100}"
+BETA="${BETA:-1}"
 # 0 = RL from the first env step (the new default). Set GATE_STEP=56 to recover the
 # catalog prefix; any multiple of chunk_size 8 is a VLA prefix of that many steps.
 GATE_STEP="${GATE_STEP:-0}"

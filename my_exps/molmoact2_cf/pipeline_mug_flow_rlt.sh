@@ -4,7 +4,7 @@
 # Frozen: pi0.5, the RLT token encoder (V21 mug AE), and the RLT critic from the
 # finished V21 jitter_ac mug s1 run. Trained: the flow actor only, with
 # flow-matching BC to the VLA chunk plus the RLT Eq. 5 objective against the
-# frozen critic (-Q + beta*||a - a_ref||^2, beta=100). The base AE finetunes
+# frozen critic (-Q + beta*||a - a_ref||^2, beta=1). The base AE finetunes
 # inline (online) via reconstruction on the mug token corpus; the encoder that
 # builds z_rl for the buffer stays the frozen on-disk copy.
 #
@@ -78,7 +78,7 @@ setsid nohup env PYTHONUNBUFFERED=1 PYTHONPATH="${CODE}" RLT_VLA_TOKEN_DIM=2048 
     --set "algorithm=flow_rlt" \
     --set "token_ae=${AE_PATH}" \
     --set "rlt_critic=${RLT_CRITIC}" \
-    --set "beta=100" \
+    --set "beta=1" \
     --set "flow_actor_coef=0" \
     --set "horizon=${HORIZON}" \
     --set "episode_pool=0-47" \
@@ -111,7 +111,7 @@ start_rl() {
       --set "algorithm=flow_rlt" \
       --set "token_ae=${AE_PATH}" \
       --set "rlt_critic=${RLT_CRITIC}" \
-      --set "beta=100" \
+      --set "beta=1" \
       --set "horizon=${HORIZON}" \
       --set "seed=${seed}" \
       --set "init_buffer=${BUFFER}" \
