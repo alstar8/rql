@@ -121,3 +121,53 @@ This was the first evidence the fix works before the controlled comparison.
 
 Lower than the comparison arms because its critic is a *frozen* pre-trained one
 (no online TD) and it predates the shared-buffer controlled setup.
+
+## Molmo Pick-v1.1 object set (18 tasks)
+
+The 18-task sweep uses **MolmoSpaces Pick-v1.1** (`FrankaPickDroidMiniBench`,
+shipped val benchmark `molmospaces-bench-v1/20260408`). Episodes 0–127 are the
+held-out slice. Each **metadata category** in that slice contributes **one**
+episode: the first time the category appears. Mug (val 9) and kettle (val 0)
+already had jittered benches (`desk_mug`, `kettle`); the other 16 were built by
+`scripts/make_pick_object_benches.py` (manifest
+`pi05_rl_token/assets/benches/pick_objects/manifest.json`).
+
+Construction matches mug/kettle: the chosen val episode is repeated with **±2 cm
+XY jitter**, 48 train specs (seed 0) and 48 eval specs (seed 1000; unjittered
+template dropped so the halves are disjoint). Frozen pi0.5 then rolls **100 train
+trajectories** per task (horizon 500, kettle 400). Catalog `gate_step` is 56 for
+mug and 40 for the rest; **new runs use `gate_step=0`**.
+
+Collect SR is frozen-pi0.5 on those 100 train traj (not held-out eval). Mug:
+`runs/beta1_1gpu/desk_mug` (`collect_desk_mug_a`). Kettle: `runs/beta1_jitter_ac`
+shards a+b. Other 16: `runs/pick_objects/<obj>/collect/`. Macro **1028/1800 =
+57.1%**.
+
+| Scene | Val ep | House | Language | 100-traj collect |
+| --- | ---: | ---: | --- | ---: |
+| kettle | 0 | 0 | pick up the kettle. | 14/100 = 14.0% |
+| remote | 1 | 1 | pick up the remote. | 66/100 = 66.0% |
+| ladle | 2 | 10 | pick up the ladle. | 89/100 = 89.0% |
+| tissue | 3 | 10 | pick up the tissue. | 64/100 = 64.0% |
+| spoon | 5 | 101 | pick up the spoon. | 99/100 = 99.0% |
+| spatula | 6 | 101 | pick up the spatula. | 96/100 = 96.0% |
+| desk_mug | 9 | 104 | pick up the mug. | 52/100 = 52.0% |
+| pot | 10 | 104 | pick up the pot. | 52/100 = 52.0% |
+| soap_dispenser | 12 | 105 | pick up the bottle. | 48/100 = 48.0% |
+| spray_bottle | 14 | 106 | pick up the bottle. | 1/100 = 1.0% |
+| cup | 18 | 108 | pick up the cup. | 100/100 = 100.0% |
+| shaker | 20 | 109 | pick up the pepper. | 12/100 = 12.0% |
+| fork | 29 | 115 | pick up the fork. | 99/100 = 99.0% |
+| bottle | 41 | 126 | pick up the bottle. | 0/100 = 0.0% |
+| fruit | 43 | 127 | pick up the apple. | 52/100 = 52.0% |
+| bowl | 44 | 128 | pick up the bowl. | 100/100 = 100.0% |
+| knife | 54 | 136 | pick up the knife. | 9/100 = 9.0% |
+| box | 55 | 137 | pick up the box. | 75/100 = 75.0% |
+
+Language is the benchmark instruction, not always the scene name:
+`soap_dispenser` / `spray_bottle` / `bottle` all say "pick up the bottle"
+(`bottle` is the wine-bottle episode that the older `wine_bottle` scene rejected
+as wrong-object); `shaker` is "pick up the pepper."; `fruit` is "pick up the
+apple." `spray_bottle` is val 14 (same episode as `atomizer`). `ladle` is val 2
+(same episode as `house10`). Later repeats of the same category in val 0–127 are
+not used.

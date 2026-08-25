@@ -38,7 +38,11 @@ read -r -a TASKS <<< "${TASKS:-desk_mug kettle ${OBJECTS[*]}}"
 
 mkdir -p "${RUN_DIR}/pids" "${RUN_DIR}/queue" "${LOCAL_LOG}"
 ln -sfn "${LOCAL_LOG}" "${RUN_DIR}/logs"
-echo $$ > "${RUN_DIR}/pids/pipeline.pid"
+if [[ "${SKIP_ENQUEUE:-0}" != "1" ]]; then
+  echo $$ > "${RUN_DIR}/pids/pipeline.pid"
+else
+  echo $$ > "${RUN_DIR}/pids/extra_workers.pid"
+fi
 
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="${CODE}${PYTHONPATH:+:${PYTHONPATH}}"
@@ -296,28 +300,32 @@ worker() {
 
 # ---- queue: mug/kettle methods can start immediately; AEs then the 16×2 sweep ----
 Q="${RUN_DIR}/queue/jobs.txt"
-: > "${Q}"
-{
-  for task in "${TASKS[@]}"; do
-    if [[ "${task}" == desk_mug || "${task}" == kettle ]]; then
-      echo "v21:${task}"
-      echo "cf_ae:${task}"
-    else
-      echo "ae:${task}"
-    fi
-  done
-  for task in "${TASKS[@]}"; do
-    if [[ "${task}" != desk_mug && "${task}" != kettle ]]; then
-      echo "v21:${task}"
-    fi
-  done
-  for task in "${TASKS[@]}"; do
-    if [[ "${task}" != desk_mug && "${task}" != kettle ]]; then
-      echo "cf_ae:${task}"
-    fi
-  done
-} >> "${Q}"
-log "queued $(grep -c . "${Q}") jobs on ${#GPUS[@]} GPUs × ${SLOTS_PER_GPU} slots"
+if [[ "${SKIP_ENQUEUE:-0}" != "1" ]]; then
+  : > "${Q}"
+  {
+    for task in "${TASKS[@]}"; do
+      if [[ "${task}" == desk_mug || "${task}" == kettle ]]; then
+        echo "v21:${task}"
+        echo "cf_ae:${task}"
+      else
+        echo "ae:${task}"
+      fi
+    done
+    for task in "${TASKS[@]}"; do
+      if [[ "${task}" != desk_mug && "${task}" != kettle ]]; then
+        echo "v21:${task}"
+      fi
+    done
+    for task in "${TASKS[@]}"; do
+      if [[ "${task}" != desk_mug && "${task}" != kettle ]]; then
+        echo "cf_ae:${task}"
+      fi
+    done
+  } >> "${Q}"
+  log "queued $(grep -c . "${Q}") jobs on ${#GPUS[@]} GPUs × ${SLOTS_PER_GPU} slots"
+else
+  log "SKIP_ENQUEUE: extra workers GPUs=${GPUS[*]} slots=${SLOTS_PER_GPU} queue=$(grep -c . "${Q}" || echo 0)"
+fi
 
 cd "${CODE}"
 pids=()
