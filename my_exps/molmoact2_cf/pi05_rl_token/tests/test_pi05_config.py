@@ -22,6 +22,7 @@ from pi05.config import (  # noqa: E402
     RLConfig,
     apply_overrides,
     describe,
+    gate_from_frac,
     load_run_config,
     needs_encoder,
     save_run_config,
@@ -224,6 +225,55 @@ def test_gate_step_minus_one_uses_the_scene_catalog():
     from pi05.config import SCENES
 
     assert RLConfig(scene="desk_mug", gate_step=-1).resolved_gate_step() == SCENES["desk_mug"].gate_step
+
+
+def test_ten_percent_gate_snaps_down_to_a_chunk_boundary():
+    """10% of 500 is 50, mid-chunk; snap down to 48. 10% of 400 is 40, already aligned."""
+    assert gate_from_frac(0.1, 500, 8) == 48
+    assert gate_from_frac(0.1, 400, 8) == 40
+    assert gate_from_frac(0.0, 500, 8) == 0
+    assert RLConfig(scene="desk_mug", gate_frac=0.1, horizon=500).resolved_gate_step() == 48
+    assert RLConfig(scene="kettle", gate_frac=0.1, horizon=400).resolved_gate_step() == 40
+
+
+def test_gate_frac_wins_over_gate_step():
+    """A fraction is the PI05-style prefix; an explicit step must not override it."""
+    cfg = RLConfig(scene="desk_mug", gate_step=56, gate_frac=0.1, horizon=500)
+    assert cfg.resolved_gate_step() == 48
+    ev = EvalConfig(
+        scene="desk_mug", actor="/tmp/a.pt", token_ae="/tmp/e.pt",
+        gate_step=56, gate_frac=0.1, horizon=500,
+    )
+    assert ev.resolved_gate_step() == 48
+
+
+def test_train_and_eval_share_a_fraction_gate():
+    train = RLConfig(scene="desk_mug", encoder="desk_mug", gate_frac=0.1, horizon=500)
+    eval_cfg = EvalConfig(
+        scene="desk_mug", actor="/tmp/a.pt", token_ae="/tmp/e.pt",
+        gate_frac=0.1, horizon=500,
+    )
+    assert train.resolved_gate_step() == eval_cfg.resolved_gate_step() == 48
+    kettle_train = RLConfig(scene="kettle", encoder="kettle", gate_frac=0.1, horizon=400)
+    kettle_eval = EvalConfig(
+        scene="kettle", actor="/tmp/a.pt", token_ae="/tmp/e.pt",
+        gate_frac=0.1, horizon=400,
+    )
+    assert kettle_train.resolved_gate_step() == kettle_eval.resolved_gate_step() == 40
+
+
+def test_gate_frac_outside_unit_interval_is_refused():
+    assert "gate_frac" in RLConfig(gate_frac=1.0).validate()
+    assert "gate_frac" in RLConfig(gate_frac=-0.1).validate()
+    assert "gate_frac" in EvalConfig(gate_frac=1.0).validate()
+
+
+def test_gate_frac_override_is_a_float():
+    cfg = RLConfig()
+    apply_overrides(cfg, ["gate_frac=0.1"])
+    assert cfg.gate_frac == pytest.approx(0.1)
+    assert cfg.gate_frac.__class__ is float
+    assert cfg.resolved_gate_step() == 48
 
 
 def test_an_unknown_encoder_lists_what_exists():

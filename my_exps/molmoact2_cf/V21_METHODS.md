@@ -7,8 +7,10 @@ reference one-pass method for the actor-architecture comparison.
 Code: `pi05_rl_token/` (`rlt/agent.py` `RLTokenAgent`, `rlt/networks.py`
 `Actor` + `DoubleCritic`). Checkpoint: `pi05_droid_finetune_pick_full_v3_39999`.
 Chunk 8, `step_time`, `rl_action_space=delta`. **Default: RL from env step 0**
-(no frozen-VLA prefix). Set `gate_step=N` to let pi0.5 run the first N steps, or
-`gate_step=-1` for the old scene catalog (mug 56, kettle 40).
+(no frozen-VLA prefix). Set `gate_step=N` to let pi0.5 run the first N steps,
+`gate_frac=0.1` for ~10% of the horizon snapped down to a chunk boundary (48 of
+500, 40 of 400), or `gate_step=-1` for the old scene catalog (mug 56, kettle 40).
+`gate_frac > 0` wins over `gate_step`. Train and eval must use the same gate.
 
 ## Method
 
@@ -97,3 +99,57 @@ default at the time). Run dir `runs/compare_mug/`. Probe 10, not stored.
 
 New runs default to `gate_step=0`. See `V22_METHODS.md` for the flow-actor arms
 and the gate-0 cf_ae ablation.
+
+## Molmo Pick-v1.1 object set (18 tasks)
+
+Same construction as the V22 sweep: per-task AE, 100 frozen-VLA train traj,
+`gate_step=0`, 300 online episodes, held-out eval48 (64 rollouts). V21 is the
+one-pass Gaussian arm of `pipeline_pick18_v21_cfae.sh`. **Default `beta=1`**;
+`runs/pick18/` used `beta=100`, `runs/pick18_beta1/` used `beta=1`.
+
+Plots: `runs/pick18/plots/` (`pick18_sr_heldout`, `pick18_sr_online`,
+`pick18_sr_curves`, `pick18_sr_macro`, `metrics.md`). All 18×2×2 held-out evals
+are 64 rollouts. Tasks sorted by 100-traj collect SR. Each RL cell is
+**probe after offline AC pretrain → held-out eval48**. Probe is 10 actor-only
+episodes, not stored. See `V22_METHODS.md` for the matching cf_ae table.
+
+| Task | collect | V21 $\beta{=}100$ | V21 $\beta{=}1$ |
+| --- | ---: | ---: | ---: |
+| bottle | 0/100 = 0.0% | 0/10 → 0/64 = 0.0% | 0/10 → 0/64 = 0.0% |
+| spray_bottle | 1/100 = 1.0% | 0/10 → 1/64 = 1.6% | 0/10 → 7/64 = 10.9% |
+| knife | 9/100 = 9.0% | 0/10 → 0/64 = 0.0% | 0/10 → 46/64 = 71.9% |
+| shaker | 12/100 = 12.0% | 6/10 → 19/64 = 29.7% | 3/10 → 27/64 = 42.2% |
+| kettle | 14/100 = 14.0% | 6/10 → 21/64 = 32.8% | 4/10 → 61/64 = 95.3% |
+| soap_dispenser | 48/100 = 48.0% | 0/10 → 64/64 = 100.0% | 0/10 → 57/64 = 89.1% |
+| desk_mug | 52/100 = 52.0% | 8/10 → 63/64 = 98.4% | 5/10 → 57/64 = 89.1% |
+| pot | 52/100 = 52.0% | 4/10 → 9/64 = 14.1% | 0/10 → 54/64 = 84.4% |
+| fruit | 52/100 = 52.0% | 0/10 → 24/64 = 37.5% | 0/10 → 10/64 = 15.6% |
+| tissue | 64/100 = 64.0% | 7/10 → 33/64 = 51.6% | 4/10 → 58/64 = 90.6% |
+| remote | 66/100 = 66.0% | 8/10 → 63/64 = 98.4% | 8/10 → 52/64 = 81.2% |
+| box | 75/100 = 75.0% | 3/10 → 62/64 = 96.9% | 6/10 → 63/64 = 98.4% |
+| ladle | 89/100 = 89.0% | 7/10 → 62/64 = 96.9% | 6/10 → 63/64 = 98.4% |
+| spatula | 96/100 = 96.0% | 10/10 → 64/64 = 100.0% | 7/7† → 63/64 = 98.4% |
+| spoon | 99/100 = 99.0% | 7/10 → 64/64 = 100.0% | 8/10 → 63/64 = 98.4% |
+| fork | 99/100 = 99.0% | 4/10 → 64/64 = 100.0% | 1/10 → 58/64 = 90.6% |
+| cup | 100/100 = 100.0% | 10/10 → 64/64 = 100.0% | 10/10 → 34/64 = 53.1% |
+| bowl | 100/100 = 100.0% | 10/10 → 64/64 = 100.0% | 10/10 → 64/64 = 100.0% |
+| **held-out macro** | **1028/1800 = 57.1%** | **741/1152 = 64.3%** | **837/1152 = 72.7%** |
+| **probe macro** | — | 90/180 = 50.0% | 65/170† = 38.2% |
+| **online macro** | — | 3346/5400 = 62.0% | 3165/5400 = 58.6% |
+
+† `spatula` $\beta{=}1$ crashed mid-probe and resumed into online; 7 logged
+probes, all successes. Held-out macros still use all 18×64.
+
+V21 is stronger at $\beta{=}1$ than at 100 on held-out. `bottle` stays 0/64.
+`knife` at $\beta{=}100$ is 0/64 held-out (19% online); cf_ae on the same
+buffer is 57/64 = 89.1% — see `V22_METHODS.md`. `cup` at $\beta{=}1$ is the
+main V21 regression vs collect (10/10 probe, then 34/64 = 53.1% held-out).
+
+## V21 $\beta{=}1$ Step=10% (frozen-VLA prefix)
+
+Same Pick-18 recipe as `runs/pick18_beta1/` (reuses those AEs and V21 pretrained
+actors) except online + eval set `gate_frac=0.1`. The frozen VLA runs a prefix
+equal to 10% of the horizon, snapped **down** to a chunk boundary so the
+handover is a decision point: **48 of 500** (9.6%), **40 of 400** on kettle
+(10.0%). Pretrain stays at gate 0 (actor off). Launcher:
+`pipeline_pick18_v21_stepfrac.sh`. Run dir `runs/pick18_beta1_step10/`.

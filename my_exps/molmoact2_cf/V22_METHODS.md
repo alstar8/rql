@@ -137,8 +137,9 @@ Construction matches mug/kettle: the chosen val episode is repeated with **±2 c
 XY jitter**, 48 train specs (seed 0) and 48 eval specs (seed 1000; unjittered
 template dropped so the halves are disjoint). Frozen pi0.5 then rolls **100 train
 trajectories** per task (horizon 500, kettle 400). Catalog `gate_step` is 56 for
-mug and 40 for the rest; **new runs use `gate_step=0`**. **Default `beta=1`**;
-the in-flight Pick-18 V21/cf_ae sweep was launched with `beta=100`.
+mug and 40 for the rest; **new runs use `gate_step=0`**. **Default `beta=1`**.
+The first Pick-18 V21/cf_ae sweep (`runs/pick18/`) used **`beta=100`**; the
+repeat (`runs/pick18_beta1/`) used **`beta=1`**.
 
 Collect SR is frozen-pi0.5 on those 100 train traj (not held-out eval). Mug:
 `runs/beta1_1gpu/desk_mug` (`collect_desk_mug_a`). Kettle: `runs/beta1_jitter_ac`
@@ -173,3 +174,55 @@ as wrong-object); `shaker` is "pick up the pepper."; `fruit` is "pick up the
 apple." `spray_bottle` is val 14 (same episode as `atomizer`). `ladle` is val 2
 (same episode as `house10`). Later repeats of the same category in val 0–127 are
 not used.
+
+## Pick-18 V21 vs V22 (cf_ae), $\beta{=}100$ and $\beta{=}1$
+
+`pipeline_pick18_v21_cfae.sh`. Per task: scene AE, shared 100-traj VLA buffer,
+8000-step AC pretrain, 10 probe (not stored), 300 online episodes, `gate_step=0`,
+held-out eval48. V21 = one-pass Gaussian. V22 = cf_ae (compose + AE finetune).
+
+Plots: `runs/pick18/plots/pick18_sr_heldout.png`, `pick18_sr_online.png`,
+`pick18_sr_curves.png`, `pick18_sr_macro.png`. Numbers: `runs/pick18/plots/metrics.md`.
+All 72 held-out evals are 64 rollouts. Tasks sorted by 100-traj collect SR.
+Each RL cell is **probe after offline AC pretrain → held-out eval48**. Probe is
+10 actor-only episodes, not stored.
+
+| Task | collect | V21 $\beta{=}100$ | V22 $\beta{=}100$ | V21 $\beta{=}1$ | V22 $\beta{=}1$ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| bottle | 0/100 = 0.0% | 0/10 → 0/64 = 0.0% | 0/10 → 0/64 = 0.0% | 0/10 → 0/64 = 0.0% | 0/10 → 0/64 = 0.0% |
+| spray_bottle | 1/100 = 1.0% | 0/10 → 1/64 = 1.6% | 0/10 → 1/64 = 1.6% | 0/10 → 7/64 = 10.9% | 0/10 → 2/64 = 3.1% |
+| knife | 9/100 = 9.0% | 0/10 → 0/64 = 0.0% | 0/10 → 57/64 = 89.1% | 0/10 → 46/64 = 71.9% | 2/10 → 3/64 = 4.7% |
+| shaker | 12/100 = 12.0% | 6/10 → 19/64 = 29.7% | 2/10 → 33/64 = 51.6% | 3/10 → 27/64 = 42.2% | 2/10 → 23/64 = 35.9% |
+| kettle | 14/100 = 14.0% | 6/10 → 21/64 = 32.8% | 2/10 → 50/64 = 78.1% | 4/10 → 61/64 = 95.3% | 4/10 → 54/64 = 84.4% |
+| soap_dispenser | 48/100 = 48.0% | 0/10 → 64/64 = 100.0% | 4/10 → 64/64 = 100.0% | 0/10 → 57/64 = 89.1% | 1/10 → 45/64 = 70.3% |
+| desk_mug | 52/100 = 52.0% | 8/10 → 63/64 = 98.4% | 5/10 → 64/64 = 100.0% | 5/10 → 57/64 = 89.1% | 5/10 → 39/64 = 60.9% |
+| pot | 52/100 = 52.0% | 4/10 → 9/64 = 14.1% | 5/10 → 57/64 = 89.1% | 0/10 → 54/64 = 84.4% | 4/10 → 49/64 = 76.6% |
+| fruit | 52/100 = 52.0% | 0/10 → 24/64 = 37.5% | 2/10 → 40/64 = 62.5% | 0/10 → 10/64 = 15.6% | 5/10 → 0/64 = 0.0% |
+| tissue | 64/100 = 64.0% | 7/10 → 33/64 = 51.6% | 6/10 → 59/64 = 92.2% | 4/10 → 58/64 = 90.6% | 8/10 → 49/64 = 76.6% |
+| remote | 66/100 = 66.0% | 8/10 → 63/64 = 98.4% | 4/10 → 64/64 = 100.0% | 8/10 → 52/64 = 81.2% | 8/10 → 60/64 = 93.8% |
+| box | 75/100 = 75.0% | 3/10 → 62/64 = 96.9% | 8/10 → 60/64 = 93.8% | 6/10 → 63/64 = 98.4% | 5/7† → 56/64 = 87.5% |
+| ladle | 89/100 = 89.0% | 7/10 → 62/64 = 96.9% | 9/10 → 63/64 = 98.4% | 6/10 → 63/64 = 98.4% | 7/7† → 59/64 = 92.2% |
+| spatula | 96/100 = 96.0% | 10/10 → 64/64 = 100.0% | 10/10 → 63/64 = 98.4% | 7/7† → 63/64 = 98.4% | 10/10 → 58/64 = 90.6% |
+| spoon | 99/100 = 99.0% | 7/10 → 64/64 = 100.0% | 10/10 → 64/64 = 100.0% | 8/10 → 63/64 = 98.4% | 10/10 → 61/64 = 95.3% |
+| fork | 99/100 = 99.0% | 4/10 → 64/64 = 100.0% | 10/10 → 64/64 = 100.0% | 1/10 → 58/64 = 90.6% | 10/10 → 57/64 = 89.1% |
+| cup | 100/100 = 100.0% | 10/10 → 64/64 = 100.0% | 10/10 → 64/64 = 100.0% | 10/10 → 34/64 = 53.1% | 7/7† → 53/64 = 82.8% |
+| bowl | 100/100 = 100.0% | 10/10 → 64/64 = 100.0% | 10/10 → 64/64 = 100.0% | 10/10 → 64/64 = 100.0% | 7/8† → 57/64 = 89.1% |
+| **held-out macro** | **1028/1800 = 57.1%** | **741/1152 = 64.3%** | **931/1152 = 80.8%** | **837/1152 = 72.7%** | **725/1152 = 62.9%** |
+| **probe macro** | — | 90/180 = 50.0% | 97/180 = 53.9% | 65/170† = 38.2% | 69/140† = 49.3% |
+| **online macro** | — | 3346/5400 = 62.0% | 4195/5400 = 77.7% | 3165/5400 = 58.6% | 2436/5400 = 45.1% |
+
+† Five $\beta{=}1$ jobs crashed mid-probe and resumed into online, so those
+probe counts are out of 7 or 8 logged episodes rather than 10. Held-out macros
+still use all 18×64. Probe macros skip the † cells.
+
+Reads:
+
+- **Best arm:** V22 at $\beta{=}100$ (80.8% held-out, 77.7% online). V21 prefers
+  $\beta{=}1$ on held-out (72.7% vs 64.3%); V22 prefers 100 (80.8% vs 62.9%).
+- **Hard zeros:** `bottle` (wine bottle, 0/100 collect) stays 0 for every actor.
+  `spray_bottle` barely moves (1% collect → 2–11%).
+- **Where cf_ae wins at $\beta{=}100$:** kettle (32.8% → 78.1%), pot (14.1% →
+  89.1%), tissue (51.6% → 92.2%), knife (0% → 89.1%), fruit (37.5% → 62.5%).
+- **Where $\beta{=}1$ hurts V22:** mug 100% → 60.9%, knife 89.1% → 4.7%, fruit
+  62.5% → 0%, cup last-10 100% → 20%. The weaker anchor lets the flow leave the
+  VLA trust region on several scenes.

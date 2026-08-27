@@ -195,6 +195,7 @@ run_method() {
         --set "algorithm=${algo}" \
         --set "token_ae=${ae}" \
         --set "beta=${BETA}" \
+        --set "gate_step=0" \
         --set "flow_actor_coef=${actor_coef_off}" \
         --set "flow_compose=${compose}" \
         --set "flow_freeze_critic_online=${freeze}" \
@@ -235,6 +236,7 @@ run_method() {
         --set "algorithm=${algo}" \
         --set "token_ae=${ae}" \
         --set "beta=${BETA}" \
+        --set "gate_step=0" \
         --set "flow_actor_coef=${actor_coef_on}" \
         --set "flow_compose=${compose}" \
         --set "flow_freeze_critic_online=${freeze}" \
@@ -261,6 +263,7 @@ run_method() {
       --actor "${on_agent}" --token-ae "${ae}" \
       --tag "${on_tag}_actor" \
       --set "horizon=${HORIZON}" \
+      --set "gate_step=0" \
       --set "out_dir=${dest}/eval" \
       --set "checkpoint=${CKPT}" \
       >> "${LOCAL_LOG}/${on_tag}_actor.log" 2>&1
@@ -307,7 +310,7 @@ if [[ "${SKIP_ENQUEUE:-0}" != "1" ]]; then
       if [[ "${task}" == desk_mug || "${task}" == kettle ]]; then
         echo "v21:${task}"
         echo "cf_ae:${task}"
-      else
+      elif [[ "${SKIP_AE:-0}" != "1" ]]; then
         echo "ae:${task}"
       fi
     done

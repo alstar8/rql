@@ -396,10 +396,46 @@ DEFAULT_GRASP_THRESHOLD = 0.5
 #: pulled out during the rollout.
 GATE_STEP = 40
 GATE_LATCH = True
+#: Fraction of the episode the frozen VLA runs before RL takes over. 0 keeps
+#: RL from step 0. 0.1 is the PI05 default (~10% of horizon), snapped down to a
+#: chunk boundary so the handover is a decision point: 0.1×500 → 48, 0.1×400 → 40.
+GATE_FRAC = 0.0
 
 
-def _resolve_gate_step(explicit: int, scene: Scene | None) -> int:
-    """0 = RL from the first env step. N = VLA prefix of N steps. -1 = scene catalog."""
+def gate_from_frac(frac: float, horizon: int, chunk_size: int) -> int:
+    """VLA prefix as a fraction of the episode, snapped down to a chunk boundary.
+
+    10% of 500 is 50, which is mid-chunk; snapping down (48) starts the actor no
+    later than the requested fraction. 0 disables the prefix.
+    """
+    if frac <= 0:
+        return 0
+    if frac >= 1:
+        raise ValueError(f"gate_frac must be in [0, 1), got {frac}")
+    return int(horizon * frac) // int(chunk_size) * int(chunk_size)
+
+
+def _check_gate_frac(frac: float) -> str:
+    """Empty when valid, else the reason. NaN fails the range check."""
+    if not 0.0 <= float(frac) < 1.0:
+        return f"gate_frac must be in [0, 1), got {frac}"
+    return ""
+
+
+def _resolve_gate_step(
+    explicit: int,
+    scene: Scene | None,
+    *,
+    gate_frac: float = 0.0,
+    horizon: int = 500,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> int:
+    """0 = RL from the first env step. N = VLA prefix of N steps. -1 = scene catalog.
+
+    `gate_frac > 0` wins over `gate_step`: the prefix is a fraction of `horizon`.
+    """
+    if gate_frac:
+        return gate_from_frac(gate_frac, horizon, chunk_size)
     if explicit >= 0:
         return explicit
     if explicit != -1:
@@ -408,7 +444,8 @@ def _resolve_gate_step(explicit: int, scene: Scene | None) -> int:
     if not catalog:
         raise ValueError(
             "gate_step=-1 needs a scene catalog gate; this scene has none. "
-            "Set gate_step=0 for RL from step 0, or N for a VLA prefix of N steps."
+            "Set gate_step=0 for RL from step 0, gate_frac=0.1 for a 10% VLA prefix, "
+            "or N for a VLA prefix of N steps."
         )
     return catalog
 
@@ -518,7 +555,11 @@ class EvalConfig:
     #: Env step at which RL takes over. 0 (the default) means the actor drives from the
     #: first step; set N to let the frozen VLA run the first N env steps. -1 uses the
     #: scene catalog gate (the old measured handover). Train and eval must match.
+    #: Ignored when gate_frac > 0.
     gate_step: int = 0
+    #: Fraction of `horizon` the frozen VLA runs before RL. 0.1 ≈ 10% of the
+    #: episode (48 of 500, 40 of 400). 0 leaves `gate_step` in charge.
+    gate_frac: float = GATE_FRAC
     gate_latch: bool = GATE_LATCH
     rl_action_space: str = DEFAULT_RL_ACTION_SPACE
 
@@ -538,7 +579,13 @@ class EvalConfig:
 
     def resolved_gate_step(self) -> int:
         """Env step at which RL takes over. 0 is step 0; -1 is the scene catalog."""
-        return _resolve_gate_step(self.gate_step, self.scene_or_none())
+        return _resolve_gate_step(
+            self.gate_step,
+            self.scene_or_none(),
+            gate_frac=self.gate_frac,
+            horizon=self.horizon,
+            chunk_size=self.chunk_size,
+        )
 
     def benchmark_dir(self) -> Path:
         """Which repeats to run.
@@ -587,6 +634,9 @@ class EvalConfig:
             )
         if bool(self.actor) != bool(self.token_ae):
             return "actor and token_ae go together: an actor cannot run without its encoder"
+        problem = _check_gate_frac(self.gate_frac)
+        if problem:
+            return problem
         if self.actor:
             problem = _check_rl_spaces(self.rl_action_space, self.conversion)
             if problem:
@@ -637,7 +687,11 @@ class RLConfig:
     #: Env step at which RL takes over. 0 (the default) means the actor drives from the
     #: first env step — no frozen-VLA prefix. Set N to let the default policy run the
     #: first N steps, or -1 to use the scene catalog gate (mug 56, kettle 40, …).
+    #: Ignored when gate_frac > 0.
     gate_step: int = 0
+    #: Fraction of `horizon` the frozen VLA runs before RL. 0.1 ≈ 10% of the
+    #: episode (PI05 default: 48 of 500, 40 of 400). 0 leaves `gate_step` in charge.
+    gate_frac: float = GATE_FRAC
     gate_latch: bool = GATE_LATCH
     rl_action_space: str = DEFAULT_RL_ACTION_SPACE
     #: Whether transitions from before the gate opens enter the actor's replay buffer.
@@ -721,7 +775,13 @@ class RLConfig:
 
     def resolved_gate_step(self) -> int:
         """Env step at which RL takes over. 0 is step 0; -1 is the scene catalog."""
-        return _resolve_gate_step(self.gate_step, self.scene_def())
+        return _resolve_gate_step(
+            self.gate_step,
+            self.scene_def(),
+            gate_frac=self.gate_frac,
+            horizon=self.horizon,
+            chunk_size=self.chunk_size,
+        )
 
     def scene_def(self) -> Scene:
         return _check_scene(self.scene)
@@ -765,6 +825,9 @@ class RLConfig:
                 f"gate_step must be >= -1 (0 = RL from step 0, -1 = scene catalog), "
                 f"got {self.gate_step}"
             )
+        problem = _check_gate_frac(self.gate_frac)
+        if problem:
+            return problem
         try:
             gate = self.resolved_gate_step()
         except ValueError as error:
@@ -838,10 +901,12 @@ def _coerce(raw: str, annotation, name: str):
         if lowered in ("0", "false", "no", "off"):
             return False
         raise ValueError(f"{name}: expected a boolean, got {raw!r}")
-    if "int" in text:
-        return int(raw)
+    # float before int: "int" is not a substring of "float", but keep the order so
+    # gate_frac=0.1 cannot be parsed as an integer.
     if "float" in text:
         return float(raw)
+    if "int" in text:
+        return int(raw)
     if "Path" in text:
         return Path(raw)
     return raw
@@ -905,7 +970,7 @@ def describe() -> str:
         f"VLA predicts    {VLA_CHUNK} actions per call, {ACTION_DIM} dims each",
         f"executed        {DEFAULT_CHUNK_SIZE} per plan by default ({DEFAULT_CONVERSION})",
         f"token width     {VLA_TOKEN_DIM}  (export RLT_VLA_TOKEN_DIM=2048 for RL runs)",
-        f"RL gate         step 0 (RL from the first env step; set gate_step=N for a VLA prefix)",
+        f"RL gate         step 0 (set gate_step=N or gate_frac=0.1 for a ~10% VLA prefix)",
         f"RL refines      {DEFAULT_RL_ACTION_SPACE} actions",
     ]
     return "\n".join(lines)

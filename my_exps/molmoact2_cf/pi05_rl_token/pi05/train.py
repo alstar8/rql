@@ -25,8 +25,9 @@ Per env step t, with C = `chunk_size`:
 
                    Before `gate_step` (if > 0), or during warmup, the VLA's chunk is
                    executed and the decision is merely recorded. After both, the actor's
-                   sample is executed instead. The default `gate_step=0` means RL drives
-                   from the first env step.
+                   sample is executed instead. The default `gate_step=0` (and
+                   `gate_frac=0`) means RL drives from the first env step. `gate_frac=0.1`
+                   is a ~10% frozen-VLA prefix snapped down to a chunk boundary.
 
     always         execute the committed action for this step, converted from a joint
                    delta into the absolute target the simulator wants (pi05/model.py).

@@ -230,7 +230,8 @@ class Pi05EvalPolicy(PI_Policy):
         info["pi05_conversion"] = self.run.conversion
         info["pi05_actor"] = getattr(self.run, "actor", "")
         if self.corrector is not None:
-            info["pi05_gate_step"] = self.run.gate_step
+            info["pi05_gate_step"] = self.run.resolved_gate_step()
+            info["pi05_gate_frac"] = getattr(self.run, "gate_frac", 0.0)
         return info
 
 

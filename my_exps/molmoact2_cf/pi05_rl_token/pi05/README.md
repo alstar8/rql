@@ -290,8 +290,11 @@ not be separated from "the chunk changed". That run was discarded. `chunk_size` 
 ### The gate
 
 Default: RL drives from env step 0. Set `gate_step=N` to let the frozen VLA run
-the first N env steps, or `gate_step=-1` to use the scene catalog handover (mug 56,
-kettle 40, …). Once open, a latched gate stays open for the rest of the episode.
+the first N env steps, `gate_frac=0.1` for ~10% of the horizon snapped down to a
+chunk boundary (48 of 500, 40 of 400), or `gate_step=-1` to use the scene catalog
+handover (mug 56, kettle 40, …). `gate_frac > 0` wins over `gate_step`. Train and
+eval must use the same gate. Once open, a latched gate stays open for the rest of
+the episode.
 
 A distance gate was tried first and abandoned for a measured reason: the evaluator
 records the object's pose from the **benchmark spec**, not its live position, so the
