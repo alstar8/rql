@@ -171,7 +171,9 @@ Env knobs (defaults = V22 cf_ae): `OPENPI_CF_FREEZE_CRITIC=0`,
 (0 pretrain / 1 online), `OPENPI_CF_BC_COEF=1.0`, `OPENPI_CF_ANCHOR_BETA=100`,
 `OPENPI_CF_UTD=5`, `OPENPI_CF_W_L2=0`, `OPENPI_CF_CRITIC_COEF=2`,
 `OPENPI_CF_GAMMA=0.99`, `OPENPI_CF_ACTOR_EMA=0.999`,
-`OPENPI_CF_V23_INSTANCE=308`, `OPENPI_CF_KILL_REF_RMSE=0.10`.
+`OPENPI_CF_V23_INSTANCE=308`, `OPENPI_CF_KILL_REF_RMSE=0.10`,
+`OPENPI_CF_CHUNK_CRITIC=1`, `OPENPI_CF_TD_ACTION_NOISE=0.05`,
+`OPENPI_CF_LORA_LR_MULT=10`.
 
 ### Code changes (this port)
 
@@ -182,8 +184,9 @@ V23 train/serve path.
 
 | Piece | What changed |
 | --- | --- |
-| Config | `action_expert_variant=gemma_300m_lora` (attn+ffn rank 32 / alpha 32). Weight loader `missing_regex=".*cf_.*|pointnet.*|.*lora.*"` (pt12 is LoRA-free; adapters init near 0). Exp default `cf_v23_ae`. Peak LR `1e-4`, warmup 200, `save_interval=1000`, `keep_period=1000`, `ema_decay=None`, batch 8. `cf_freeze_lora_after_warmup=False`. Config still has `apply_guide=True`; V23 `sample_actions` ignores it. |
-| Freeze | `cf_v23_freeze_filter`: train live `cf_*` **and** `.*lora.*`; freeze VLM, base `gemma_300m`, `action_{in,out}_proj`, `time_mlp_*`, and `cf_target_*`. `cf_v23_lora_filter` is live adapters only (excludes `cf_target_lora`). |
+| Config | `action_expert_variant=gemma_300m_lora` (attn+ffn rank 32 / alpha 32, **B=0 init**). Weight loader `missing_regex=".*cf_.*|pointnet.*|.*lora.*"` (pt12 is LoRA-free). Exp default `cf_v23_ae`. Peak LR `1e-4`, LoRA updates ×10, warmup 200, `save_interval=1000`, batch 8. |
+| Freeze | `cf_v23_freeze_filter`: train live `cf_*` **and** `.*lora.*`; freeze VLM, base `gemma_300m`, `action_{in,out}_proj`, `time_mlp_*`, and `cf_target_*`. |
+| Critic | `Q(s, flatten(a))` on CFTrunk (V22 chunk MLP). Not per-step `(a_t, t)`. TD action noise 0.05. Log `dq_da_rms`. |
 | Forward `lora_scale` | Threaded through `lora.Einsum` / `lora.FeedForward` and gemma `Attention` / `Block` / `Module` (`nn.scan` extra `broadcast`). `_euler_v` passes it into `PaliGemma.llm`. `0` zeros the LoRA delta without swapping weights. Prefix LLM calls leave the default (`1`); VLM is `gemma_2b` (no adapters). |
 | Train-log `lora_scale` | Separate: `train.py` multiplies LoRA **grads** by this scalar (V17 freeze-after-warmup). V23 keeps it at 1. AE logs `lora_scale=1` even while Euler is off — that is the grad multiplier, not the forward scale. |
 | ã | `_unroll_endpoint(..., stop_v=True, lora_scale=0)` — frozen pt12 expert, stop-grad. `guide_fn` is ignored (the expert *is* the actor). |
@@ -195,7 +198,7 @@ V23 train/serve path.
 | Polyak | Critic `τ=0.005` on `CF_V23_TARGET_PAIRS` (`cf_guide_*` still listed there; unused by the expert). Actor EMA via `polyak_cf_target_lora` after that loop (`replace_by_pure_dict` on the shadow, same tracer-safe pattern). `freeze_pool=1` still skips pool polyak. `CF_V23_ACTOR_LIVE_NAMES` still names the unused guide MLP. |
 | Guide MLP | `cf_guide_trunk` / `cf_guide_head` stay in the graph (V17 shapes / opt_state) but are unused by the expert actor. |
 | OT helper | `ot_compose_integrate` remains in `pi0_cf.py` for tests. V23 loss and `sample_actions` do not call it. |
-| Tests | `test_cf_token_ae.py` `test_v23_lora_filter_excludes_shadow`: live expert LoRA matches; `cf_target_lora.t0` does not. |
+| Tests | `test_v23_lora_filter_excludes_shadow`; `test_chunk_critic_depends_on_action`. |
 
 Do not resume `cf_v23_radio` (injection) or `cf_v23_ot` (OT compose): GraphDef
 has no live LoRA / `cf_target_lora`. Three incompatible checkpoint families:
@@ -262,9 +265,10 @@ emits one sample per decision chunk. `n_chunks = ceil(T / 32)` (timeout 4300 →
 ## Model / loss (`pi0_cf.py`, `cf_v23=True`)
 
 State features: `phi(s) = [ target_pool(prefix_tokens), normalize(state_23) ]`
-(1024 + 32 padded). Critic trunk `h = CFTrunk([phi, a_t, t_emb])`. The live
-pool is trained by `L_ro` only. The `cf_guide_*` MLP is unused by the expert
-actor (kept so the critic graph stays the V17 shape).
+(1024 + 32 padded). Critic is V22-style `Q(s, flatten(a_chunk))`: CFTrunk on
+`[phi, a_flat]` (32×32 padded = 1024-d), **not** a per-step mean over
+`(a_t, t_emb)`. The live pool is trained by `L_ro` only. `cf_guide_*` is
+unused by the expert actor.
 
 Critic (twin-Q TD, V22-style; **live online**):
 
@@ -272,22 +276,27 @@ Critic (twin-Q TD, V22-style; **live online**):
 - `ã(s')` = frozen expert Euler at `s'`. `a'(s')` = EMA LoRA expert (stop-grad).
 - `γ = 0.99` per env step, `C = 32` (`cf_gamma ** action_horizon`).
 - Loss: MSE over all 10 heads, weighted `cf_critic_coef=2` (V22's 2 critic
-  updates per actor). `OPENPI_CF_FREEZE_CRITIC=1` zeros this term.
+  updates per actor). TD sees replay `a` plus Gaussian noise
+  (`OPENPI_CF_TD_ACTION_NOISE=0.05`) so Q cannot ignore the action.
+- `dq_da_rms` = RMS of `∂ min_k Q_k(s,a) / ∂a` (stop-grad critic weights).
+  If this stays ~0, the actor has nothing to climb.
+- `OPENPI_CF_FREEZE_CRITIC=1` zeros the TD term.
 
 Actor (Eq. 5 anchor + raw Q-ascent + velocity BC on the action expert):
 
 - `ã` = 10-step frozen-expert Euler (`lora_scale=0`, stop-grad).
 - `a` = 10-step live-expert Euler (`lora_scale=1`), **same noise** as `ã`.
-  LoRA=0 ⇒ `a=ã`.
+  LoRA B is **zero-init** so `a=ã` at step 0 (V22 `G=0`).
 - Actor Q uses **stop-grad critic weights** (`_critic_with_sg`). Ascent is
-  **raw** `−mean min_k Q_k(s, a)` — not an advantage of the VLA chunk.
-  `q_gap = Q_guided − Q_ref` is logged only. State features are
-  `sg(target_pool(s))`.
+  **raw** `−mean min_k Q_k(s, flatten(a))`. `q_gap = Q_guided − Q_ref` is
+  logged only. State features are `sg(target_pool(s))`.
 - BC: sample OpenPI-time `t∼U(0,1)`, `x_t=t·x0+(1-t)ã`,
   `MSE(v_live(x_t,t), sg(v_frozen(x_t,t)))`.
 - `L_actor = cf_actor_coef * (−Q) + beta * ||a − ã||² / (32×23)
   + cf_bc_coef * MSE(Δv)`, `beta = 100`. Anchor and BC stay on when
   `actor_coef=0`.
+- LoRA Adam updates are scaled by `OPENPI_CF_LORA_LR_MULT=10` (adapter LR
+  1e-3 vs critic/AE 1e-4). Logged `lora_grad_norm`.
 - `L_ro = cf_ae_coef * MSE(decoder(z_live), sg(prefix_tokens))`.
 - `L = cf_critic_coef * L_td + L_actor + L_ro`. No ‖W‖² (`cf_w_l2_coef=0`).
 
