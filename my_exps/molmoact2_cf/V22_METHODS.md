@@ -1,5 +1,9 @@
 # V22: flow actor on the RL-Token state (corrected ConsensusFlow)
 
+Paper method (shared with radio): [`V22_V23_METHODS.md`](V22_V23_METHODS.md).
+Pick is that method with a small `FlowActor` MLP instead of LoRA on the
+expert. This file is the mug comparison and the 18-object collect table.
+
 Mug-focused. Frozen pretrained **pi0.5**, RL state `x = (z_rl, proprio)`, and a
 **flow-matching actor** instead of V21's one-pass Gaussian. The question: should
 the RLT actor emit the action in one pass, or be a flow corrector trained with a
