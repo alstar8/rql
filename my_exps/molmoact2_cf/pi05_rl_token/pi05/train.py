@@ -131,6 +131,18 @@ def online_config(cfg: RLConfig, out_dir: Path, *, phase: str = "online"):
         flow_bc_coef=cfg.flow_bc_coef,
         flow_freeze_critic_online=cfg.flow_freeze_critic_online,
         flow_compose=cfg.flow_compose,
+        cf_actor_coef=cfg.cf_actor_coef,
+        cf_guidance_coef=cfg.cf_guidance_coef,
+        awr_temp=cfg.awr_temp,
+        awr_clip=cfg.awr_clip,
+        ppo_clip=cfg.ppo_clip,
+        ppo_gae_lambda=cfg.ppo_gae_lambda,
+        ppo_epochs=cfg.ppo_epochs,
+        ppo_horizon=cfg.ppo_horizon,
+        ppo_minibatch=cfg.ppo_minibatch,
+        ppo_vf_coef=cfg.ppo_vf_coef,
+        ppo_max_grad_norm=cfg.ppo_max_grad_norm,
+        ppo_norm_adv=cfg.ppo_norm_adv,
     )
 
 
@@ -148,9 +160,6 @@ def build(cfg: RLConfig, out_dir: Path, *, phase: str = "online", with_runner: b
     from rlt.token_ae import RLTokenAE, write_random_ae
     from rlt.vla import TokenEncoder
 
-    from .policy import Pi05EvalConfig, Pi05RLPolicy
-    from .rl_token import RLTokenCorrector, StepGate
-
     if cfg.init_random_ae:
         ae_path = Path(cfg.token_ae) if cfg.token_ae else cfg.token_ae_path()
         if not Path(ae_path).exists():
@@ -167,7 +176,7 @@ def build(cfg: RLConfig, out_dir: Path, *, phase: str = "online", with_runner: b
     chunk_dim = cfg.chunk_size * ACTION_DIM
 
     token_ae = None
-    if cfg.algorithm in ("consensusflow", "flow_rlt") or cfg.ae_finetune or online.train_token:
+    if cfg.algorithm in ("consensusflow", "flow_rlt", "v22_24", "v22_25") or cfg.ae_finetune or online.train_token:
         token_ae = RLTokenAE.load(online.token_ae, map_location=device)
     agent = make_agent(online, state_dim, chunk_dim, cfg.chunk_size, token_ae=token_ae)
     if not online.train_token and hasattr(agent, "freeze_token"):
@@ -188,9 +197,14 @@ def build(cfg: RLConfig, out_dir: Path, *, phase: str = "online", with_runner: b
         cfg.algorithm, cfg.collectors, cfg.egl_slots, online.update_every_steps,
     )
     if not with_runner:
+        # Replay-only AC pretrain never needs MolmoSpaces. Importing the policy
+        # here would load NLTK wordnet and 18 simultaneous jobs race that zip.
         return online, agent, buffer, learner, None, None
 
     from rlt.rollout import EpisodeRunner
+
+    from .policy import Pi05EvalConfig, Pi05RLPolicy
+    from .rl_token import RLTokenCorrector, StepGate
 
     corrector = RLTokenCorrector(
         agent,

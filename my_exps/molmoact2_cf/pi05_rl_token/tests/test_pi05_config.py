@@ -321,6 +321,46 @@ def test_an_rl_config_round_trips_as_an_rl_config(tmp_path):
     assert back.gate_step == 17
 
 
+def test_awr_overrides_survive_the_shell_set_path(tmp_path):
+    cfg = RLConfig(scene="house2")
+    apply_overrides(cfg, ["algorithm=awr", "awr_temp=0.5", "awr_clip=10"])
+    assert cfg.algorithm == "awr"
+    assert cfg.awr_temp == pytest.approx(0.5) and cfg.awr_temp.__class__ is float
+    assert cfg.awr_clip == pytest.approx(10.0)
+    back = load_run_config(save_run_config(cfg, tmp_path / "awr.json"))
+    assert back.algorithm == "awr"
+    assert back.awr_temp == pytest.approx(0.5)
+    assert back.awr_clip == pytest.approx(10.0)
+
+
+def test_ppo_overrides_survive_the_shell_set_path(tmp_path):
+    cfg = RLConfig(scene="house2")
+    apply_overrides(
+        cfg,
+        [
+            "algorithm=ppo",
+            "ppo_clip=0.1",
+            "ppo_gae_lambda=0.9",
+            "ppo_epochs=3",
+            "ppo_horizon=128",
+            "ppo_minibatch=32",
+            "ppo_norm_adv=false",
+        ],
+    )
+    assert cfg.algorithm == "ppo"
+    assert cfg.ppo_clip == pytest.approx(0.1) and cfg.ppo_clip.__class__ is float
+    assert cfg.ppo_epochs == 3 and cfg.ppo_horizon == 128
+    assert cfg.ppo_norm_adv is False
+    back = load_run_config(save_run_config(cfg, tmp_path / "ppo.json"))
+    assert back.algorithm == "ppo"
+    assert back.ppo_clip == pytest.approx(0.1)
+    assert back.ppo_gae_lambda == pytest.approx(0.9)
+    assert back.ppo_epochs == 3
+    assert back.ppo_horizon == 128
+    assert back.ppo_minibatch == 32
+    assert back.ppo_norm_adv is False
+
+
 def test_a_missing_run_config_env_says_which_variable(monkeypatch):
     monkeypatch.delenv("PI05_RUN_CONFIG", raising=False)
     with pytest.raises(RuntimeError, match="PI05_RUN_CONFIG"):

@@ -3,7 +3,7 @@
 This is the paper method. It is **V23's recipe** (frozen π0.5, RL-token
 critic, chunk TD, β-anchor, BC, AE → AC → online). Pick (V22) is the same
 method with a **small actor instantiation**: the velocity field is a tiny
-MLP on the RL token instead of LoRA inside `gemma_300m`. Nothing else is a
+MLP on the RL token instead of LoRA inside `gemma_300m`. Nothing else is aW
 new algorithm.
 
 Per-run logs stay in [`V23_METHODS.md`](V23_METHODS.md) (radio,

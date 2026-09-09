@@ -44,7 +44,7 @@ def main() -> None:
 
     # MolmoSpaces reads its asset paths at import time, so these come after the
     # call above and not at the top of the file.
-    from .agent import RLTokenAgent
+    from .consensusflow import make_agent
     from .eval_config import RLTokenEvalConfig
     from .learner import Learner
     from .replay import ChunkReplay
@@ -65,7 +65,7 @@ def main() -> None:
 
     chunk_dim = CHUNK * ACTION_DIM
     state_dim = encoder.z_dim + PROPRIO_DIM
-    agent = RLTokenAgent(cfg, state_dim, chunk_dim, CHUNK)
+    agent = make_agent(cfg, state_dim, chunk_dim, CHUNK)
     buffer = ChunkReplay(cfg.buffer_capacity, state_dim, chunk_dim, cfg.seed)
     learner = Learner(cfg, agent, buffer, CHUNK)
     log.info("state_dim=%d (z %d + proprio %d), chunk_dim=%d", state_dim, encoder.z_dim, PROPRIO_DIM, chunk_dim)

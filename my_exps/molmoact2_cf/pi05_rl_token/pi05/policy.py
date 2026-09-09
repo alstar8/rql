@@ -318,6 +318,7 @@ class Pi05RLPolicy(Pi05EvalPolicy):
                 reference=corrector.last_reference,
                 tokens=tokens,
                 mask=mask,
+                log_prob=getattr(corrector, "last_log_prob", None),
             )
         )
         self.committed.extend(committed.reshape(self.run.chunk_size, -1))

@@ -56,8 +56,8 @@ def build_agent(policy_cfg, encoder):
     """Only when a checkpoint is named; otherwise the policy is the plain VLA."""
     import torch
 
-    from .agent import RLTokenAgent
     from .config import OnlineConfig
+    from .consensusflow import make_agent
 
     path = getattr(policy_cfg, "actor", "")
     if not path:
@@ -65,7 +65,8 @@ def build_agent(policy_cfg, encoder):
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     cfg = OnlineConfig(**{k: v for k, v in ckpt["config"].items() if k in OnlineConfig.__dataclass_fields__})
     cfg.device = getattr(policy_cfg, "device", "cuda:0")
-    agent = RLTokenAgent(cfg, encoder.z_dim + PROPRIO_DIM, CHUNK * ACTION_DIM, CHUNK)
+    cfg.algorithm = ckpt.get("algorithm", getattr(cfg, "algorithm", "rl_token"))
+    agent = make_agent(cfg, encoder.z_dim + PROPRIO_DIM, CHUNK * ACTION_DIM, CHUNK)
     agent.load(path)
     return agent
 
@@ -173,6 +174,7 @@ class RLTokenPolicy(MolmoAct2_Policy):
             decision = self.decisions[-1]
             if self.use_actor:
                 chunk = self.agent.act(decision.state, decision.reference, explore=self.explore)
+                decision.log_prob = getattr(self.agent, "last_log_prob", None)
             else:
                 chunk = decision.reference
             self.committed.extend(np.asarray(chunk, np.float32).reshape(self.chunk, ACTION_DIM))

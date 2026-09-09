@@ -136,6 +136,7 @@ class RLTokenCorrector:
         self.last_reference: np.ndarray | None = None
         self.last_tokens: np.ndarray | None = None
         self.last_mask: np.ndarray | None = None
+        self.last_log_prob: float | None = None
 
     def reset(self) -> None:
         self.corrections = 0
@@ -143,6 +144,7 @@ class RLTokenCorrector:
         self.last_reference = None
         self.last_tokens = None
         self.last_mask = None
+        self.last_log_prob = None
 
     def describe(self) -> str:
         return (
@@ -206,6 +208,7 @@ class RLTokenCorrector:
         self.last_reference = None
         self.last_tokens = None
         self.last_mask = None
+        self.last_log_prob = None
         active = use_actor and self.gate.is_open(step)
 
         if tokens is None or mask is None:
@@ -226,6 +229,7 @@ class RLTokenCorrector:
             return chunk
 
         action = self.agent.act(self.last_state, self.last_reference, explore=self.explore)
+        self.last_log_prob = getattr(self.agent, "last_log_prob", None)
         self.corrections += 1
         return self.chunk_from_action(action, arm_state)
 
@@ -258,7 +262,7 @@ def corrector_from_config(run, *, explore: bool = False) -> RLTokenCorrector:
 
     chunk_size = int(run.chunk_size)
     token_ae = None
-    if cfg.algorithm in ("consensusflow", "flow_rlt"):
+    if cfg.algorithm in ("consensusflow", "flow_rlt", "v22_24", "v22_25"):
         token_ae = RLTokenAE.load(str(run.token_ae), map_location=device)
     agent = make_agent(
         cfg,
@@ -268,6 +272,11 @@ def corrector_from_config(run, *, explore: bool = False) -> RLTokenCorrector:
         token_ae=token_ae,
     )
     agent.load(str(run.actor))
+    # Paired-intervention hook: an explicit eval-time lambda overrides the
+    # checkpoint's trained guidance scale (0 = guide off).
+    guidance_coef = float(getattr(run, "guidance_coef", -1.0))
+    if guidance_coef >= 0 and hasattr(agent, "set_guidance_coef"):
+        agent.set_guidance_coef(guidance_coef)
 
     return RLTokenCorrector(
         agent,

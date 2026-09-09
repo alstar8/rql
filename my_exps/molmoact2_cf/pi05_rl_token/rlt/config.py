@@ -144,7 +144,21 @@ class OnlineConfig:
     tmp_rollout_dir: str = "/home/jovyan/users/staroverov/B1K/tmp/rlt_online"
 
     # --- V22 ConsensusFlow ---
-    algorithm: str = "rl_token"  # "rl_token" | "consensusflow" | "flow_rlt"
+    algorithm: str = "rl_token"  # "rl_token" | "awr" | "ppo" | "consensusflow" | "flow_rlt" | "v22_24" | "v22_25"
+    # AWR (Peng 2019): temperature τ in exp(A/τ). Returns here live in [0, 1], so
+    # the paper's 0.05 saturates the clip; 1.0 is AWAC's λ on that scale.
+    awr_temp: float = 1.0
+    awr_clip: float = 20.0  # max exp(A/τ) before mean-normalising the batch
+    # PPO (Schulman 2017): on-policy clipped surrogate on the same Gaussian as V21.
+    # Pretrain is BC+TD; online replaces UTD-on-replay with GAE + K epochs.
+    ppo_clip: float = 0.2
+    ppo_gae_lambda: float = 0.95
+    ppo_epochs: int = 4
+    ppo_horizon: int = 256  # chunk rows collected before one PPO update
+    ppo_minibatch: int = 64
+    ppo_vf_coef: float = 0.5
+    ppo_max_grad_norm: float = 0.5
+    ppo_norm_adv: bool = True
     train_token: bool = False  # backprop RL through the token encoder
     ae_finetune: bool = False  # reconstruction loss on encoder+decoder
     store_decision_tokens: bool = False  # keep VLA tokens on replay rows
@@ -165,6 +179,19 @@ class OnlineConfig:
     cf_ema: float = 0.999
     ae_finetune_coef: float = 1.0
     update_every_steps: int = 0  # 0 = update on every absorbed row
+
+    # --- V22_24 (rlt/v22_24.py): CF losses on the tested flow_rlt recipe ---
+    # Weight on the one-step guided lookahead -mean_k Q_k(s, x+, t+). 0 routes all
+    # value improvement through the distilled guide (stage 0, the supplement's
+    # "BC-v / distilled-G" arm); 1 is the full joint method (stage 1). Offline
+    # pretrain always runs with 0 -- the tested flow_actor_coef=0 BC recipe.
+    cf_actor_coef: float = 1.0
+
+    # --- V22_25 (rlt/v22_25.py): the fixed routing (policy bootstrap, consensus
+    # distill, dead-grad gate, trust-gated contraction, velocity-relative G) ---
+    # Below this batch-mean ||grad_x Q|| the distill target is noise (flat or
+    # saturated critic); the distill term is skipped instead of fitting it.
+    cf_distill_grad_floor: float = 1e-3
 
     # --- corrected V22 (flow_rlt): flow actor + RL-Token critic ---
     rlt_critic: str = ""  # RLTokenAgent agent.pt -> frozen external critic; empty = learn one by TD

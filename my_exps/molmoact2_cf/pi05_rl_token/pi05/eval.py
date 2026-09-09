@@ -216,6 +216,7 @@ def evaluate(cfg: EvalConfig) -> dict:
         "gate_step": cfg.resolved_gate_step() if cfg.actor else None,
         "gate_frac": cfg.gate_frac if cfg.actor else None,
         "rl_action_space": cfg.rl_action_space if cfg.actor else None,
+        "guidance_coef": cfg.guidance_coef if cfg.actor else None,
         "benchmark_dir": str(cfg.benchmark_dir()),
         "episodes_requested": cfg.episodes,
     }

@@ -22,11 +22,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pi05.config import ACTION_DIM, ARM_DOF, PROPRIO_DIM  # noqa: E402
 from pi05.rl_token import RLTokenCorrector, StepGate  # noqa: E402
+from rlt.config import OnlineConfig  # noqa: E402
+from rlt.ppo import PPOAgent  # noqa: E402
 from rlt.replay import Decision, Rollout, close_transitions  # noqa: E402
 
 Z_DIM = 4
@@ -87,7 +90,12 @@ def record_episode(steps: int, *, use_actor: bool, store_pre_gate: bool):
             continue
         rows = corrector.reference_from_chunk(chunk, ARM)
         decisions.append(
-            Decision(step=step, state=corrector.last_state, reference=corrector.last_reference)
+            Decision(
+                step=step,
+                state=corrector.last_state,
+                reference=corrector.last_reference,
+                log_prob=getattr(corrector, "last_log_prob", None),
+            )
         )
         committed.extend(rows.reshape(CHUNK, -1))
     return corrector, decisions, committed
@@ -184,6 +192,36 @@ def test_after_the_gate_the_stored_action_differs_from_the_reference():
     rows, _ = close_transitions(rollout, CHUNK, 0.99, 0)
     assert rows
     assert not np.allclose(rows[0]["action"], rows[0]["reference"])
+
+
+def test_ppo_corrector_stores_the_gaussian_log_prob_of_the_committed_chunk():
+    """The recording hook must keep the log π act() computed, not a later recompute."""
+    torch.manual_seed(0)
+    np.random.seed(0)
+    cfg = OnlineConfig(
+        episode_idx=128, device="cpu", hidden_dim=32, algorithm="ppo", sigma=0.5
+    )
+    agent = PPOAgent(cfg, Z_DIM + PROPRIO_DIM, CHUNK * ACTION_DIM, CHUNK)
+    corrector = RLTokenCorrector(
+        agent, StubEncoder(), CHUNK, StepGate(0), action_space="delta", explore=True
+    )
+    executed = corrector.correct(
+        chunk=vla_chunk(0),
+        tokens=TOKENS,
+        mask=MASK,
+        step=0,
+        proprio=PROPRIO,
+        arm_state=ARM,
+        use_actor=True,
+    )
+    assert corrector.last_log_prob is not None
+    action = corrector.reference_from_chunk(executed, ARM)
+    logp = agent.actor.log_prob(
+        torch.as_tensor(corrector.last_state).unsqueeze(0),
+        torch.as_tensor(corrector.last_reference).unsqueeze(0),
+        torch.as_tensor(action).unsqueeze(0),
+    )
+    assert corrector.last_log_prob == pytest.approx(float(logp.item()), abs=1e-5)
 
 
 def test_a_truncated_tail_is_dropped_rather_than_bootstrapped_off_nothing():

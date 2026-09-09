@@ -34,6 +34,7 @@ class Decision:
     reference: np.ndarray  # (C * action_dim,) flattened
     tokens: np.ndarray | None = None  # (S, token_dim) float16, only when the encoder learns
     mask: np.ndarray | None = None  # (S,) 1=valid
+    log_prob: float | None = None  # log π of the executed chunk; PPO stores this at act() time
 
 
 @dataclass
@@ -80,6 +81,8 @@ def _transition(rollout: Rollout, index: int, chunk: int, gamma: float) -> dict 
         "next_reference": np.zeros_like(decision.reference) if terminal else successor.reference,
         "done": float(terminal),
     }
+    if decision.log_prob is not None:
+        row["log_prob"] = float(decision.log_prob)
     if decision.tokens is not None:
         row["tokens"] = decision.tokens
         row["mask"] = decision.mask

@@ -562,6 +562,9 @@ class EvalConfig:
     gate_frac: float = GATE_FRAC
     gate_latch: bool = GATE_LATCH
     rl_action_space: str = DEFAULT_RL_ACTION_SPACE
+    #: v22_24 eval-time guide scale. -1 keeps the checkpoint's trained lambda;
+    #: >= 0 overrides it -- 0 switches the guide off for the paired intervention.
+    guidance_coef: float = -1.0
 
     # --- machine ---
     checkpoint: Path = CHECKPOINT
@@ -741,7 +744,19 @@ class RLConfig:
     #: Env steps written to the online buffer (summed across workers) between
     #: actor-critic bursts. 0 = update on every absorbed row (sequential trainer).
     update_every_steps: int = 100
-    algorithm: str = "rl_token"  # "rl_token" | "consensusflow" | "flow_rlt"
+    algorithm: str = "rl_token"  # "rl_token" | "awr" | "ppo" | "consensusflow" | "flow_rlt" | "v22_24" | "v22_25"
+    #: AWR temperature τ in exp((Q-V)/τ). Unit-scale returns; 1.0 is AWAC's λ.
+    awr_temp: float = 1.0
+    awr_clip: float = 20.0  #: max exp((Q-V)/τ) before the batch is mean-normalised
+    #: PPO clip ε, GAE λ, and the on-policy horizon (chunk rows, not env steps).
+    ppo_clip: float = 0.2
+    ppo_gae_lambda: float = 0.95
+    ppo_epochs: int = 4
+    ppo_horizon: int = 256
+    ppo_minibatch: int = 64
+    ppo_vf_coef: float = 0.5
+    ppo_max_grad_norm: float = 0.5
+    ppo_norm_adv: bool = True
     #: flow_rlt only: RLTokenAgent checkpoint whose frozen critic scores the flow actor.
     rlt_critic: str = ""
     flow_actor_coef: float = 1.0  #: flow_rlt: weight on -Q(s, a), bounded in [0, 1]
@@ -752,6 +767,14 @@ class RLConfig:
     #: flow_rlt CF composition: actor is a guidance G added to the analytic base
     #: velocity toward the reference (V = v_pi05_base + G), not a full corrector.
     flow_compose: bool = False
+    #: v22_24: weight on the one-step guided lookahead -Q. 0 = distilled-G-only
+    #: routing (stage 0), 1 = full joint ConsensusFlow (stage 1). Pretrain is
+    #: always run with 0 so both stages share the tested BC + anchor start.
+    cf_actor_coef: float = 1.0
+    #: v22_24: unit-ball guide scale. v22_25: VELOCITY-relative guide scale
+    #: (||G|| <= cf_guidance_coef * t * ||v||); the pick-18 v22_25 pipeline pins
+    #: 0.25. Kept at 0.5 here so stored v22_24 runs stay reproducible.
+    cf_guidance_coef: float = 0.5
     train_token_offline: bool = False
     train_token_online: bool = False
     ae_finetune: bool = False

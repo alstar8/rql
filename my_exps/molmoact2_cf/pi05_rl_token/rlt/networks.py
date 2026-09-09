@@ -10,6 +10,8 @@ scores the action that was actually executed.
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 
@@ -57,6 +59,13 @@ class Actor(nn.Module):
         """One draw from the Gaussian. Reparameterized, so actor gradients flow."""
         mean = self(state, reference)
         return mean + self.sigma * torch.randn_like(mean)
+
+    def log_prob(self, state: torch.Tensor, reference: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        """Per-row log N(action; mu(x, a_ref), sigma^2 I). Sigma is not learned."""
+        mean = self(state, reference)
+        var = self.sigma * self.sigma
+        sq = (action - mean).pow(2).sum(dim=-1)
+        return -0.5 * (sq / var + mean.shape[-1] * math.log(2.0 * math.pi * var))
 
 
 class FlowActor(nn.Module):
@@ -146,6 +155,23 @@ class Guidance(nn.Module):
         if t.ndim == 1:
             t = t.unsqueeze(-1)
         return self.net(torch.cat([state, x_t, t], dim=-1))
+
+
+class Value(nn.Module):
+    """State-value V(x). AWR and PPO use it as a baseline; it never sees the action."""
+
+    def __init__(
+        self,
+        state_dim: int,
+        hidden_dim: int = 256,
+        n_layers: int = 2,
+        layer_norm: bool = False,
+    ) -> None:
+        super().__init__()
+        self.net = mlp(state_dim, hidden_dim, 1, n_layers, layer_norm)
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        return self.net(state).squeeze(-1)
 
 
 class DoubleCritic(nn.Module):

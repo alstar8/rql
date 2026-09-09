@@ -368,13 +368,25 @@ class ConsensusFlowAgent:
 
 
 def make_agent(cfg: OnlineConfig, state_dim: int, chunk_dim: int, chunk: int, token_ae=None):
-    """Gaussian RL-Token, ConsensusFlow, or flow_rlt, chosen by OnlineConfig.algorithm."""
+    """Gaussian RL-Token, AWR, PPO, ConsensusFlow, flow_rlt, v22_24, or v22_25, by OnlineConfig.algorithm."""
     from .agent import RLTokenAgent
+    from .awr import AWRAgent
     from .flow_rlt import FlowRLTAgent
+    from .ppo import PPOAgent
+    from .v22_24 import V2224Agent
+    from .v22_25 import V2225Agent
 
     algorithm = getattr(cfg, "algorithm", "rl_token")
+    if algorithm == "awr":
+        return AWRAgent(cfg, state_dim, chunk_dim, chunk)
+    if algorithm == "ppo":
+        return PPOAgent(cfg, state_dim, chunk_dim, chunk)
     if algorithm == "consensusflow":
         return ConsensusFlowAgent(cfg, state_dim, chunk_dim, chunk, token_ae=token_ae)
     if algorithm == "flow_rlt":
         return FlowRLTAgent(cfg, state_dim, chunk_dim, chunk, token_ae=token_ae)
+    if algorithm == "v22_24":
+        return V2224Agent(cfg, state_dim, chunk_dim, chunk, token_ae=token_ae)
+    if algorithm == "v22_25":
+        return V2225Agent(cfg, state_dim, chunk_dim, chunk, token_ae=token_ae)
     return RLTokenAgent(cfg, state_dim, chunk_dim, chunk)
