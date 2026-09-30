@@ -58,16 +58,20 @@ log = logging.getLogger("pi05.eval")
 # --------------------------------------------------------------------------------------
 
 
-def prepare_environment(cfg: EvalConfig) -> Path:
+def prepare_environment(cfg: EvalConfig, config_path: Path | None = None) -> Path:
     """Set what MolmoSpaces reads at import time, and publish the run config.
 
     Returns the path of the written config. Call this first, from the entry point,
     before any heavy import -- MuJoCo picks its EGL device and MolmoSpaces resolves its
     asset paths at import, so setting them afterwards is silently too late.
+
+    `config_path` overrides where the run config is written: parallel collectors
+    each pin their own VLA port and EGL device, so rank r publishes
+    config_r{r}.json instead of racing on the run's shared config.json.
     """
     run_dir = cfg.run_dir()
     run_dir.mkdir(parents=True, exist_ok=True)
-    config_path = save_run_config(cfg, run_dir / "config.json")
+    config_path = save_run_config(cfg, config_path or (run_dir / "config.json"))
 
     os.environ[RUN_CONFIG_ENV] = str(config_path)
     os.environ["MUJOCO_GL"] = "egl"

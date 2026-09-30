@@ -187,9 +187,41 @@ V21 `β=1` and V22_24 stage-0.
 
 ## Results
 
-Not run yet. Fill from `runs/pick18_awr/` the same way as
-`V21_METHODS.md` (probe after offline AC → held-out eval48, 64 rollouts).
+Snapshot **2026-09-11 11:18 UTC**. `runs/pick18_awr/`: AC pretrain done on all
+18, **18/18 online** (none at 300 yet; min 156). Held-out eval48 has not
+started. **Not better than V22_24 so far.**
 
-| | probe | online (300) | last-10 | held-out eval48 |
+Probe is after the 8000-step AC (AWR + TD, not unweighted BC). Online is
+stored-actor SR at the current episode count. Last-10 is the last 10
+*stored* episodes.
+
+| | probe | online (so far) | last-10 | held-out eval48 |
 | --- | ---: | ---: | ---: | ---: |
-| **Pick-18 macro** | — | — | — | — |
+| **Pick-18 macro** | **82/180 = 45.6%** | **698/3575 = 19.5%** | **0.05** | — |
+| V22_24 stage-0 `β=100` | 107/180 = 59.4% | 4003/5400 = 74.1% | 0.78 | 995/1152 = 86.4% gOn |
+| V21 `β=100` | 90/180 = 50.0% | 3346/5400 = 62.0% | 0.61 | 741/1152 = 64.3% |
+
+Equal-weight mean of per-task online rates is 18.0% (tasks have different
+N). Last-10 mean 0.05; 14/18 are at 0. The 18-task last-10 curve is defined
+only through episode 156.
+
+| task | probe | online | last-10 |
+| --- | ---: | ---: | ---: |
+| bottle | 0/10 | 3/156 | 0.0 |
+| bowl | 10/10 | 60/273 | 0.0 |
+| box | 9/10 | 130/255 | 0.2 |
+| cup | 9/10 | 29/201 | 0.0 |
+| desk_mug | 5/10 | 58/201 | 0.0 |
+| fork | 5/10 | 5/160 | 0.0 |
+| fruit | 0/10 | 0/169 | 0.0 |
+| kettle | 0/10 | 13/200 | 0.0 |
+| knife | 6/10 | 78/200 | 0.2 |
+| ladle | 6/10 | 26/180 | 0.0 |
+| pot | 3/10 | 49/174 | 0.1 |
+| remote | 9/10 | 87/211 | 0.0 |
+| shaker | 0/10 | 15/202 | 0.0 |
+| soap_dispenser | 0/10 | 6/169 | 0.0 |
+| spatula | 10/10 | 70/229 | 0.3 |
+| spoon | 3/10 | 3/172 | 0.0 |
+| spray_bottle | 0/10 | 5/199 | 0.0 |
+| tissue | 7/10 | 61/224 | 0.0 |

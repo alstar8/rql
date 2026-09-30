@@ -226,3 +226,57 @@ def test_an_unchanged_actor_reproduces_the_vla_chunk_exactly():
 def test_an_unknown_action_space_is_rejected():
     with pytest.raises(ValueError, match="action_space"):
         RLTokenCorrector(StubAgent(), StubEncoder(), 1, StepGate(0), action_space="joint")
+
+
+# --- the V25 distillation target ---------------------------------------------------------
+
+
+class ExploreAwareAgent(StubAgent):
+    """Two visibly different policies, so which one was recorded is unambiguous."""
+
+    def act(self, state, reference, explore):
+        self.calls.append((np.asarray(state), np.asarray(reference), explore))
+        offset = 1.0 if explore else 2.0
+        return np.asarray(reference) + offset
+
+
+def test_record_deployed_records_the_greedy_chunk_not_the_executed_one():
+    """Collectors explore, but the number V25 preserves belongs to the greedy policy, so
+    the distillation target has to come from a second explore=False pass."""
+    agent = ExploreAwareAgent()
+    corrector = RLTokenCorrector(
+        agent, StubEncoder(), CHUNK_SIZE, StepGate(0),
+        action_space="delta", explore=True, record_deployed=True,
+    )
+    chunk = make_chunk()
+    executed = corrector.correct(
+        chunk=chunk, tokens=TOKENS, mask=MASK, step=0, proprio=PROPRIO, arm_state=ARM
+    )
+    assert [call[2] for call in agent.calls] == [True, False]
+    reference = chunk[:CHUNK_SIZE]
+    assert np.allclose(executed, reference + 1.0)
+    assert np.allclose(corrector.last_deployed, reference + 2.0)
+
+
+def test_without_record_deployed_no_extra_actor_pass_happens():
+    agent = ExploreAwareAgent()
+    corrector = RLTokenCorrector(
+        agent, StubEncoder(), CHUNK_SIZE, StepGate(0), action_space="delta", explore=True
+    )
+    corrector.correct(
+        chunk=make_chunk(), tokens=TOKENS, mask=MASK, step=0, proprio=PROPRIO, arm_state=ARM
+    )
+    assert [call[2] for call in agent.calls] == [True]
+    assert corrector.last_deployed is None
+
+
+def test_a_closed_gate_leaves_no_deployed_chunk_to_record():
+    """Nothing was corrected, so there is no teacher label for this decision."""
+    corrector = RLTokenCorrector(
+        ExploreAwareAgent(), StubEncoder(), CHUNK_SIZE, StepGate(40),
+        action_space="delta", explore=True, record_deployed=True,
+    )
+    corrector.correct(
+        chunk=make_chunk(), tokens=TOKENS, mask=MASK, step=10, proprio=PROPRIO, arm_state=ARM
+    )
+    assert corrector.last_deployed is None

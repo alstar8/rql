@@ -119,6 +119,7 @@ class RLTokenCorrector:
         *,
         action_space: str = "absolute",
         explore: bool = False,
+        record_deployed: bool = False,
     ) -> None:
         if action_space not in ("absolute", "delta"):
             raise ValueError(f"action_space must be 'absolute' or 'delta', got {action_space!r}")
@@ -128,6 +129,12 @@ class RLTokenCorrector:
         self.gate = gate
         self.action_space = action_space
         self.explore = explore
+        # V25 distillation wants the *deployed* chunk as its target, not the exploring
+        # one that gets executed. Collectors must keep exploring for RL to learn, but
+        # the policy whose success rate is being preserved is the greedy one evaluation
+        # runs (`explore=False`, which on the flow agents means the EMA target net).
+        # Distilling the executed chunk would fit the exploration noise instead.
+        self.record_deployed = bool(record_deployed)
         self.corrections = 0
         # The last decision's RL state and reference chunk. Training records these; a
         # plain evaluation ignores them. They are set whenever tokens were available,
@@ -137,6 +144,9 @@ class RLTokenCorrector:
         self.last_tokens: np.ndarray | None = None
         self.last_mask: np.ndarray | None = None
         self.last_log_prob: float | None = None
+        #: The deployed (greedy) chunk for the last correction, in delta space. Only
+        #: populated when `record_deployed`; this is the V25 distillation target.
+        self.last_deployed: np.ndarray | None = None
 
     def reset(self) -> None:
         self.corrections = 0
@@ -145,6 +155,7 @@ class RLTokenCorrector:
         self.last_tokens = None
         self.last_mask = None
         self.last_log_prob = None
+        self.last_deployed = None
 
     def describe(self) -> str:
         return (
@@ -209,6 +220,7 @@ class RLTokenCorrector:
         self.last_tokens = None
         self.last_mask = None
         self.last_log_prob = None
+        self.last_deployed = None
         active = use_actor and self.gate.is_open(step)
 
         if tokens is None or mask is None:
@@ -231,7 +243,16 @@ class RLTokenCorrector:
         action = self.agent.act(self.last_state, self.last_reference, explore=self.explore)
         self.last_log_prob = getattr(self.agent, "last_log_prob", None)
         self.corrections += 1
-        return self.chunk_from_action(action, arm_state)
+        executed = self.chunk_from_action(action, arm_state)
+        if self.record_deployed:
+            if self.explore:
+                # A second, noise-free pass at the same state. Cheap next to the VLA
+                # call that produced the reference: a 10-step MLP unroll.
+                deployed = self.agent.act(self.last_state, self.last_reference, explore=False)
+                self.last_deployed = self.chunk_from_action(deployed, arm_state)
+            else:
+                self.last_deployed = executed
+        return executed
 
 
 # --------------------------------------------------------------------------------------

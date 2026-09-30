@@ -87,14 +87,20 @@ class V2224Agent:
         self.q_bounds = (0.0, 1.0)
         self.tau = float(getattr(cfg, "tau", 0.005))
         self.clip_target = bool(getattr(cfg, "clip_target", True))
+        # Shared-task arm: W and Q also read the VLA reference chunk. The
+        # reference is the specialist's plan, so it identifies the task far
+        # more directly than the 256-dim z bottleneck (trained for
+        # reconstruction, not discrimination) can.
+        self.ref_conditioned = bool(getattr(cfg, "cf_ref_conditioned", False))
+        ref_dim = chunk_dim if self.ref_conditioned else 0
 
         self.actor = FlowActor(state_dim, chunk_dim, hidden, n_layers, ref_dim=chunk_dim).to(self.device)
         self.actor_target = copy.deepcopy(self.actor).requires_grad_(False)
         self.critic = EnsembleCritic(
-            state_dim, chunk_dim, hidden, n_layers, ensemble, layer_norm=True
+            state_dim, chunk_dim, hidden, n_layers, ensemble, layer_norm=True, ref_dim=ref_dim
         ).to(self.device)
         self.critic_target = copy.deepcopy(self.critic).requires_grad_(False)
-        self.guidance = Guidance(state_dim, chunk_dim, hidden, n_layers).to(self.device)
+        self.guidance = Guidance(state_dim, chunk_dim, hidden, n_layers, ref_dim=ref_dim).to(self.device)
         # Exact G == 0 at initialisation: the deployed policy starts as V's
         # specialist copy and the guide grows only under distillation.
         head = self.guidance.net[-1]
@@ -161,10 +167,15 @@ class V2224Agent:
         return self._project_unit_ball(conflict_free * damp)
 
     def guidance_field(
-        self, state: torch.Tensor, x: torch.Tensor, t: torch.Tensor, velocity: torch.Tensor
+        self,
+        state: torch.Tensor,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        velocity: torch.Tensor,
+        reference: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """G_phi(s, x, t) = lambda * t * u_damp, the bounded deployed guidance."""
-        w = self.guidance(state, x, t)
+        w = self.guidance(state, x, t, reference)
         safe = self._behavior_safe_direction(w, velocity)
         if t.ndim == 1:
             t = t.unsqueeze(-1)
@@ -181,7 +192,7 @@ class V2224Agent:
             t = torch.full((state.shape[0],), i * dt, device=state.device, dtype=state.dtype)
             v = net(state, x, t, reference)
             if guided:
-                v = v + self.guidance_field(state, x, t, v)
+                v = v + self.guidance_field(state, x, t, v, reference)
             x = x + dt * v
         return x
 
@@ -199,11 +210,12 @@ class V2224Agent:
         return self._unroll(s, noise, ref, guided=True, target=not explore).cpu().numpy()
 
     @torch.no_grad()
-    def q_values(self, state: np.ndarray, action: np.ndarray) -> np.ndarray:
+    def q_values(self, state: np.ndarray, action: np.ndarray, reference: np.ndarray | None = None) -> np.ndarray:
         s = torch.as_tensor(state, dtype=torch.float32, device=self.device)
         a = torch.as_tensor(action, dtype=torch.float32, device=self.device)
+        ref = None if reference is None else torch.as_tensor(reference, dtype=torch.float32, device=self.device)
         t = torch.ones(s.shape[0], 1, device=self.device)
-        mean, _ = self.critic.mean_std(s, a, t)
+        mean, _ = self.critic.mean_std(s, a, t, ref)
         return mean.cpu().numpy()
 
     # --- critic: reverse-state TD ----------------------------------------------
@@ -221,6 +233,7 @@ class V2224Agent:
         action = torch.as_tensor(batch["action"], dtype=torch.float32, device=self.device)
         reference = torch.as_tensor(batch["reference"], dtype=torch.float32, device=self.device)
         next_state = torch.as_tensor(batch["next_state"], dtype=torch.float32, device=self.device)
+        next_reference = torch.as_tensor(batch["next_reference"], dtype=torch.float32, device=self.device)
         reward = torch.as_tensor(batch["reward"], dtype=torch.float32, device=self.device)
         done = torch.as_tensor(batch["done"], dtype=torch.float32, device=self.device)
         n = state.shape[0]
@@ -228,7 +241,7 @@ class V2224Agent:
         with torch.no_grad():
             next_noise = torch.randn(n, self.chunk_dim, device=self.device)
             t0 = torch.zeros(n, 1, device=self.device)
-            next_q, next_std = self.critic_target.mean_std(next_state, next_noise, t0)
+            next_q, next_std = self.critic_target.mean_std(next_state, next_noise, t0, next_reference)
             bootstrap = next_q - self.rho * next_std
             target = reward + (1.0 - done) * self.chunk_discount * bootstrap
             if self.clip_target:
@@ -244,10 +257,10 @@ class V2224Agent:
             t = torch.ones(n, 1, device=self.device)
             for _ in range(self.flow_steps):
                 v = self.actor(state, x, t, reference)
-                x = x - (v + self.guidance_field(state, x, t, v)) * dt
+                x = x - (v + self.guidance_field(state, x, t, v, reference)) * dt
                 t = (t - dt).clamp(min=0.0)
 
-        q = self.critic(state, x, t)  # (K, B)
+        q = self.critic(state, x, t, reference)  # (K, B)
         err = target.unsqueeze(0) - q
         weight = torch.where(err >= 0, self.expectile, 1.0 - self.expectile)
         critic_loss = (weight * err.pow(2)).mean()
@@ -300,11 +313,11 @@ class V2224Agent:
         bc_loss = F.mse_loss(velocity, target_velocity)
 
         # One-step guided lookahead into the online ensemble mean (stage 1).
-        guide = self.guidance_field(state, x_t, t_bc, velocity).detach()
+        guide = self.guidance_field(state, x_t, t_bc, velocity, reference).detach()
         step = torch.minimum(torch.full_like(t_bc, dt), 1.0 - t_bc)
         lookahead = x_t + (velocity + guide) * step
         t_plus = (t_bc + dt).clamp(max=1.0)
-        q_plus = self.critic(state, lookahead, t_plus).mean(dim=0)
+        q_plus = self.critic(state, lookahead, t_plus, reference).mean(dim=0)
         lookahead_loss = -q_plus.mean()
 
         # The anchor stays on V's own unguided unroll: V alone remains a tight
@@ -317,14 +330,14 @@ class V2224Agent:
         # Common-scale-normalized distillation of the target ensemble into W.
         member = torch.randint(0, self.critic.ensemble, (n,), device=self.device)
         x_grad = x_t.detach().requires_grad_(True)
-        qs = self.critic_target(state, x_grad, t_bc)
+        qs = self.critic_target(state, x_grad, t_bc, reference)
         picked = qs[member, torch.arange(n, device=self.device)]
         (q_grad,) = torch.autograd.grad(picked.sum(), x_grad, create_graph=False)
         q_grad = q_grad.detach()
         grad_norm = q_grad.norm(dim=-1, keepdim=True)
         grad_scale = grad_norm.mean()
         z_k = q_grad / (grad_norm + self.consensus_floor * grad_scale + 1e-6)
-        w = self.guidance(state, x_t.detach(), t_bc)
+        w = self.guidance(state, x_t.detach(), t_bc, reference)
         distill_loss = (w - z_k).pow(2).sum(dim=-1).mean()
 
         recon_loss, recon_stats = self._recon_loss(batch)
@@ -357,7 +370,7 @@ class V2224Agent:
             "total_loss": float(loss.item()),
             **recon_stats,
         }
-        stats.update(self._guidance_stats(state, x_t, t_bc, velocity))
+        stats.update(self._guidance_stats(state, x_t, t_bc, velocity, reference))
         return stats
 
     def update(self, batch: dict[str, np.ndarray]) -> dict[str, float]:
@@ -374,14 +387,19 @@ class V2224Agent:
 
     @torch.no_grad()
     def _guidance_stats(
-        self, state: torch.Tensor, x_t: torch.Tensor, t_bc: torch.Tensor, velocity: torch.Tensor
+        self,
+        state: torch.Tensor,
+        x_t: torch.Tensor,
+        t_bc: torch.Tensor,
+        velocity: torch.Tensor,
+        reference: torch.Tensor | None = None,
     ) -> dict[str, float]:
         """Geometry of the deployed guide at the BC points: size, alignment, trust."""
-        w = self._project_unit_ball(self.guidance(state, x_t, t_bc))
+        w = self._project_unit_ball(self.guidance(state, x_t, t_bc, reference))
         w_norm = w.norm(dim=-1)
         v_norm = velocity.norm(dim=-1).clamp_min(1e-6)
         cos = (w * velocity).sum(dim=-1) / (w_norm * v_norm + 1e-6)
-        g = self.guidance_field(state, x_t, t_bc, velocity)
+        g = self.guidance_field(state, x_t, t_bc, velocity, reference)
         return {
             "g_over_v": float((g.norm(dim=-1) / v_norm).mean().item()),
             "g_cos": float(cos.mean().item()),
@@ -398,8 +416,8 @@ class V2224Agent:
         reference = torch.as_tensor(batch["reference"], dtype=torch.float32, device=self.device)
         sampled = self._unroll(state, torch.randn_like(reference), reference, guided=True, target=True)
         t1 = torch.ones(state.shape[0], 1, device=self.device)
-        q_actor, _ = self.critic.mean_std(state, sampled, t1)
-        q_ref, _ = self.critic.mean_std(state, reference, t1)
+        q_actor, _ = self.critic.mean_std(state, sampled, t1, reference)
+        q_ref, _ = self.critic.mean_std(state, reference, t1, reference)
         deviation = (sampled - reference).pow(2).mean(dim=-1).sqrt()
         return {
             "probe/q_actor": float(q_actor.mean().item()),

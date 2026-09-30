@@ -179,6 +179,12 @@ class OnlineConfig:
     cf_ema: float = 0.999
     ae_finetune_coef: float = 1.0
     update_every_steps: int = 0  # 0 = update on every absorbed row
+    # v22_24 shared-task arm: condition W and Q on the VLA reference chunk, the
+    # same conditioning V always had. Off keeps every stored v22_24 checkpoint
+    # loadable; the shared-policy runs (one net over many tasks) turn it on so
+    # the critic and the guide can tell tasks apart without reading them out of
+    # the z bottleneck.
+    cf_ref_conditioned: bool = False
 
     # --- V22_24 (rlt/v22_24.py): CF losses on the tested flow_rlt recipe ---
     # Weight on the one-step guided lookahead -mean_k Q_k(s, x+, t+). 0 routes all

@@ -4,6 +4,8 @@
             -> {"actions": (16, 8), "converts_delta_to_absolute": false,
                 "token_features": (968, 2048), "token_attention_mask": (968,)}
 
+    POST /reload {"checkpoint"} -> {"status": "ok", "copied": N, "reloads": K}
+
     GET  /act -> status, including converts_delta_to_absolute
 
 WHAT IS ON THE WIRE
@@ -57,9 +59,10 @@ ARM_DOF = 7
 
 
 def make_handler(frozen, checkpoint: str, convert: bool, recorder=None):
-    stats = {"calls": 0, "seconds": 0.0}
+    stats = {"calls": 0, "seconds": 0.0, "checkpoint": checkpoint, "reloads": 0}
     # Inference is not reentrant: the token capture keeps per-call state, so concurrent
-    # requests would mix one call's tokens into another's response.
+    # requests would mix one call's tokens into another's response. Reload takes the
+    # same lock so a swap cannot tear an in-flight forward.
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -80,7 +83,8 @@ def make_handler(frozen, checkpoint: str, convert: bool, recorder=None):
             self._send(
                 {
                     "status": "ok",
-                    "checkpoint": checkpoint,
+                    "checkpoint": stats["checkpoint"],
+                    "reloads": stats["reloads"],
                     "converts_delta_to_absolute": convert,
                     "calls": stats["calls"],
                     "mean_seconds": round(stats["seconds"] / max(1, stats["calls"]), 4),
@@ -90,7 +94,35 @@ def make_handler(frozen, checkpoint: str, convert: bool, recorder=None):
 
         def do_POST(self) -> None:
             length = int(self.headers.get("Content-Length", 0))
-            payload = json_numpy.loads(self.rfile.read(length).decode("utf-8"))
+            raw = self.rfile.read(length)
+            route = self.path.split("?", 1)[0].rstrip("/") or "/"
+            if route == "/reload":
+                payload = json_numpy.loads(raw.decode("utf-8"))
+                ckpt = str(payload.get("checkpoint") or "")
+                if not ckpt:
+                    self._send({"error": "checkpoint is required"}, status=400)
+                    return
+                try:
+                    with lock:
+                        copied = frozen.reload_expert(ckpt)
+                        stats["checkpoint"] = ckpt
+                        stats["reloads"] += 1
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("reload failed")
+                    self._send({"error": str(exc)}, status=500)
+                    return
+                log.info("serving expert from %s (%d tensors)", ckpt, copied)
+                self._send(
+                    {
+                        "status": "ok",
+                        "checkpoint": ckpt,
+                        "copied": copied,
+                        "reloads": stats["reloads"],
+                    }
+                )
+                return
+
+            payload = json_numpy.loads(raw.decode("utf-8"))
             started = time.perf_counter()
             try:
                 state = np.asarray(payload["state"], dtype=np.float32).reshape(-1)

@@ -164,6 +164,18 @@ class Pi05Client:
             result["mask"] = np.asarray(out["token_attention_mask"], dtype=np.float32)
         return result
 
+    def reload(self, checkpoint: str) -> dict:
+        """Ask the server to copy the learning expert's weights into the frozen expert."""
+        url = f"http://{self.host}:{self.port}/reload"
+        response = self.session.post(
+            url, json={"checkpoint": str(checkpoint)}, timeout=self.timeout
+        )
+        response.raise_for_status()
+        out = response.json()
+        if "error" in out:
+            raise RuntimeError(f"pi0.5 reload error: {out['error']}")
+        return out
+
     @property
     def ms_per_call(self) -> float:
         return 1000.0 * self.seconds / max(self.calls, 1)

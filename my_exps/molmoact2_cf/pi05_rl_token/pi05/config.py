@@ -670,6 +670,10 @@ class RLConfig:
     #: Benchmark episodes the collectors cycle through. The jittered scene benchmarks
     #: hold repeats numbered from 0; keep the tail unused for evaluation.
     episode_pool: str = "0-11"
+    #: Shared-policy runs: comma-separated "scene[:horizon]" entries the collectors
+    #: cycle through (episode N runs tasks[N % len], one shared learner). Empty keeps
+    #: the single-scene behavior. The pool above applies to every scene.
+    task_pool: str = ""
     episodes: int = 300  #: total rollouts, warmup included
     warmup_episodes: int = 40  #: pure VLA; also measures the baseline in place
     horizon: int = 500
@@ -741,6 +745,15 @@ class RLConfig:
     #: contexts run and the fourth waits. They share one VLA server; /act is flocked.
     collectors: int = 4
     egl_slots: int = 3
+    #: Shared-policy multi-GPU collection: one frozen-VLA server per entry of
+    #: vla_ports (GPU i from vla_gpus, same length; default all on `gpu`), and
+    #: collector rank r round-robins to vla_ports[r % n]. Empty = one server on
+    #: `port`, the single-GPU behavior.
+    vla_ports: str = ""
+    vla_gpus: str = ""
+    #: Per-collector MUJOCO_EGL_DEVICE_IDs, comma-separated, round-robin by rank.
+    #: Empty = every collector on `egl_device` (the single-GPU behavior).
+    egl_devices: str = ""
     #: Env steps written to the online buffer (summed across workers) between
     #: actor-critic bursts. 0 = update on every absorbed row (sequential trainer).
     update_every_steps: int = 100
@@ -775,6 +788,13 @@ class RLConfig:
     #: (||G|| <= cf_guidance_coef * t * ||v||); the pick-18 v22_25 pipeline pins
     #: 0.25. Kept at 0.5 here so stored v22_24 runs stay reproducible.
     cf_guidance_coef: float = 0.5
+    #: v22_24 shared-task arm: W and Q also read the VLA reference chunk (the
+    #: conditioning V always had). Stored checkpoints rebuild with the flag they
+    #: saved, so evals of specialist runs are unaffected.
+    cf_ref_conditioned: bool = False
+    #: Replay rows kept. 400k holds a single-task run with room; a shared
+    #: 18-task run lands near 200k, and the 128-task pool wants ~1.5M.
+    buffer_capacity: int = 400_000
     train_token_offline: bool = False
     train_token_online: bool = False
     ae_finetune: bool = False
@@ -784,6 +804,31 @@ class RLConfig:
     token_replay: str = ""
     vla_traj: str = ""
     dump_vla_traj: str = ""
+    #: V25 action-expert distillation: directory each collector writes its
+    #: (observation, reference chunk, teacher chunk) decision shards to. Empty = off.
+    distill_out: str = ""
+    #: Copy the learning action expert into the frozen servers every N actor
+    #: episodes. 0 disables the parallel student. Requires distill_out.
+    distill_swap_every: int = 0
+    #: Checkpoint directory the online student writes; servers reload from here.
+    distill_student_dir: str = ""
+    #: File protocol between the learner and the student trainer (`command`, `status.json`).
+    distill_control_dir: str = ""
+    distill_gpu: int = 0
+    distill_lr: float = 1e-5
+    distill_batch: int = 4
+    #: After every distill_swap_every actor episodes, run 2 (or N) greedy episodes on
+    #: each task_pool scene for base G-off, gOn, and student G-off. 0 disables it.
+    round_eval_per_task: int = 0
+    #: Keep this many best episode shards after each round (success first, then length).
+    #: 0 deletes every shard (old wipe). Closed-loop stitch is unchanged.
+    distill_keep_best: int = 500
+    #: Last accepted frozen expert. Restored when the student loses the G-off probe.
+    distill_frozen_dir: str = ""
+    #: DAgger rollout VLA. When set, each GPU also serves this checkpoint on
+    #: teacher_port + ROLLOUT_PORT_OFFSET. Collectors execute that chunk and record
+    #: greedy gOn of the reference server as the distill target. V/G are not updated.
+    rollout_checkpoint: str = ""
 
     # --- machine ---
     checkpoint: Path = CHECKPOINT
@@ -809,6 +854,33 @@ class RLConfig:
     def scene_def(self) -> Scene:
         return _check_scene(self.scene)
 
+    def task_list(self) -> list[tuple[str, int]]:
+        """The shared run's (scene, horizon) cycle, in task_pool order.
+
+        Empty pool is the single-scene run: one entry from `scene` so callers
+        never branch on the mode.
+        """
+        if not self.task_pool.strip():
+            return [(self.scene, self.horizon)]
+        tasks: list[tuple[str, int]] = []
+        for entry in self.task_pool.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            name, _, raw_horizon = entry.partition(":")
+            tasks.append((name.strip(), int(raw_horizon) if raw_horizon.strip() else self.horizon))
+        return tasks
+
+    def server_endpoints(self) -> list[tuple[int, int]]:
+        """(gpu, port) per frozen-VLA server the parent learner starts."""
+        ports = [int(p) for p in self.vla_ports.split(",") if p.strip()]
+        if not ports:
+            return [(self.gpu, self.port)]
+        gpus = [int(g) for g in self.vla_gpus.split(",") if g.strip()] or [self.gpu] * len(ports)
+        if len(gpus) != len(ports):
+            raise ValueError(f"vla_gpus ({len(gpus)}) and vla_ports ({len(ports)}) must pair up")
+        return list(zip(gpus, ports))
+
     def benchmark_dir(self) -> Path:
         """Always the training half. The held-out half is what judges the actor, so the
         trainer is not given the option of learning on it."""
@@ -830,6 +902,8 @@ class RLConfig:
     def validate(self) -> str:
         """Empty string when the config is runnable, else the reason it is not."""
         _check_scene(self.scene)
+        for name, _ in self.task_list():
+            _check_scene(name)
         _check_conversion(self.conversion)
         if not 1 <= self.chunk_size <= VLA_CHUNK:
             return f"chunk_size must be in 1..{VLA_CHUNK}, got {self.chunk_size}"
@@ -852,6 +926,10 @@ class RLConfig:
         if problem:
             return problem
         try:
+            self.server_endpoints()
+        except ValueError as error:
+            return str(error)
+        try:
             gate = self.resolved_gate_step()
         except ValueError as error:
             return str(error)
@@ -861,7 +939,32 @@ class RLConfig:
                 "it falls inside a chunk. Decisions happen only at chunk boundaries, so "
                 "the handover would silently slip to the next one."
             )
+        if self.distill_swap_every < 0:
+            return f"distill_swap_every must be >= 0, got {self.distill_swap_every}"
+        if self.distill_swap_every:
+            if not self.distill_out:
+                return "distill_swap_every requires distill_out so the student has a teacher"
+            if not self.distill_student_dir:
+                return "distill_swap_every requires distill_student_dir for the learning expert"
+            if not self.distill_control_dir:
+                return "distill_swap_every requires distill_control_dir"
+        if self.round_eval_per_task < 0:
+            return f"round_eval_per_task must be >= 0, got {self.round_eval_per_task}"
+        if self.round_eval_per_task and not self.distill_swap_every:
+            return "round_eval_per_task requires distill_swap_every so collectors can pause at round boundaries"
+        if self.distill_keep_best < 0:
+            return f"distill_keep_best must be >= 0, got {self.distill_keep_best}"
+        if self.rollout_checkpoint and not self.distill_out:
+            return "rollout_checkpoint requires distill_out so the gOn labels are recorded"
         return _check_rl_spaces(self.rl_action_space, self.conversion)
+
+
+ROLLOUT_PORT_OFFSET = 5
+
+
+def rollout_server_port(teacher_port: int) -> int:
+    """Port of the DAgger rollout VLA that shares a GPU with this teacher server."""
+    return int(teacher_port) + ROLLOUT_PORT_OFFSET
 
 
 # ======================================================================================
@@ -940,12 +1043,18 @@ def _jsonable(value):
 
 
 def save_run_config(cfg, path: Path) -> Path:
-    """Write a resolved config next to the run it produced."""
+    """Write a resolved config next to the run it produced.
+
+    Atomic (tmp + rename): parallel collectors publish per-rank copies while
+    sibling processes may be reading the path they replace.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {k: _jsonable(v) for k, v in asdict(cfg).items()}
     payload["__class__"] = type(cfg).__name__
-    path.write_text(json.dumps(payload, indent=2))
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp, path)
     return path
 
 

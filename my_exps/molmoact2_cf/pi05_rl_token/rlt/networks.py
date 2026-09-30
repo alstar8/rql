@@ -106,7 +106,11 @@ class FlowActor(nn.Module):
 
 
 class EnsembleCritic(nn.Module):
-    """K scalar Q heads over (s, x, t). Distillation samples one member per row."""
+    """K scalar Q heads over (s, x, t). Distillation samples one member per row.
+
+    With ref_dim > 0 the VLA reference chunk is concatenated too, so a shared
+    critic can tell tasks apart without reading them out of the z bottleneck.
+    """
 
     def __init__(
         self,
@@ -116,30 +120,49 @@ class EnsembleCritic(nn.Module):
         n_layers: int = 4,
         ensemble: int = 10,
         layer_norm: bool = True,
+        ref_dim: int = 0,
     ) -> None:
         super().__init__()
         self.ensemble = ensemble
+        self.ref_dim = ref_dim
         self.heads = nn.ModuleList(
-            [mlp(state_dim + chunk_dim + 1, hidden_dim, 1, n_layers, layer_norm) for _ in range(ensemble)]
+            [mlp(state_dim + chunk_dim + ref_dim + 1, hidden_dim, 1, n_layers, layer_norm) for _ in range(ensemble)]
         )
 
-    def _pack(self, state: torch.Tensor, action: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def _pack(
+        self, state: torch.Tensor, action: torch.Tensor, t: torch.Tensor, reference: torch.Tensor | None
+    ) -> torch.Tensor:
         if t.ndim == 1:
             t = t.unsqueeze(-1)
-        return torch.cat([state, action, t], dim=-1)
+        parts = [state, action]
+        if self.ref_dim:
+            if reference is None:
+                reference = torch.zeros_like(action)
+            parts.append(reference)
+        parts.append(t)
+        return torch.cat(parts, dim=-1)
 
-    def forward(self, state: torch.Tensor, action: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, state: torch.Tensor, action: torch.Tensor, t: torch.Tensor, reference: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """(K, B) values."""
-        x = self._pack(state, action, t)
+        x = self._pack(state, action, t, reference)
         return torch.stack([head(x).squeeze(-1) for head in self.heads], dim=0)
 
-    def mean_std(self, state: torch.Tensor, action: torch.Tensor, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        qs = self(state, action, t)
+    def mean_std(
+        self, state: torch.Tensor, action: torch.Tensor, t: torch.Tensor, reference: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        qs = self(state, action, t, reference)
         return qs.mean(dim=0), qs.std(dim=0, unbiased=False)
 
 
 class Guidance(nn.Module):
-    """W_phi(s, x, t) in action space. LayerNorm on, matching the paper student."""
+    """W_phi(s, x, t) in action space. LayerNorm on, matching the paper student.
+
+    With ref_dim > 0 the VLA reference chunk is concatenated too: once one W is
+    shared across tasks, the guidance has to know which specialist it is
+    correcting, and the reference carries that better than the z bottleneck.
+    """
 
     def __init__(
         self,
@@ -147,14 +170,24 @@ class Guidance(nn.Module):
         chunk_dim: int,
         hidden_dim: int = 512,
         n_layers: int = 4,
+        ref_dim: int = 0,
     ) -> None:
         super().__init__()
-        self.net = mlp(state_dim + chunk_dim + 1, hidden_dim, chunk_dim, n_layers, layer_norm=True)
+        self.ref_dim = ref_dim
+        self.net = mlp(state_dim + chunk_dim + ref_dim + 1, hidden_dim, chunk_dim, n_layers, layer_norm=True)
 
-    def forward(self, state: torch.Tensor, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, state: torch.Tensor, x_t: torch.Tensor, t: torch.Tensor, reference: torch.Tensor | None = None
+    ) -> torch.Tensor:
         if t.ndim == 1:
             t = t.unsqueeze(-1)
-        return self.net(torch.cat([state, x_t, t], dim=-1))
+        parts = [state, x_t]
+        if self.ref_dim:
+            if reference is None:
+                reference = torch.zeros_like(x_t)
+            parts.append(reference)
+        parts.append(t)
+        return self.net(torch.cat(parts, dim=-1))
 
 
 class Value(nn.Module):

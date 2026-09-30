@@ -45,7 +45,8 @@ from pydantic import Field
 
 from .action_space import GRIPPER_QPOS_OPEN, normalize_instruction
 from .client import Pi05Client
-from .config import ARM_DOF, load_run_config, needs_encoder
+from .config import ARM_DOF, load_run_config, needs_encoder, rollout_server_port
+from .distill_recorder import DistillShardWriter
 from .model import ChunkExecutor
 
 log = logging.getLogger(__name__)
@@ -75,6 +76,12 @@ class Pi05EvalPolicy(PI_Policy):
             remote.get("host", "127.0.0.1"),
             int(remote.get("port", 8080)),
         )
+        self.rollout_client = None
+        if str(getattr(self.run, "rollout_checkpoint", "") or ""):
+            self.rollout_client = Pi05Client(
+                remote.get("host", "127.0.0.1"),
+                rollout_server_port(int(remote.get("port", 8080))),
+            )
         self.executor = ChunkExecutor(self.run.chunk_size, self.run.conversion)
 
         # RL Token, only when an actor was named. Built lazily: the encoder wants a GPU
@@ -91,6 +98,13 @@ class Pi05EvalPolicy(PI_Policy):
         #: Held False by the trainer during warmup, so the VLA drives while decisions are
         #: still recorded. Always True for evaluation.
         self.use_actor = True
+        # V25 distillation: records (observation, reference, teacher) per corrected
+        # decision. None unless the run config names a distill_out directory.
+        self._distill_recorder = None
+        self.record_distill = True
+        distill_out = getattr(self.run, "distill_out", "")
+        if distill_out:
+            self._distill_recorder = DistillShardWriter(distill_out)
         # PI_Policy.get_info reads this. prepare_model sets the real checkpoint
         # name; a default here stops eval from dying if get_history runs first
         # (new worker, SIGTERM between episodes).
@@ -109,6 +123,13 @@ class Pi05EvalPolicy(PI_Policy):
         self.model = self.client
         self.model_name = str(info.get("checkpoint", "pi05"))
         log.info("frozen pi0.5 at %s (%s)", self.client.url, self.model_name)
+        if self.rollout_client is not None:
+            rollout_info = self.rollout_client.wait_until_ready()
+            log.info(
+                "dagger rollout pi0.5 at %s (%s); executing it, recording gOn of the reference",
+                self.rollout_client.url,
+                rollout_info.get("checkpoint", "pi05"),
+            )
 
         # Tokens are wanted for two unrelated reasons and only one of them needs a
         # corrector: an RL run reads them through the encoder, a collection run merely
@@ -147,6 +168,10 @@ class Pi05EvalPolicy(PI_Policy):
         super().reset()
         self.executor.reset()
         self.step_index = 0
+        # Episode boundary: flush the previous episode's decisions so a collector that
+        # is later SIGTERMed loses at most one episode rather than a whole shard.
+        if self._distill_recorder is not None:
+            self._distill_recorder.flush()
         if self.corrector is not None:
             self.corrector.reset()
 
@@ -201,6 +226,7 @@ class Pi05EvalPolicy(PI_Policy):
                 want_tokens=self.want_tokens_now(self.step_index),
             )
             chunk = out["actions"]
+            corrections_before = self.corrector.corrections if self.corrector is not None else 0
             if self.corrector is not None:
                 chunk = self.corrector.correct(
                     chunk=chunk,
@@ -211,8 +237,39 @@ class Pi05EvalPolicy(PI_Policy):
                     arm_state=current_arm,
                     use_actor=self.use_actor,
                 )
-            self.on_plan(out, chunk, current_arm)
-            self.executor.load(chunk, current_arm)
+            executed = chunk
+            if self.rollout_client is not None:
+                student_out = self.rollout_client.act(
+                    model_input["external_cam"],
+                    model_input["wrist_cam"],
+                    model_input["instruction"],
+                    model_input["state"],
+                    want_tokens=False,
+                )
+                executed = student_out["actions"]
+            if (
+                self._distill_recorder is not None
+                and self.record_distill
+                and self.corrector is not None
+                and self.corrector.corrections > corrections_before
+            ):
+                # The target is the deployed (greedy) chunk when the corrector was asked
+                # for one, so training rounds distil the policy evaluation measures
+                # rather than the exploration noise the collector executed. In the
+                # DAgger rollout the executed chunk is the student VLA; the label
+                # stays greedy gOn of the reference server.
+                deployed = getattr(self.corrector, "last_deployed", None)
+                self._distill_recorder.append(
+                    external_cam=model_input["external_cam"],
+                    wrist_cam=model_input["wrist_cam"],
+                    state=model_input["state"],
+                    instruction=model_input["instruction"],
+                    reference=out["actions"],
+                    teacher=chunk if deployed is None else deployed,
+                    executed=executed,
+                )
+            self.on_plan(out, executed, current_arm)
+            self.executor.load(executed, current_arm)
 
         action = self.executor.next_action(current_arm)
         self.step_index += 1
@@ -354,6 +411,8 @@ class Pi05RLPolicy(Pi05EvalPolicy):
         from rlt.replay import Rollout
 
         steps = self.step_index
+        if self._distill_recorder is not None:
+            self._distill_recorder.finish_episode(success=bool(success), steps=int(steps))
         flags = self._success_flags(steps)
         terminal_step = int(np.argmax(flags)) if flags.any() else None
         if bool(flags.any()) != bool(success):

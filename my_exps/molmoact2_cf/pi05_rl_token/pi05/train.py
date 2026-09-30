@@ -11,8 +11,10 @@ or from the shell:
 
 WHAT GOES IN, AND WHAT COMES OUT
 --------------------------------
-The VLA is frozen throughout. Nothing in this file updates it; the only things that learn
-are the actor and the two critic heads, which are small MLPs.
+The VLA action expert that *serves* RLT is frozen between swaps. A second copy of
+that expert can train online on QUORUM's deployed chunks (`distill_swap_every`); every
+N episodes the student is probed G-off against the frozen expert and copied into the
+servers only when it is strictly better. The backbone never moves.
 
 Per env step t, with C = `chunk_size`:
 
@@ -59,9 +61,11 @@ chunk changed". That run was discarded.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
+import subprocess
 import time
 from collections import deque
 from pathlib import Path
@@ -70,24 +74,40 @@ import numpy as np
 
 from .config import (
     ACTION_DIM,
+    CHECKPOINT,
+    CODE,
     PROPRIO_DIM,
     TORCH_DEVICE,
     RLConfig,
     TMP_ROLLOUT_DIR,
+    rollout_server_port,
     save_run_config,
 )
 from .eval import prepare_environment as _prepare_eval_environment
 from .eval import start_server, stop_server
+from .expert_io import swap_due
+from .expert_swap import (
+    frozen_checkpoint,
+    reload_frozen_servers,
+    request_student_save,
+    write_command,
+)
+from .round_eval import (
+    next_actor_limit,
+    run_round_probes_and_swap,
+    write_actor_limit,
+    write_cmd,
+)
 
 log = logging.getLogger("pi05.train")
 
 
-def prepare_environment(cfg: RLConfig) -> Path:
+def prepare_environment(cfg: RLConfig, config_path: Path | None = None) -> Path:
     """Same as the evaluation side: set what MolmoSpaces reads at import time.
 
     Must run before anything imports molmo_spaces or torch.
     """
-    return _prepare_eval_environment(cfg)
+    return _prepare_eval_environment(cfg, config_path)
 
 
 def online_config(cfg: RLConfig, out_dir: Path, *, phase: str = "online"):
@@ -133,6 +153,8 @@ def online_config(cfg: RLConfig, out_dir: Path, *, phase: str = "online"):
         flow_compose=cfg.flow_compose,
         cf_actor_coef=cfg.cf_actor_coef,
         cf_guidance_coef=cfg.cf_guidance_coef,
+        cf_ref_conditioned=cfg.cf_ref_conditioned,
+        buffer_capacity=cfg.buffer_capacity,
         awr_temp=cfg.awr_temp,
         awr_clip=cfg.awr_clip,
         ppo_clip=cfg.ppo_clip,
@@ -213,6 +235,7 @@ def build(cfg: RLConfig, out_dir: Path, *, phase: str = "online", with_runner: b
         StepGate(cfg.resolved_gate_step(), cfg.gate_latch),
         action_space=cfg.rl_action_space,
         explore=True,
+        record_deployed=bool(getattr(cfg, "distill_out", "")),
     )
     policy = Pi05RLPolicy(
         Pi05EvalConfig(),
@@ -245,6 +268,8 @@ def _metrics_progress(path: Path) -> tuple[int, int, list[float]]:
         if not line:
             continue
         row = json.loads(line)
+        if "success" not in row:
+            continue
         n += 1
         value = float(row.get("success", 0.0))
         successes += int(value)
@@ -303,6 +328,82 @@ def checkpoint(agent, buffer, out_dir: Path, episodes_done: int, recent: float |
     (out_dir / "progress.json").write_text(json.dumps(progress))
 
 
+def start_student(cfg: RLConfig, log_path: Path) -> subprocess.Popen | None:
+    """Second action expert: flow-matches QUORUM teachers while the frozen expert serves RLT."""
+    if int(cfg.distill_swap_every) <= 0:
+        return None
+    from .eval import VENV_TORCH, policy_server_env
+
+    Path(cfg.distill_out).mkdir(parents=True, exist_ok=True)
+    Path(cfg.distill_student_dir).mkdir(parents=True, exist_ok=True)
+    Path(cfg.distill_control_dir).mkdir(parents=True, exist_ok=True)
+    write_command(cfg.distill_control_dir, "run")
+    # Always pass the original pi0.5 dir as --init so save_checkpoint can copy
+    # config.json/assets. train_expert_online reloads weights from --out itself.
+    init = str(cfg.checkpoint or CHECKPOINT)
+    if (Path(cfg.distill_student_dir) / "model.safetensors").exists():
+        log.info("student will resume weights from %s", cfg.distill_student_dir)
+    command = [
+        str(VENV_TORCH),
+        str(CODE / "scripts/train_expert_online.py"),
+        "--data", str(cfg.distill_out),
+        "--init", init,
+        "--out", str(cfg.distill_student_dir),
+        "--control", str(cfg.distill_control_dir),
+        "--batch-size", str(cfg.distill_batch),
+        "--lr", str(cfg.distill_lr),
+    ]
+    env = policy_server_env(dataclasses.replace(cfg, gpu=int(cfg.distill_gpu)))
+    log.info(
+        "student expert on GPU %d, swap every %d eps, out=%s",
+        cfg.distill_gpu, cfg.distill_swap_every, cfg.distill_student_dir,
+    )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    return subprocess.Popen(
+        command,
+        stdout=log_path.open("w"),
+        stderr=subprocess.STDOUT,
+        env=env,
+        cwd=str(CODE),
+        start_new_session=True,
+    )
+
+
+def stop_student(proc: subprocess.Popen | None, control_dir: str = "") -> None:
+    if proc is None:
+        return
+    if control_dir:
+        try:
+            write_command(control_dir, "stop")
+            proc.wait(timeout=120)
+            return
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    stop_server(proc)
+
+
+def swap_frozen_from_student(cfg: RLConfig, actor_episodes: int, generation: int, student) -> int:
+    """Save the learning expert and copy it into every frozen VLA server."""
+    if student is None or student.poll() is not None:
+        raise RuntimeError("student trainer is not running at swap time")
+    status = request_student_save(
+        cfg.distill_control_dir,
+        previous_generation=generation,
+        is_alive=lambda: student.poll() is None,
+    )
+    ports = [port for _, port in cfg.server_endpoints()]
+    reload_frozen_servers(ports, str(cfg.distill_student_dir))
+    log.info(
+        "swap at ep %d: student generation %s step %s loss=%s -> %d frozen servers",
+        actor_episodes,
+        status.get("generation"),
+        status.get("step"),
+        status.get("loss"),
+        len(ports),
+    )
+    return int(status["generation"])
+
+
 def train_parallel(cfg: RLConfig) -> dict:
     """Parent learner for subprocess collectors. No MuJoCo in this process."""
     import torch
@@ -322,7 +423,36 @@ def train_parallel(cfg: RLConfig) -> dict:
     np.random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
 
-    server = start_server(cfg, out_dir / "server.log")
+    # One frozen-VLA server per (gpu, port) endpoint. A single-server run is the
+    # one-endpoint case; the shared multi-task run puts one server on each GPU
+    # and round-robins collectors onto them.
+    servers = []
+    student = None
+    student_generation = 0
+    rollout_ckpt = str(getattr(cfg, "rollout_checkpoint", "") or "")
+
+    for gpu, port in cfg.server_endpoints():
+        server_cfg = dataclasses.replace(cfg, gpu=gpu, port=port)
+        servers.append(start_server(server_cfg, out_dir / f"server_{port}.log"))
+        if rollout_ckpt:
+            rollout_cfg = dataclasses.replace(
+                cfg, gpu=gpu, port=rollout_server_port(port), checkpoint=rollout_ckpt,
+            )
+            servers.append(start_server(
+                rollout_cfg, out_dir / f"server_{rollout_server_port(port)}.log",
+            ))
+            log.info(
+                "dagger rollout server GPU %d port %d checkpoint %s",
+                gpu, rollout_server_port(port), rollout_ckpt,
+            )
+    if int(cfg.distill_swap_every) > 0:
+        from .client import Pi05Client as _Pi05Client
+        first_port = cfg.server_endpoints()[0][1]
+        _Pi05Client(port=first_port).wait_until_ready()
+    student = start_student(cfg, out_dir / "student.log")
+    if cfg.distill_swap_every:
+        from .expert_swap import read_status as _read_status
+        student_generation = int(_read_status(cfg.distill_control_dir).get("generation", 0) or 0)
     summary: dict = {"scene": cfg.scene, "encoder": cfg.encoder, "chunk_size": cfg.chunk_size}
     started = time.time()
     workers = []
@@ -365,6 +495,9 @@ def train_parallel(cfg: RLConfig) -> dict:
         )
         window = 10
         recent: deque[float] = deque(maxlen=window)
+        task_recent: dict[str, deque[float]] = {}
+        task_counts: dict[str, int] = {}
+        probe_counts: dict[str, list[int]] = {}
         probe_n = int(cfg.probe_episodes)
         probe_done = actor_episodes = actor_successes = probe_successes = 0
         if cfg.resume:
@@ -378,16 +511,87 @@ def train_parallel(cfg: RLConfig) -> dict:
                 actor_episodes, cfg.episodes, actor_successes, window,
                 float(np.mean(recent)) if recent else float("nan"),
             )
+            student_ckpt = Path(frozen_checkpoint(cfg)) / "model.safetensors"
+            if (
+                int(cfg.distill_swap_every) > 0
+                and actor_episodes >= int(cfg.distill_swap_every)
+                and student_ckpt.exists()
+            ):
+                ports = [port for _, port in cfg.server_endpoints()]
+                restore = frozen_checkpoint(cfg)
+                reload_frozen_servers(ports, restore)
+                log.info(
+                    "resume: reloaded frozen experts from %s (generation %s)",
+                    restore, student_generation,
+                )
         (out_dir / COUNTER).write_text(
             str(probe_n + actor_episodes if cfg.resume else 0)
+        )
+        per_task_eval = int(getattr(cfg, "round_eval_per_task", 0) or 0)
+        pending_round = (
+            bool(cfg.resume)
+            and per_task_eval > 0
+            and swap_due(actor_episodes, int(cfg.distill_swap_every))
+        )
+        write_cmd(out_dir, "hold" if pending_round else "run")
+        write_actor_limit(
+            out_dir,
+            (probe_n + actor_episodes)
+            if pending_round
+            else (
+                next_actor_limit(probe_n, actor_episodes, int(cfg.distill_swap_every), cfg.episodes)
+                if per_task_eval
+                else probe_n + cfg.episodes
+            ),
         )
         workers = start_workers(cfg, out_dir, cfg.collectors)
         log.info(
             "online: %d collectors, %d EGL slots, AC every %d stored env steps, prefill %d rows",
             cfg.collectors, cfg.egl_slots, cfg.update_every_steps, len(buffer),
         )
+        if pending_round:
+            n_eval = per_task_eval * max(len(cfg.task_list()), 1)
+            log.info(
+                "resume at round boundary ep %d: finishing probes before more collection",
+                actor_episodes,
+            )
+            student_generation, round_rec = run_round_probes_and_swap(
+                out_dir=out_dir,
+                cfg=cfg,
+                n_collectors=int(cfg.collectors),
+                inbox=inbox,
+                n_eval=n_eval,
+                actor_episodes=actor_episodes,
+                student=student,
+                generation=student_generation,
+            )
+            logger.log(
+                actor_episodes,
+                {
+                    "expert_swap": student_generation,
+                    "round/base_off_sr": round_rec["base_off"]["sr"],
+                    "round/gon_sr": round_rec["gon"]["sr"],
+                    "round/student_off_sr": round_rec["student_off"]["sr"],
+                    "round/copied": int(bool(round_rec.get("copied"))),
+                },
+            )
+            if actor_episodes < cfg.episodes:
+                write_cmd(out_dir, "run")
+                write_actor_limit(
+                    out_dir,
+                    next_actor_limit(
+                        probe_n, actor_episodes, int(cfg.distill_swap_every), cfg.episodes
+                    ),
+                )
+            else:
+                write_cmd(out_dir, "stop")
         last_console = last_save = time.time()
         while actor_episodes < cfg.episodes:
+            if student is not None and student.poll() is not None:
+                raise RuntimeError(
+                    f"student trainer exited with {student.returncode} "
+                    f"(see {out_dir / 'student.log'})"
+                )
             payloads = read_inbox(inbox)
             if not payloads:
                 if all(p.poll() is not None for p in workers):
@@ -399,11 +603,19 @@ def train_parallel(cfg: RLConfig) -> dict:
                 else:
                     time.sleep(0.2)
                     continue
+            round_due = False
             for payload in payloads:
+                if payload.get("round_eval"):
+                    log.warning("dropping round-eval pickle outside a probe: arm=%s", payload.get("arm"))
+                    continue
                 if payload.get("probe"):
                     probe_done += 1
                     probe_successes += int(payload["success"])
                     recent.append(float(payload["success"]))
+                    scene = payload.get("scene", cfg.scene)
+                    scene_probe = probe_counts.setdefault(scene, [0, 0])
+                    scene_probe[0] += 1
+                    scene_probe[1] += int(payload["success"])
                     log.info(
                         "probe %d/%d (collector %d) success=%d steps=%d %.0fs sr_last%d=%.2f",
                         probe_done, probe_n, payload["rank"], int(payload["success"]),
@@ -411,10 +623,15 @@ def train_parallel(cfg: RLConfig) -> dict:
                         float(np.mean(recent)) if recent else float("nan"),
                     )
                     continue
-                learner.absorb(payload.get("rows") or [])
+                if not rollout_ckpt:
+                    learner.absorb(payload.get("rows") or [])
                 actor_episodes += 1
                 actor_successes += int(payload["success"])
                 recent.append(float(payload["success"]))
+                scene = payload.get("scene", cfg.scene)
+                scene_recent = task_recent.setdefault(scene, deque(maxlen=window))
+                scene_recent.append(float(payload["success"]))
+                task_counts[scene] = task_counts.get(scene, 0) + 1
                 metrics = {
                     "episode": payload["episode"],
                     "phase": 1,
@@ -428,6 +645,11 @@ def train_parallel(cfg: RLConfig) -> dict:
                     "sec_per_episode": payload["sec"],
                     **learner.stats,
                 }
+                for name, scene_deque in task_recent.items():
+                    metrics[f"task/{name}/sr_last10"] = float(np.mean(scene_deque))
+                    metrics[f"task/{name}/episodes"] = task_counts[name]
+                for name, (done_n, succ_n) in probe_counts.items():
+                    metrics[f"task/{name}/probe_sr"] = succ_n / max(done_n, 1)
                 if len(buffer) >= online.batch_size:
                     metrics.update(agent.probe(buffer.sample(online.batch_size)))
                 logger.log(actor_episodes, metrics)
@@ -441,6 +663,47 @@ def train_parallel(cfg: RLConfig) -> dict:
                 if actor_episodes % 10 == 0 or actor_episodes == cfg.episodes:
                     scored = float(np.mean(recent)) if scoreable(actor_episodes, 0, recent.maxlen) else None
                     checkpoint(agent, buffer, out_dir, actor_episodes, scored)
+                if swap_due(actor_episodes, int(cfg.distill_swap_every)):
+                    round_due = True
+            if round_due:
+                per_task_eval = int(getattr(cfg, "round_eval_per_task", 0) or 0)
+                if per_task_eval:
+                    n_eval = per_task_eval * max(len(cfg.task_list()), 1)
+                    student_generation, round_rec = run_round_probes_and_swap(
+                        out_dir=out_dir,
+                        cfg=cfg,
+                        n_collectors=int(cfg.collectors),
+                        inbox=inbox,
+                        n_eval=n_eval,
+                        actor_episodes=actor_episodes,
+                        student=student,
+                        generation=student_generation,
+                    )
+                    logger.log(
+                        actor_episodes,
+                        {
+                            "expert_swap": student_generation,
+                            "round/base_off_sr": round_rec["base_off"]["sr"],
+                            "round/gon_sr": round_rec["gon"]["sr"],
+                            "round/student_off_sr": round_rec["student_off"]["sr"],
+                            "round/copied": int(bool(round_rec.get("copied"))),
+                        },
+                    )
+                    if actor_episodes < cfg.episodes:
+                        write_cmd(out_dir, "run")
+                        write_actor_limit(
+                            out_dir,
+                            next_actor_limit(
+                                probe_n, actor_episodes, int(cfg.distill_swap_every), cfg.episodes
+                            ),
+                        )
+                    else:
+                        write_cmd(out_dir, "stop")
+                else:
+                    student_generation = swap_frozen_from_student(
+                        cfg, actor_episodes, student_generation, student
+                    )
+                    logger.log(actor_episodes, {"expert_swap": student_generation})
             now = time.time()
             if now - last_console >= 60:
                 log.info(
@@ -464,11 +727,26 @@ def train_parallel(cfg: RLConfig) -> dict:
             actor_successes=actor_successes,
             actor_rate=actor_successes / max(actor_episodes, 1),
             sr_last10=float(np.mean(recent)) if recent else float("nan"),
+            per_task={
+                name: {
+                    "episodes": task_counts[name],
+                    "sr_last10": float(np.mean(scene_deque)),
+                    "probe_sr": probe_counts[name][1] / max(probe_counts[name][0], 1)
+                    if name in probe_counts
+                    else None,
+                }
+                for name, scene_deque in task_recent.items()
+            },
             agent=str(out_dir / "agent.pt"),
+            student=str(cfg.distill_student_dir) if cfg.distill_swap_every else "",
+            expert_swaps=student_generation,
         )
     finally:
+        write_cmd(out_dir, "stop")
+        stop_student(student, cfg.distill_control_dir)
         stop_workers(workers)
-        stop_server(server)
+        for server in servers:
+            stop_server(server)
         summary["hours"] = round((time.time() - started) / 3600, 2)
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     return summary

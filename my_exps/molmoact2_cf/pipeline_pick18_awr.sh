@@ -46,6 +46,12 @@ export PYTHONPATH="${CODE}${PYTHONPATH:+:${PYTHONPATH}}"
 export RLT_VLA_TOKEN_DIM=2048
 export HF_HOME="${HF_HOME:-/home/jovyan/users/staroverov/.cache/huggingface}"
 
+# Collectors import NLTK at startup. Parallel first-wave workers race
+# nltk.download and corrupt wordnet2022.zip; pre-seed once before any job.
+if [[ "${SKIP_NLTK_SEED:-0}" != "1" ]]; then
+  "${SIM}" -c "import nltk; nltk.download('wordnet', quiet=True); nltk.download('wordnet2022', quiet=True)" >/dev/null 2>&1 || true
+fi
+
 log() { echo "[pick18-awr $(date -u +%H:%M:%S)] $*"; }
 
 task_meta() {
@@ -109,7 +115,7 @@ run_task() {
   else
     log "${task}: pretrain gpu=${gpu} port=${port} awr_temp=${AWR_TEMP}"
     cd "${CODE}"
-    setsid env PYTHONUNBUFFERED=1 PYTHONPATH="${CODE}" RLT_VLA_TOKEN_DIM=2048 HF_HOME="${HF_HOME}" \
+    setsid -w env PYTHONUNBUFFERED=1 PYTHONPATH="${CODE}" RLT_VLA_TOKEN_DIM=2048 HF_HOME="${HF_HOME}" \
       "${SIM}" scripts/run_pretrain_ac.py \
         --scene "${SCENE}" --encoder "${SCENE}" \
         --episodes 100 --offline-steps "${OFFLINE_STEPS}" \
@@ -153,7 +159,8 @@ run_task() {
       log "${task}: online gpu=${gpu} port=${port} awr_temp=${AWR_TEMP}"
     fi
     cd "${CODE}"
-    setsid env PYTHONUNBUFFERED=1 PYTHONPATH="${CODE}" RLT_VLA_TOKEN_DIM=2048 HF_HOME="${HF_HOME}" \
+    set +e
+    setsid -w env PYTHONUNBUFFERED=1 PYTHONPATH="${CODE}" RLT_VLA_TOKEN_DIM=2048 HF_HOME="${HF_HOME}" \
       "${SIM}" scripts/run_train.py \
         --scene "${SCENE}" --encoder "${SCENE}" \
         --gpu "${gpu}" --port "${port}" \
@@ -177,15 +184,23 @@ run_task() {
         --set "ae_finetune=false" \
         "${resume_args[@]}" \
         >> "${LOCAL_LOG}/${on_tag}.log" 2>&1
-    if [[ ! -f "${on_agent}" ]]; then
-      log "ERROR: ${task} missing online agent"
+    train_rc=$?
+    set -e
+    if [[ -f "${progress_file}" ]]; then
+      episodes_done="$(python3 -c "import json,sys; print(int(json.load(open(sys.argv[1])).get('episodes_done',0)))" "${progress_file}")"
+    fi
+    # `if ! run_task` disables set -e inside this function; agent.pt from a
+    # previous incomplete run must not skip us into held-out eval.
+    if [[ "${train_rc}" -ne 0 || ! -f "${on_agent}" || "${episodes_done}" -lt "${EPISODES}" ]]; then
+      log "ERROR: ${task} online incomplete rc=${train_rc} eps=${episodes_done}/${EPISODES}"
       return 1
     fi
   fi
 
   log "${task}: eval gpu=${gpu} port=${port}"
   cd "${CODE}"
-  setsid env PYTHONUNBUFFERED=1 PYTHONPATH="${CODE}" RLT_VLA_TOKEN_DIM=2048 HF_HOME="${HF_HOME}" \
+  set +e
+  setsid -w env PYTHONUNBUFFERED=1 PYTHONPATH="${CODE}" RLT_VLA_TOKEN_DIM=2048 HF_HOME="${HF_HOME}" \
     "${SIM}" scripts/run_eval.py \
       --scene "${SCENE}" --episodes "${EVAL_EPISODES}" --gpu "${gpu}" --port "${port}" \
       --actor "${on_agent}" --token-ae "${ae}" \
@@ -196,6 +211,12 @@ run_task() {
       --set "out_dir=${dest}/eval" \
       --set "checkpoint=${CKPT}" \
       >> "${LOCAL_LOG}/${on_tag}_actor.log" 2>&1
+  eval_rc=$?
+  set -e
+  if [[ "${eval_rc}" -ne 0 || ! -f "${dest}/eval/${on_tag}_actor/result.json" ]]; then
+    log "ERROR: ${task} eval failed rc=${eval_rc}"
+    return 1
+  fi
   log "${task}: done"
 }
 

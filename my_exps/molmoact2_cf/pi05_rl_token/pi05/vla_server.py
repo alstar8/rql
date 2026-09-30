@@ -118,6 +118,18 @@ class FrozenPi05:
         mask = np.ones(tokens.shape[0], dtype=np.float32)
         return {"actions": actions, "token_features": tokens, "token_attention_mask": mask}
 
+    def reload_expert(self, checkpoint: str) -> int:
+        """Copy action-expert weights from `checkpoint`. The backbone is not written.
+
+        Held under the server's inference lock by the caller, so in-flight /act calls
+        finish on the old expert and the next call sees the new one.
+        """
+        from .expert_io import copy_expert_weights
+
+        copied = copy_expert_weights(self._model(), checkpoint)
+        log.info("reloaded %d action-expert tensors from %s", copied, checkpoint)
+        return copied
+
     def close(self) -> None:
         for module, original in self._handles:
             module.forward = original

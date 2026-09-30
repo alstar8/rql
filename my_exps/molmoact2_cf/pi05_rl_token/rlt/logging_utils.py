@@ -39,14 +39,22 @@ class RunLogger:
         print(f"tensorboard: {tb_dir}" + (f"  (run {run_name})" if run_name else ""))
 
     def log(self, step: int, metrics: dict) -> None:
-        self.fh.write(json.dumps({"step": step, **metrics}) + "\n")
-        self.fh.flush()
+        line = json.dumps({"step": step, **metrics}) + "\n"
+        try:
+            self.fh.write(line)
+            self.fh.flush()
+        except OSError:
+            # A full disk must not kill the learner; JSONL is rebuilt from TB if needed.
+            pass
         if self.writer is None:
             return
-        for key, value in metrics.items():
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                self.writer.add_scalar(key, value, step)
-        self.writer.flush()
+        try:
+            for key, value in metrics.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    self.writer.add_scalar(key, value, step)
+            self.writer.flush()
+        except OSError:
+            pass
 
     def add_text(self, tag: str, text: str) -> None:
         if self.writer is not None:

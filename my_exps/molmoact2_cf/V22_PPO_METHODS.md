@@ -196,9 +196,49 @@ V21 `β=1`, AWR, and V22_24 stage-0.
 
 ## Results
 
-Not run yet. Fill from `runs/pick18_ppo/` the same way as
-`V21_METHODS.md` (probe after offline AC → held-out eval48, 64 rollouts).
+Snapshot **2026-09-11 13:33 UTC**. `runs/pick18_ppo/`: AC pretrain done on all
+18, **18/18 online finished** (300 stored), **11/18** held-out eval48 (pot
+running; 6 queued). Started 2026-09-09 16:20 UTC. Last trainer (shaker)
+finished 2026-09-11 09:39 UTC. **Not better than V22_24.**
+
+Probe is after the 8000-step AC (not PPO). Online is stored-actor SR over 300
+episodes. Last-10 is the last 10 *stored* episodes. Held-out eval48 is 64
+rollouts; the Pick-18 held-out macro waits for all 18. Remaining evals are
+**sequential** (`watch_online_eval.sh`): pot → soap_dispenser → spray_bottle
+→ shaker → fork → bottle → fruit. Recent uncontended evals were 1.4–1.5 h
+(box, spatula); knife was 2.6 h. **ETA for all 18 evals: ~11–14 h from this
+snapshot (~01:00–04:00 UTC 2026-09-12).**
 
 | | probe | online (300) | last-10 | held-out eval48 |
 | --- | ---: | ---: | ---: | ---: |
-| **Pick-18 macro** | — | — | — | — |
+| **Pick-18 macro** | **80/180 = 44.4%** | **661/5400 = 12.2%** | **0.09** | 72/704 = 10.2% (11/18) |
+| V22_24 stage-0 `β=100` | 107/180 = 59.4% | 4003/5400 = 74.1% | 0.78 | 995/1152 = 86.4% gOn |
+| V22_24 stage-0 `β=1` | 112/180 = 62.2% | 3644/5400 = 67.5% | — | 1069/1152 = 92.8% gOn |
+
+Equal-weight mean last-10 across 18 is 0.09 vs V22_24 0.78. Cup is the only
+task that holds (218/300, last-10 1.0, held-out 58/64). Bowl 104/300 last-10
+0.3 then 10/64 held-out. Box and spatula evals finished 0/64. Pot 119/300
+last-10 0.1, eval in progress. The other finished evals are 0/64 (remote,
+ladle, tissue, spoon, desk_mug, knife, box, spatula) or 4/64 (kettle).
+`actor_ref_rmse` left the ~0.2 chunk scale on **18/18** during online.
+
+| task | probe | online | last-10 | held-out |
+| --- | ---: | ---: | ---: | ---: |
+| bottle | 0/10 | 4/300 | 0.1 | — |
+| bowl | 10/10 | 104/300 | 0.3 | 10/64 |
+| box | 8/10 | 82/300 | 0.1 | 0/64 |
+| cup | 10/10 | 218/300 | 1.0 | 58/64 |
+| desk_mug | 10/10 | 19/300 | 0.0 | 0/64 |
+| fork | 6/10 | 27/300 | 0.0 | — |
+| fruit | 2/10 | 5/300 | 0.0 | — |
+| kettle | 2/10 | 3/300 | 0.0 | 4/64 |
+| knife | 3/10 | 2/300 | 0.0 | 0/64 |
+| ladle | 8/10 | 11/300 | 0.0 | 0/64 |
+| pot | 1/10 | 119/300 | 0.1 | running |
+| remote | 6/10 | 14/300 | 0.0 | 0/64 |
+| shaker | 2/10 | 1/300 | 0.0 | — |
+| soap_dispenser | 0/10 | 3/300 | 0.0 | — |
+| spatula | 8/10 | 27/300 | 0.0 | 0/64 |
+| spoon | 1/10 | 8/300 | 0.0 | 0/64 |
+| spray_bottle | 0/10 | 5/300 | 0.0 | — |
+| tissue | 3/10 | 9/300 | 0.0 | 0/64 |

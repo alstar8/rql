@@ -42,15 +42,51 @@ class FileCounter:
             self.path.write_text("0")
 
     def claim(self) -> int:
+        index = self.claim_below(2**31 - 1)
+        if index is None:
+            raise RuntimeError(f"counter {self.path} refused an unbounded claim")
+        return index
+
+    def _write_locked(self, handle, text: str) -> None:
+        handle.seek(0)
+        handle.truncate()
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+    def reset(self, value: int = 0, seq: int | None = None) -> None:
+        """Atomically set the counter (flocked, unlike a plain write_text)."""
+        with open(self.path, "r+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            text = f"{int(seq)} {int(value)}" if seq is not None else str(int(value))
+            self._write_locked(handle, text)
+
+    def claim_below(self, limit: int, seq: int | None = None) -> int | None:
+        """Return the next index, or None if it would be >= limit (counter unchanged).
+
+        When ``seq`` is set the file stores ``seq index``. A claim whose seq does not
+        match is refused and does not increment, so a collector still on the previous
+        round-eval arm cannot consume the next arm's slots.
+        """
         with open(self.path, "r+") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             raw = handle.read().strip()
-            index = int(raw or "0")
-            handle.seek(0)
-            handle.truncate()
-            handle.write(str(index + 1))
-            handle.flush()
-            os.fsync(handle.fileno())
+            parts = raw.split()
+            if len(parts) >= 2:
+                stored_seq, index = int(parts[0]), int(parts[1])
+            else:
+                stored_seq, index = None, int(raw or "0")
+            if seq is not None and stored_seq is not None and stored_seq != int(seq):
+                return None
+            if index >= int(limit):
+                return None
+            if seq is not None:
+                text = f"{int(seq)} {index + 1}"
+            elif stored_seq is not None:
+                text = f"{stored_seq} {index + 1}"
+            else:
+                text = str(index + 1)
+            self._write_locked(handle, text)
             return index
 
 
@@ -86,7 +122,7 @@ class EglSlots:
 
 def load_live_weights(agent, path: Path, seen_version: int, attempts: int = 8) -> int:
     """Reload actor_live.pt, retrying if the learner is still writing it."""
-    if not path.exists():
+    if not path.exists() or path.stat().st_size <= 0:
         return seen_version
     mtime = path.stat().st_mtime_ns
     if mtime == seen_version:
