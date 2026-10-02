@@ -6,42 +6,58 @@ The PaliGemma backbone stays frozen. Only `gemma_expert` and the action, state, 
 
 ## Baselines
 
-| policy | val-1000 |
-|---|---|
-| frozen π0.5 | 63.5% |
-| Stage A gOn (frozen π0.5 + V + G) | 77.7% |
+
+| policy                            | val-1000 |
+| --------------------------------- | -------- |
+| frozen π0.5                       | 63.5%    |
+| Stage A gOn (frozen π0.5 + V + G) | 77.7%    |
+
 
 The guidance gain on this val is 14.2 points. A distilled expert that merely copies π0.5 sits at 63.5%. One that fully absorbed gOn would sit at 77.7%.
 
 ## Results
 
-| run | what changed | val-1000 |
-|---|---|---|
-| sequential E1 | 600 eps, fixed original π0.5, offline distill | 66.9% [63.9, 69.7] |
-| sequential E2 | one swap, then another 600 on the new expert | **69.9%** [67.0, 72.7] |
-| sequential E5 | same loop continued | 66.2% |
-| unguarded parallel | copy the student into ã every 50 eps, keep all shards | 62.9% [59.9, 65.8] |
-| keep500 last student | gated copy, stitch, keep 500 shortest successes | 32.8% [30.0, 35.8] |
-| keep500 frozen expert | weights after the last accepted copy (round 34) | 50.4% [47.3, 53.5] |
-| fixed600, step 1000 | fixed ã, 600 eps, early-stopped | 54.2% [51.1, 57.3] |
-| fixed600, 12k steps (s12k) | same data, full budget, loss on steps `[0, 8)` | **71.5%** [68.6, 74.2] |
-| iter2 | 600 more eps with s12k as ã, distill 12k from s12k | 71.3% [68.4, 74.0] |
-| DAgger | s12k rolls out, original gOn labels, mixed corpus, 16-step loss | 71.0% [68.1, 73.7] |
-| train48 | 864 eps, layouts 0–47, fixed ã, 8-step loss, 12k steps | 69.3% [66.4, 72.1] |
-| endpoint | same 600 eps as s12k, clean-action loss, time in (0, 0.25] | **74.4%** [71.6, 77.0] |
+
+| run                        | what changed                                                    | val-1000               |
+| -------------------------- | --------------------------------------------------------------- | ---------------------- |
+| sequential E1              | 600 eps, fixed original π0.5, offline distill                   | 66.9% [63.9, 69.7]     |
+| sequential E2              | one swap, then another 600 on the new expert                    | **69.9%** [67.0, 72.7] |
+| sequential E5              | same loop continued                                             | 66.2%                  |
+| unguarded parallel         | copy the student into ã every 50 eps, keep all shards           | 62.9% [59.9, 65.8]     |
+| keep500 last student       | gated copy, stitch, keep 500 shortest successes                 | 32.8% [30.0, 35.8]     |
+| keep500 frozen expert      | weights after the last accepted copy (round 34)                 | 50.4% [47.3, 53.5]     |
+| fixed600, step 1000        | fixed ã, 600 eps, early-stopped                                 | 54.2% [51.1, 57.3]     |
+| fixed600, 12k steps (s12k) | same data, full budget, loss on steps `[0, 8)`                  | **71.5%** [68.6, 74.2] |
+| iter2                      | 600 more eps with s12k as ã, distill 12k from s12k              | 71.3% [68.4, 74.0]     |
+| DAgger                     | s12k rolls out, original gOn labels, mixed corpus, 16-step loss | 71.0% [68.1, 73.7]     |
+| train48                    | 864 eps, layouts 0–47, fixed ã, 8-step loss, 12k steps          | 69.3% [66.4, 72.1]     |
+| endpoint                   | same 600 eps as s12k, clean-action loss, time in (0, 0.25]      | **74.4%** [71.6, 77.0] |
+| lowtime                    | same 600 eps, time in (0, 0.25], endpoint coef 0                | 73.6% [70.8, 76.2]     |
+| tmax 0.10                  | same 600 eps, endpoint coef 1, time in (0, 0.10]                | 72.8% [70.0, 75.5]     |
+| mix                        | same 600 eps, endpoint coef 1, half the times in (0, 0.25]      | 72.3% [69.4, 75.0]     |
+| tmax 0.80                  | same 600 eps, endpoint coef 1, time in (0, 0.80]                | 71.1% [68.2, 73.8]     |
+| tmax 0.50                  | same 600 eps, endpoint coef 1, time in (0, 0.50]                | 70.6% [67.7, 73.3]     |
+| fulltime                   | same 600 eps, endpoint coef 1, flow time on Beta(1.5, 1)        | 70.3% [67.4, 73.1]     |
+
 
 Online success on the Pick-18 train mix, where it was recorded:
 
-| run | online |
-|---|---|
-| unguarded parallel, gOn | 84.2% (1515/1800) |
-| keep500, gOn | 76.5% (1377/1800) |
-| fixed600, gOn on the original expert | 85.0% (510/600) |
-| iter2, gOn on s12k | 90.3% (600 eps) |
-| DAgger, s12k executing, labels from original gOn | 82.5% (495/600) |
-| train48, gOn on the original expert | 85.1% (735/864) |
+
+| run                                              | online            |
+| ------------------------------------------------ | ----------------- |
+| unguarded parallel, gOn                          | 84.2% (1515/1800) |
+| keep500, gOn                                     | 76.5% (1377/1800) |
+| fixed600, gOn on the original expert             | 85.0% (510/600)   |
+| iter2, gOn on s12k                               | 90.3% (600 eps)   |
+| DAgger, s12k executing, labels from original gOn | 82.5% (495/600)   |
+| train48, gOn on the original expert              | 85.1% (735/864)   |
+
+
+
 
 ## What each run did
+
+
 
 ### Sequential E1–E5
 
@@ -100,9 +116,27 @@ Same 12,129 decisions as s12k. Init is the original π0.5. Loss is still restric
 
 That is 10.9 points over frozen π0.5 and 2.9 points over s12k. It holds about 77% of the Stage A gain (14.2 points). The interval reaches 77.0%, just under the gOn point estimate of 77.7%.
 
+### Fixed600 loss ablations
+
+Six more students train on the same 12,129 decisions. There is no new collection. Init is the original π0.5, the loss stays on steps `[0, 8)`, and each run uses the full 12k steps with no holdout. The flow-time window and the clean-action coefficient are the only changes. Online success is the fixed600 figure, 85.0% (510/600).
+
+**lowtime** draws every flow time in (0.001, 0.25] and sets `endpoint_coef=0`. The paired self-check is reference 0.033 and teacher 0.078. The final loss is 0.168. Val is **73.6%** [70.8, 76.2]. The low-time window carries the endpoint gain; the clean-action term is the remaining 0.8 points. The two intervals overlap.
+
+**tmax** keeps `endpoint_coef=1` and draws every time in (0.001, time-max]:
+
+- 0.10: self-check 0.056 / 0.181, final loss 0.237, val **72.8%** [70.0, 75.5]
+- 0.50: self-check 0.015 / 0.049, final loss 0.115, val **70.6%** [67.7, 73.3]
+- 0.80: self-check 0.023 / 0.031, final loss 0.0037, val **71.1%** [68.2, 73.8]
+
+The 0.25 cap from the endpoint run is the highest of these windows. 0.10 is next. Caps at 0.50 and 0.80 land next to s12k, and their final losses fall toward the uniform-time fit (s12k ended at 0.0018).
+
+**mix** keeps `endpoint_coef=1` and sets `time-max=0.25`, `time-low-frac=0.5`. Half the times are uniform in (0.001, 0.25] and half follow Beta(1.5, 1). The self-check is reference 0.025 and teacher 0.059. The final loss is 0.0078. Val is **72.3%** [69.4, 75.0], between the pure low-time runs and fulltime.
+
+**fulltime** keeps `endpoint_coef=1` and samples flow time from the default Beta(1.5, 1) schedule (`time-max=1`). The self-check gap shrinks to reference 0.018 and teacher 0.029, the same range as s12k (0.025 / 0.032). The final loss is 0.019. Val is **70.3%** [67.4, 73.1].
+
 ## Reading
 
-The recipe that works is a fixed original expert, greedy 8-step targets, a full 12k-step offline distill, and a loss that can see the small guidance shift. Endpoint training on the original 600-episode corpus is the best number.
+The recipe that works is a fixed original expert, greedy 8-step targets, a full 12k-step offline distill, and a loss that can see the small guidance shift. Endpoint training on the original 600-episode corpus is still the best number (74.4%).
 
 These variants did not beat that:
 
@@ -112,16 +146,26 @@ These variants did not beat that:
 - A second swap, once the student already matches gOn. iter2 stayed at 71.3%.
 - DAgger on top of that student. 71.0%, and the self-check showed no new residual.
 - Labeling all 48 train layouts. 69.3%, below the 12-layout distill.
+- The same 600 episodes with the clean-action term turned off. lowtime scored 73.6%.
+- Other time caps with the clean-action term left on. 0.10 scored 72.8%, 0.50 scored 70.6%, 0.80 scored 71.1%.
+- Putting half or all of the flow-time mass back on Beta(1.5, 1). mix scored 72.3%, fulltime scored 70.3%.
 
 On the train mix the student was already close to gOn before the endpoint run (s12k executing at 82.5% in the DAgger collection, against about 85% for gOn). The remaining val gap after endpoint training is a few points, not the 14-point gap distillation started from.
 
 ## Files
 
-| path | run |
-|---|---|
-| `pipeline_pick18_v25_parallel.sh` | keep500 |
-| `pipeline_pick18_v25_fixed600.sh` | fixed 600, layouts 0–11 |
-| `pipeline_pick18_v25_dagger.sh` | DAgger rollout |
-| `pipeline_pick18_v25_train48.sh` | layouts 0–47 |
-| `/home/jovyan/users/staroverov/v25_endpoint/` | endpoint distill and val-1000 |
-| `pi05_rl_token/scripts/train_expert_distill.py` | offline distill (`--supervise-steps`, `--endpoint-coef`, `--time-max`) |
+
+| path                                            | run                                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `pipeline_pick18_v25_parallel.sh`               | keep500                                                                                    |
+| `pipeline_pick18_v25_fixed600.sh`               | fixed 600, layouts 0–11                                                                    |
+| `pipeline_pick18_v25_dagger.sh`                 | DAgger rollout                                                                             |
+| `pipeline_pick18_v25_train48.sh`                | layouts 0–47                                                                               |
+| `/home/jovyan/users/staroverov/v25_endpoint/`   | endpoint distill and val-1000                                                              |
+| `/home/jovyan/users/staroverov/v25_lowtime/`    | lowtime: time-max 0.25, endpoint coef 0                                                    |
+| `/home/jovyan/users/staroverov/v25_tmax/`       | time-max 0.10, 0.50, 0.80, endpoint coef 1                                                 |
+| `/home/jovyan/users/staroverov/v25_robust/`     | fulltime and mix on fixed600; dagger arms are a separate corpus                            |
+| `pipeline_v25_robust.sh`                        | fulltime, mix, and the two dagger arms                                                     |
+| `pi05_rl_token/scripts/train_expert_distill.py` | offline distill (`--supervise-steps`, `--endpoint-coef`, `--time-max`, `--time-low-frac`)  |
+
+
